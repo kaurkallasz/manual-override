@@ -21,6 +21,13 @@
   const FLAMETHROWER_MUZZLE_OFFSET = 35;
   const FLAMETHROWER_PILOT_LAG_S = 0.08;
   const TESLA_DISCHARGE_FLASH_S = 0.16;
+  const AIM_HANDLE_RADIUS = 17;
+  const AIM_GEOMETRY = Object.freeze({
+    machine_gun: Object.freeze({ near: 190, far: 360, narrow: 12, wide: 55, inverse: true }),
+    flamethrower: Object.freeze({ near: 130, far: 235, narrow: 18, wide: 65, inverse: true }),
+    mortar: Object.freeze({ near: 110, far: 500, inverse: false }),
+    tesla_coil: Object.freeze({ near: 120, far: 265, inverse: false }),
+  });
   const TOWER_CORNER_OFFSETS = Object.freeze([
     Object.freeze([-44, -44]),
     Object.freeze([44, -44]),
@@ -83,6 +90,44 @@
     if (count >= 800) return EFFECT_QUALITY_PROFILES.dense;
     if (count >= 400) return EFFECT_QUALITY_PROFILES.reduced;
     return EFFECT_QUALITY_PROFILES.full;
+  }
+
+  function towerAimDistance(towerType, spread) {
+    const geometry = AIM_GEOMETRY[String(towerType)] || AIM_GEOMETRY.machine_gun;
+    const amount = Math.max(0, Math.min(1, Number(spread) || 0));
+    return geometry.inverse
+      ? geometry.far + (geometry.near - geometry.far) * amount
+      : geometry.near + (geometry.far - geometry.near) * amount;
+  }
+
+  function towerAimFromPoint(
+    towerType, towerX, towerY, pointerX, pointerY, currentAngleDegrees = 0,
+  ) {
+    const geometry = AIM_GEOMETRY[String(towerType)] || AIM_GEOMETRY.machine_gun;
+    const dx = Number(pointerX) - Number(towerX);
+    const dy = Number(pointerY) - Number(towerY);
+    const distance = Math.hypot(dx, dy);
+    const span = Math.max(1, geometry.far - geometry.near);
+    const spread = Math.max(0, Math.min(1, geometry.inverse
+      ? (geometry.far - distance) / span
+      : (distance - geometry.near) / span));
+    const pointerAngle = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    return {
+      angle: String(towerType) === "tesla_coil"
+        ? ((Number(currentAngleDegrees) % 360) + 360) % 360
+        : pointerAngle,
+      spread,
+      distance: towerAimDistance(towerType, spread),
+    };
+  }
+
+  function targetingHandlePoint(tower, targeting) {
+    const angle = Number(targeting.angle || 0);
+    const distance = Number(targeting.range || 0);
+    return {
+      x: Number(tower.x) + Math.cos(angle) * distance,
+      y: Number(tower.y) + Math.sin(angle) * distance,
+    };
   }
 
   function fixedMarkerVisualSize(width, height = width) {
@@ -664,7 +709,7 @@
       const angle = Number(preview.angle) * Math.PI / 180;
       const spread = Math.max(0, Math.min(1, Number(preview.spread)));
       if (tower.tower_type === "mortar") {
-        const distance = 110 + (500 - 110) * spread;
+        const distance = towerAimDistance(tower.tower_type, spread);
         return { angle, angle_degrees: preview.angle, spread, range: distance, target_x: tower.x + Math.cos(angle) * distance, target_y: tower.y + Math.sin(angle) * distance, blast_radius: 72 + (155 - 72) * spread };
       }
       if (tower.tower_type === "tesla_coil") {
@@ -672,18 +717,16 @@
           angle,
           angle_degrees: preview.angle,
           spread,
-          range: 120 + (265 - 120) * spread,
-          min_range: 120,
-          max_range: 265,
+          range: towerAimDistance(tower.tower_type, spread),
+          min_range: AIM_GEOMETRY.tesla_coil.near,
+          max_range: AIM_GEOMETRY.tesla_coil.far,
           damage_multiplier: 1.75 - 0.75 * spread,
           visual_intensity: 1 - 0.42 * spread,
           half_angle: 180,
         };
       }
-      const config = tower.tower_type === "flamethrower"
-        ? { near: 130, far: 235, narrow: 18, wide: 65 }
-        : { near: 190, far: 360, narrow: 12, wide: 55 };
-      return { angle, angle_degrees: preview.angle, spread, range: config.far + (config.near - config.far) * spread, half_angle: config.narrow + (config.wide - config.narrow) * spread };
+      const config = AIM_GEOMETRY[tower.tower_type] || AIM_GEOMETRY.machine_gun;
+      return { angle, angle_degrees: preview.angle, spread, range: towerAimDistance(tower.tower_type, spread), half_angle: config.narrow + (config.wide - config.narrow) * spread };
     }
 
     function drawTargetingOverlay(context, tower) {
@@ -697,12 +740,13 @@
       context.lineWidth = selected ? 2.5 : 1.25;
       context.setLineDash(selected ? [7, 5] : [4, 7]);
       if (tower.tower_type === "mortar") {
+        const handle = targetingHandlePoint(tower, targeting);
         context.beginPath();
         context.moveTo(tower.x, tower.y);
-        context.lineTo(targeting.target_x, targeting.target_y);
+        context.lineTo(handle.x, handle.y);
         context.stroke();
         context.beginPath();
-        context.arc(targeting.target_x, targeting.target_y, targeting.blast_radius, 0, Math.PI * 2);
+        context.arc(handle.x, handle.y, targeting.blast_radius, 0, Math.PI * 2);
         context.fill();
         context.stroke();
       } else if (tower.tower_type === "tesla_coil") {
@@ -710,6 +754,13 @@
         context.arc(tower.x, tower.y, Number(targeting.range || 265), 0, Math.PI * 2);
         context.fill();
         context.stroke();
+        if (selected) {
+          const handle = targetingHandlePoint(tower, targeting);
+          context.beginPath();
+          context.moveTo(tower.x, tower.y);
+          context.lineTo(handle.x, handle.y);
+          context.stroke();
+        }
       } else {
         const half = Number(targeting.half_angle || 0) * Math.PI / 180;
         const angle = Number(targeting.angle || 0);
@@ -726,6 +777,29 @@
         context.lineTo(tower.x + Math.cos(angle) * reach, tower.y + Math.sin(angle) * reach);
         context.stroke();
       }
+      context.restore();
+    }
+
+    function drawAimHandle(context, tower) {
+      if (!tower || tower.destroyed || towerPlacementId(tower) !== selectedTowerId) return;
+      const handle = targetingHandlePoint(tower, towerTargeting(tower));
+      const color = tower.owner === "green" ? "#35d07f" : "#c084fc";
+      context.save();
+      context.setLineDash([]);
+      context.shadowColor = "#36dfff";
+      context.shadowBlur = 14;
+      context.fillStyle = "#071018";
+      context.strokeStyle = "#f4f8ff";
+      context.lineWidth = 4;
+      context.beginPath();
+      context.arc(handle.x, handle.y, AIM_HANDLE_RADIUS, 0, Math.PI * 2);
+      context.fill();
+      context.stroke();
+      context.shadowBlur = 0;
+      context.fillStyle = color;
+      context.beginPath();
+      context.arc(handle.x, handle.y, 6, 0, Math.PI * 2);
+      context.fill();
       context.restore();
     }
 
@@ -1826,6 +1900,12 @@
       drawCoreSequence(context, state, visualTime, true);
       renderCoreHealth(context, state);
       renderCoreMarkerOverlay(context, state);
+      drawAimHandle(
+        context,
+        (visualState.towers || []).find((tower) => (
+          towerPlacementId(tower) === selectedTowerId
+        )),
+      );
     }
 
     function gameRenderLoop(now) {
@@ -1947,6 +2027,52 @@
       renderGame();
     }
 
+    function clearTowerAimPreview(placementId) {
+      if (placementId == null) return;
+      towerAimPreview.delete(String(placementId));
+      renderGame();
+    }
+
+    function selectedAimTower(placementId = selectedTowerId) {
+      if (placementId == null) return null;
+      const tower = (state?.towers || []).find((candidate) => (
+        towerPlacementId(candidate) === String(placementId)
+      )) || null;
+      return tower ? towerVisualRecord(tower, socketRecordMap()) : null;
+    }
+
+    function aimHandle(placementId = selectedTowerId) {
+      const tower = selectedAimTower(placementId);
+      if (!tower || tower.destroyed) return null;
+      const targeting = towerTargeting(tower);
+      const point = targetingHandlePoint(tower, targeting);
+      return {
+        placement_id: towerPlacementId(tower),
+        tower_type: String(tower.tower_type),
+        tower_x: Number(tower.x),
+        tower_y: Number(tower.y),
+        x: point.x,
+        y: point.y,
+        radius: AIM_HANDLE_RADIUS,
+        angle: Number(targeting.angle_degrees || 0),
+        spread: Number(targeting.spread || 0),
+      };
+    }
+
+    function aimFromPoint(placementId, x, y) {
+      const tower = selectedAimTower(placementId);
+      if (!tower || tower.destroyed) return null;
+      const targeting = towerTargeting(tower);
+      return towerAimFromPoint(
+        tower.tower_type,
+        tower.x,
+        tower.y,
+        x,
+        y,
+        targeting.angle_degrees,
+      );
+    }
+
     animationFrame = global.requestAnimationFrame(gameRenderLoop);
 
     return {
@@ -1966,6 +2092,9 @@
       renderMap,
       selectTower,
       previewTowerAim,
+      clearTowerAimPreview,
+      aimHandle,
+      aimFromPoint,
       coreAtPoint,
       markerAtPoint,
       socketAtPoint,
@@ -1988,6 +2117,9 @@
       machineGunMuzzlePoints,
       normalizedKeepOut,
       permanentTurretMarkerOffset,
+      targetingHandlePoint,
+      towerAimDistance,
+      towerAimFromPoint,
       towerHealthBarMetrics,
       towerLinkMultiplierLabel,
     },

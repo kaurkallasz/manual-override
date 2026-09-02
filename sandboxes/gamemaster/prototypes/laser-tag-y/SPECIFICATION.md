@@ -22,6 +22,14 @@ gameplay, level, board, camera, or persistent state.
 - The Gamemaster HUD displays Photon Game's authoritative completed-ring field
   immunity countdown, rounded up for display, and returns to `Ring complete`
   when the reported remaining duration reaches zero.
+- Selecting a living defense in virtual mode displays one draggable handle at
+  the end of its dotted targeting guide. Handle angle previews direction and
+  handle radius previews wide/narrow range; Tesla remains omnidirectional and
+  uses radius only. Y submits one existing `aim` command when the drag ends,
+  while Photon Game validates and owns the resulting angle and spread.
+- Direction and wide/narrow sliders remain synchronized keyboard-accessible
+  inputs to that same command. They are presentation controls, not another
+  gameplay state store, and rejected commands return the guide to Game output.
 - Y never reads Photon Level or Photon Board, opens a camera, parses TMJ, edits a
   level, calculates combat, mutates game state locally, persists runs, or controls
   hardware.

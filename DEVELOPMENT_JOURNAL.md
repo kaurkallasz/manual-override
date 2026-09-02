@@ -665,6 +665,38 @@ hardware command or robot motion was performed.
 Codex implemented the presentation-only change, specification, regression test,
 and non-hardware verification.
 
+### 2026-09-02 — Restore direct turret aiming in Y
+
+**Trigger:** Laser Tag Y exposed the copied direction and spread range inputs,
+but lacked Z's direct relationship between the targeting guide and those
+values. The Gamemaster had to adjust an abstract percentage away from the game
+board, and the selected dotted guide had no draggable affordance.
+
+**Decision:** Y now draws one circular handle at the end of the selected living
+turret's dotted guide. Pointer angle changes direction; pointer radius changes
+distance. For machine guns and flamethrowers, nearer means wider and farther
+means narrower. Mortars use radius as target distance, while Tesla coils remain
+omnidirectional and use radius as reach. The existing Direction and Wide/Narrow
+sliders remain synchronized, accessible alternatives. Dragging is a local
+presentation preview and sends one existing `aim` command on release; Y neither
+applies combat rules nor commits aim state. Photon Game continues to validate,
+store, simulate, and publish the authoritative angle and spread, and a rejected
+command clears the preview back to Game output.
+
+**Verification:** both Y JavaScript sources parse, the focused 38-test Photon
+framework suite passes, and the complete 130-test suite passes including all 92
+preserved Laser Tag Z tests. Node regression coverage checks direction
+normalization, optical-position alignment, and the machine-gun, mortar, and
+Tesla radius mappings. A local browser trial placed and selected a machine gun,
+confirmed the handle aligned
+with its dotted center guide, and confirmed that changing from narrow to wide
+moved the handle inward while widening the rendered cone. No hardware command
+or robot motion was performed.
+
+**Owner:** restoring the Gamemaster aiming interaction is a human decision.
+OpenAI Codex implemented the Y-only interaction, renderer geometry, contract
+documentation, regression coverage, and non-hardware verification.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.

@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -248,6 +250,68 @@ class LaserTagYExtractionTests(unittest.TestCase):
         self.assertIn("sequence.field_immunity_remaining_s", game_page)
         self.assertIn("Ring immune ${Math.ceil(immunity)}s", game_page)
         self.assertNotIn("field_immunity_until", game_page)
+
+    def test_y_exposes_synchronized_sliders_and_one_drag_commit(self):
+        game_page = (PROTOTYPES / "laser-tag-y/index.html").read_text(
+            encoding="utf-8"
+        )
+        renderer = (PROTOTYPES / "laser-tag-y/tower-defence-view.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('id="aimDirection"', game_page)
+        self.assertIn('id="aimReach"', game_page)
+        self.assertIn("function beginAimPointer", game_page)
+        self.assertIn("function moveAimPointer", game_page)
+        self.assertIn("function finishAimPointer", game_page)
+        self.assertIn("setPointerCapture", game_page)
+        self.assertIn("else saveAim()", game_page)
+        self.assertIn("function drawAimHandle", renderer)
+        self.assertIn("function clearTowerAimPreview", renderer)
+        self.assertIn("function aimFromPoint", renderer)
+
+    def test_y_drag_geometry_matches_photon_game_aim_semantics(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for renderer geometry verification")
+        renderer_path = json.dumps(str(
+            PROTOTYPES / "laser-tag-y/tower-defence-view.js"
+        ))
+        script = f"""
+require({renderer_path});
+const geometry = globalThis.TowerDefenceView.geometry;
+const close = (actual, expected, label) => {{
+  if (Math.abs(actual - expected) > 1e-6) {{
+    throw new Error(`${{label}}: expected ${{expected}}, got ${{actual}}`);
+  }}
+}};
+const narrow = geometry.towerAimFromPoint('machine_gun', 100, 100, 460, 100);
+close(narrow.angle, 0, 'machine-gun direction');
+close(narrow.spread, 0, 'machine-gun narrow spread');
+close(narrow.distance, 360, 'machine-gun far distance');
+const wide = geometry.towerAimFromPoint('machine_gun', 100, 100, 100, 290);
+close(wide.angle, 90, 'machine-gun direction after drag');
+close(wide.spread, 1, 'machine-gun wide spread');
+close(wide.distance, 190, 'machine-gun near distance');
+const mortar = geometry.towerAimFromPoint('mortar', 100, 100, 600, 100);
+close(mortar.spread, 1, 'mortar far spread');
+close(mortar.distance, 500, 'mortar far distance');
+const tesla = geometry.towerAimFromPoint('tesla_coil', 100, 100, 100, 292.5, 33);
+close(tesla.angle, 33, 'tesla retains its irrelevant direction');
+close(tesla.spread, 0.5, 'tesla reach');
+close(tesla.distance, 192.5, 'tesla distance');
+const upward = geometry.towerAimFromPoint('flamethrower', 100, 100, 100, -135);
+close(upward.angle, 270, 'normalized upward direction');
+const aligned = geometry.targetingHandlePoint(
+  {{x: 10, y: 20}},
+  {{angle: Math.PI / 2, range: 50, target_x: 999, target_y: 999}},
+);
+close(aligned.x, 10, 'handle uses displayed turret x');
+close(aligned.y, 70, 'handle uses displayed turret y');
+"""
+        result = subprocess.run(
+            [node, "-e", script], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_photon_art_owns_the_copied_immutable_runtime_pack(self):
         art = load("photon-art")
