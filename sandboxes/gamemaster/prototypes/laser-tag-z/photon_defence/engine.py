@@ -854,6 +854,137 @@ class LevelModel:
         return best
 
 
+class ContractLevelModel(LevelModel):
+    """Adapt Photon Level's validated JSON graph to the game runtime interface."""
+
+    def __init__(self, runtime: dict[str, Any]) -> None:
+        if not isinstance(runtime, dict):
+            raise ValueError("Photon Level runtime must be an object")
+        try:
+            self.layout_revision = int(runtime["layout_revision"])
+            self.width = int(runtime["width"])
+            self.height = int(runtime["height"])
+            self.aruco_code_footprint_px = float(
+                runtime["aruco_code_footprint_px"]
+            )
+            self.core_aruco_code_footprint_px = float(
+                runtime["core_aruco_code_footprint_px"]
+            )
+            self.force_field_marker_clearance_px = float(
+                runtime["force_field_marker_clearance_px"]
+            )
+            raw_nodes = runtime["nodes"]
+            raw_edges = runtime["edges"]
+            raw_sockets = runtime["sockets"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Photon Level runtime is incomplete") from exc
+        if (
+            self.layout_revision < 1
+            or self.width <= 0
+            or self.height <= 0
+            or self.aruco_code_footprint_px <= 0
+            or self.core_aruco_code_footprint_px <= 0
+            or self.force_field_marker_clearance_px < 0
+            or not all(math.isfinite(value) for value in (
+                self.aruco_code_footprint_px,
+                self.core_aruco_code_footprint_px,
+                self.force_field_marker_clearance_px,
+            ))
+            or not isinstance(raw_nodes, dict)
+            or not isinstance(raw_edges, dict)
+            or not isinstance(raw_sockets, dict)
+        ):
+            raise ValueError("Photon Level runtime geometry is invalid")
+
+        self.map_path = None
+        self.data = None
+        self.tileset_alignments = []
+        self.nodes = {
+            int(node_id): dict(node) for node_id, node in raw_nodes.items()
+        }
+        self.node_by_name = {
+            str(node["name"]): node for node in self.nodes.values()
+        }
+        cores = [
+            node for node in self.nodes.values() if node.get("node_kind") == "core"
+        ]
+        if len(cores) != 1:
+            raise ValueError("Photon Level runtime must contain exactly one core")
+        self.core = cores[0]
+        self.spawns = {
+            str(node["spawn_group"]): node
+            for node in self.nodes.values()
+            if node.get("node_kind") == "spawn"
+        }
+        if len(self.spawns) != 4:
+            raise ValueError("Photon Level runtime must contain four spawn groups")
+
+        self.edges = {}
+        self.edge_by_id = {}
+        for from_node, source_edges in raw_edges.items():
+            if not isinstance(source_edges, list):
+                raise ValueError("Photon Level runtime edges must be lists")
+            converted = []
+            for source in source_edges:
+                edge = dict(source)
+                edge["from"] = int(edge["from"])
+                edge["to"] = int(edge["to"])
+                edge["cost"] = float(edge["cost"])
+                edge["points"] = [tuple(map(float, point)) for point in edge["points"]]
+                edge["segment_lengths"] = [
+                    float(length) for length in edge["segment_lengths"]
+                ]
+                edge["path_length"] = float(edge["path_length"])
+                edge["edge_id"] = str(edge["edge_id"])
+                if edge["edge_id"] in self.edge_by_id:
+                    raise ValueError("Photon Level runtime has duplicate edge IDs")
+                self.edge_by_id[edge["edge_id"]] = edge
+                converted.append(edge)
+            self.edges[int(from_node)] = converted
+
+        self.route_edge_ids = {
+            str(group): [str(edge_id) for edge_id in edge_ids]
+            for group, edge_ids in runtime["route_edge_ids"].items()
+        }
+        self.paths = {
+            str(group): [tuple(map(float, point)) for point in points]
+            for group, points in runtime["paths"].items()
+        }
+        self.junctions = {
+            tuple(map(float, point)) for point in runtime.get("junctions", [])
+        }
+        self.sockets = {
+            str(socket_id): dict(socket)
+            for socket_id, socket in raw_sockets.items()
+        }
+        self.socket_by_marker = {
+            int(marker): str(socket_id)
+            for marker, socket_id in runtime["socket_by_marker"].items()
+        }
+        if sorted(self.socket_by_marker) != list(range(40, 56)):
+            raise ValueError("Photon Level runtime must contain ArUco IDs 40-55")
+        self.ring_adjacency = {
+            str(socket_id): {str(neighbor) for neighbor in neighbors}
+            for socket_id, neighbors in runtime["ring_adjacency"].items()
+        }
+        self.ring_edges = [
+            tuple(map(str, edge)) for edge in runtime["ring_edges"]
+        ]
+        self.ring_cycles = [
+            [str(socket_id) for socket_id in cycle]
+            for cycle in runtime["ring_cycles"]
+        ]
+        if not self.ring_cycles:
+            raise ValueError("Photon Level runtime must contain a valid ring")
+        self.force_field_blockers = tuple(
+            {
+                "blocker_id": str(blocker["blocker_id"]),
+                "points": tuple(tuple(map(float, point)) for point in blocker["points"]),
+            }
+            for blocker in runtime.get("force_field_blockers", [])
+        )
+
+
 class DefenseEngine:
     def __init__(self, map_path: str | Path, wave_path: str | Path) -> None:
         self.level = LevelModel(map_path)
@@ -924,12 +1055,25 @@ class DefenseEngine:
     def set_physical_source(self, callback: Callable[[], tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]]) -> None:
         self._physical_source = callback
 
-    def reload_level(self) -> None:
-        """Reload setup geometry after a validated Gamemaster layout edit."""
+    def reload_level(
+        self,
+        next_level: LevelModel | None = None,
+        waves: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Install validated setup geometry while preserving operator choices."""
         with self.lock:
             if self.phase != "setup":
                 raise ValueError("turret positions can only be changed before a run")
-            next_level = LevelModel(self.level.map_path)
+            if next_level is None:
+                if self.level.map_path is None:
+                    raise ValueError("the current level has no reloadable source path")
+                next_level = LevelModel(self.level.map_path)
+            if not isinstance(next_level, LevelModel):
+                raise ValueError("next_level must implement the LevelModel contract")
+            if waves is not None:
+                if not isinstance(waves, list) or not waves:
+                    raise ValueError("waves must be a non-empty list")
+                self.wave_source = json.loads(json.dumps(waves))
             virtual_play = self.virtual_play
             loadout = dict(self.loadout)
             self.level = next_level

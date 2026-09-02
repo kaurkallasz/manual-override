@@ -18,6 +18,16 @@ and read-only calibrated arm visualization for physical play. The Tower Defense
 map and gameplay are a separate visual feed and never replace or weaken the
 existing robot-control and safety boundaries.
 
+Photon Level is the production owner of authored TMJ geometry, path parsing,
+socket layout validation and persistence, tileset assets, and wave definitions.
+Laser Tag Z consumes `photon.level` version 2 plus
+`photon.level.runtime` version 1 through the hub context. Z adapts that plain
+runtime graph to its existing game algorithms; it does not import Photon Level
+files or implementation classes. A contract mismatch is surfaced locally.
+The former Z map/parser remains an unchanged, read-only standalone rollback
+fallback during the extraction, but all live layout writes go through Photon
+Level so there is only one mutable authority.
+
 ## Gamemaster pages
 
 - `game`, labeled **Tower Defense**, is the default page.
@@ -79,9 +89,12 @@ marker masking rule.
 
 ## Map and marker contract
 
-The production map is `assets/tiled/levels/z-pixel-first-map.tmj`. It remains a
-modular, editable TMJ/TSJ project and must pass the bundled validator plus a
-native Tiled round-trip and render.
+The production map is
+`sandboxes/gamemaster/prototypes/photon-level/assets/tiled/levels/z-pixel-first-map.tmj`.
+It remains a modular, editable TMJ/TSJ project and must pass the bundled
+validator plus a native Tiled round-trip and render. The legacy
+`assets/tiled/levels/z-pixel-first-map.tmj` mirror is a rollback fixture, not a
+second writable authority.
 
 - Sixteen fixed tower sockets use ArUco IDs 40 through 55 exactly once.
 - The central objective uses ArUco ID 38 and is the endpoint for the completed

@@ -358,6 +358,67 @@ The three-process launcher was a useful stepping stone, not the final architectu
 
 **Owner:** The scope and attribution requirement are human decisions from the request. OpenAI Codex selected the evidence-reconstruction method, drafted these entries, and ran the non-hardware verification. Final acceptance remains with the human.
 
+### 2026-09-02 — Add the smallest modular Photon vertical slice beside Laser Tag Z
+
+**Trigger:** Laser Tag Z proved the game, but its map loading, physical evidence, simulation, persistence, assets, and presentation still lived behind one machine boundary. The requested framework must let an LLM change one separately versioned module without needing the implementation of every sibling.
+
+**Options and decision:** splitting every concern into a service, registry, schema package, and message bus was rejected as more infrastructure than the current single-process Flask hub needs. The chosen slice keeps the hub, auth, discovery, plain HTML, Canvas, and SSE. It adds three runtime owners—Photon Level, Photon Board, and Photon Game—plus the presentation-only Laser Tag Y and static Photon Art. Siblings communicate only through small public snapshot/command functions carrying a named contract and integer version. Laser Tag Z remains unchanged and authoritative for its existing feature set; Y is a minimal framework vertical slice, not yet a parity replacement.
+
+**Hub decision:** an optional manifest `group` places all Photon tabs under one Photon Engine dashboard label without inventing a Photon shell service. Disabled state is loaded before lifecycle hooks, disabled routes return 503, optional `hub_stop()` runs on disable, and a live hub restarts after a toggle so module state cannot remain half-enabled.
+
+**Verification:** a focused six-test suite checks contract versions, invalid-input rollback, server-side simulation without a presenter, local containment of a changed sibling contract, the Y presentation boundary, dashboard grouping, disabled-route 503 responses, skipped initialization, and clean stop hooks. The preserved Laser Tag Z regression suite also passes all 92 tests, and every changed/new inline browser script passes a JavaScript parse check. No hardware commands or live robot movement were performed.
+
+**Owner:** The modular scope and minimal-framework goal are human decisions from the request. OpenAI Codex implemented this initial vertical slice and its non-hardware tests; final acceptance and any decision to port Laser Tag Z feature parity remain with the human.
+
+### 2026-09-02 — Phase 4: extract the production level without replacing Laser Tag Z
+
+**Trigger:** the initial Photon Level proved a module boundary with a toy JSON
+level, but Laser Tag Z still parsed and wrote the production TMJ and loaded its
+waves directly. It therefore did not yet prove that a separately versioned
+Level repository could change without knowledge of game or presentation code.
+
+**Options and decision:** deleting Z's known-good parser immediately would turn
+the extraction into a risky rewrite, while keeping both modules writable would
+create two authorities. Phase 4 instead copies the exact validated production
+Tiled project into Photon Level and makes that module the only live layout-write
+owner. `photon.level` version 2 publishes the small generic projection;
+`photon.level.runtime` version 1 publishes the complete JSON-compatible graph,
+blockers, ring topology, marker geometry, and waves. A narrow Z adapter consumes
+those values and reuses its game-side routing algorithms. The unchanged former
+map and parser remain read-only rollback fixtures for standalone Z until a later
+cleanup phase proves the new boundary in operation.
+
+**Interface decision:** layout changes are no longer arbitrary JSON replacement.
+The one accepted input is all sixteen stable sockets plus an expected revision.
+Photon Level performs the existing geometric and graph validation, validates a
+complete candidate TMJ, and atomically replaces its own map. Z proxies map and
+wave reads to Photon Level, forwards layout writes, surfaces the active source
+and contract error in state, and adopts a new revision only during setup. A
+revision published during a run waits until reset.
+
+**Tiled-skill influence:** the extracted project retains native TMJ/TSJ
+editability, normalized modular components, hidden references, exact 1696×960
+bounds, and semantic objects. No asset normalization was rerun because the
+source pixels were copied unchanged. The component alpha audit found 73 readable,
+non-empty images; the native render was visually inspected for seams, missing
+tiles, accidental overlays, and clipping.
+
+**Verification:** the Photon contract/extraction suite passes 12 tests, including
+self-contained Level asset paths, same-input legacy/new parser parity for routes,
+sockets, rings and blockers, a file-path-free Z runtime, hub-style blueprint names, and Z
+map/wave proxying. All 92 preserved Laser Tag Z tests pass. The modular validator
+reports 18 ground modules, 61 sunken road modules from six distinct road assets,
+100% ground coverage, 16 sockets, 23 nodes, 40 edges, no warnings, and no visible
+reference layer. Tiled 1.12.2 successfully round-trips the 14-layer, eight-tileset
+map and created a temporary 1,980,641-byte native render for visual inspection.
+Changed inline JavaScript parses.
+No hardware command or live robot movement was performed.
+
+**Owner:** Extracting the production level while preserving Laser Tag Z is the
+human decision. OpenAI Codex implemented the contract, adapter, editor, module-
+local assets, specifications, and non-hardware verification. Human review and a
+live installation trial remain required before deleting the rollback fixtures.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -376,6 +437,8 @@ The three-process launcher was a useful stepping stone, not the final architectu
 14. **One lifecycle should derive every public projection.** A canonical connection record prevents a force field from existing, rendering, and colliding differently in separate consumers.
 15. **Spatial objectives must be spatially deterministic.** The same living layout should produce the same safe ring regardless of activation history; multi-edge completion must be atomic.
 16. **Keep simulation authority and visual richness separate.** The server owns targets, damage, timing, and outcomes. The browser may interpolate motion and render particles, but it must not invent combat results.
+17. **A module boundary needs a small contract, not a new platform.** In one trusted process, versioned public functions plus explicit unavailable states preserve isolation without a broker, registry, or universal I/O abstraction.
+18. **Extract one authority before deleting the fallback.** A versioned value contract and exact parity fixture let production consumers move first; the old parser can remain read-only until live operation proves removal safe.
 
 ## Human and AI contribution record
 
@@ -416,6 +479,7 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - Laser Tag Z server simulation state is process memory. The external screen can reconnect to the current process, but a process restart does not resume an in-progress defence run.
 - Ordinary force-field links preserve activation history while the objective ring is spatial and order-independent. This is intentional, but diagnostics and the connection contract must continue to make the distinction visible.
 - The deterministic ring solver explores spatial subsets from sixteen down to eight. Current pruning and tests keep the authored sixteen-socket level tractable; a materially larger socket set would require a new performance decision.
+- Phase 4 deliberately retains Laser Tag Z's legacy map/parser as a read-only rollback fixture. It is duplicate code, not a second mutable authority, and should be removed only after a live installation trial confirms Photon Level startup, editing, restart, and in-run revision deferral.
 
 ## How to record the next decision
 

@@ -5,7 +5,7 @@ Each *sandbox* is a folder under `sandboxes/<name>/prototypes/` holding machines
 A *machine* (historically called a prototype) is any sub-folder containing a
 `prototype.py` that defines:
 
-    MANIFEST = { "name", "description", "default_page", "pages": [...] }
+    MANIFEST = { "name", "description", "default_page", "pages": [...], "group": "..." }
     bp       = flask.Blueprint(...)   # its pages + API, all paths relative
 
 On startup the hub builds one Flask app per sandbox, mounts each machine's
@@ -290,6 +290,7 @@ class Sandbox:
             "slug": slug,
             "name": manifest.get("name", slug),
             "description": manifest.get("description", ""),
+            "group": str(manifest.get("group") or ""),
             "base": prefix,
             "default_url": f"{prefix}/{default_page}".rstrip("/") + ("/" if not default_page else ""),
             "pages": [
@@ -308,6 +309,11 @@ class Sandbox:
         self._modules.clear()
         if not os.path.isdir(self.machines_dir):
             os.makedirs(self.machines_dir, exist_ok=True)
+        # Disabled state must be known before any lifecycle hook runs. Modules
+        # are still imported so their routes and dashboard metadata exist, but
+        # disabled modules are never started.
+        self._disabled.clear()
+        self._disabled.update(self._load_settings())
         for slug in sorted(os.listdir(self.machines_dir)):
             if not os.path.isfile(os.path.join(self.machines_dir, slug, "prototype.py")):
                 continue
@@ -317,11 +323,10 @@ class Sandbox:
             except Exception:
                 print(f"  FAILED to load machine '{self.name}/{slug}':")
                 traceback.print_exc()
-        # restore which machines were turned off last time
-        self._disabled.clear()
-        self._disabled.update(self._load_settings())
-        # now that every module + the disabled set are loaded, run optional hooks
+        # Every module is now available for contract-only sibling lookups.
         for slug, module in self._modules.items():
+            if slug in self._disabled:
+                continue
             hook = getattr(module, "hub_init", None)
             if callable(hook):
                 try:
@@ -341,16 +346,24 @@ class Sandbox:
         request.environ["hhh.roles"] = roles
         if path == "/logout":
             return None
-        if self.name in roles or self.hub.is_admin(roles):
-            return None
-        shared = self.cfg.get("shared_api") or {}
-        m = re.match(r"^/p/([^/]+)/api(?:/|$)", path)
-        if m and roles & set(shared.get(m.group(1), ())):
-            return None
-        if "/api/" in path or path.startswith("/api"):
-            return jsonify({"ok": False, "error": "auth required"}), 401
-        nxt = quote(request.script_root + path)
-        return redirect(f"{request.script_root}/login?next={nxt}")
+        machine_api = re.match(r"^/p/([^/]+)/api(?:/|$)", path)
+        allowed = self.name in roles or self.hub.is_admin(roles)
+        if not allowed and machine_api:
+            shared = self.cfg.get("shared_api") or {}
+            allowed = bool(roles & set(shared.get(machine_api.group(1), ())))
+        if not allowed:
+            if "/api/" in path or path.startswith("/api"):
+                return jsonify({"ok": False, "error": "auth required"}), 401
+            nxt = quote(request.script_root + path)
+            return redirect(f"{request.script_root}/login?next={nxt}")
+
+        machine = re.match(r"^/p/([^/]+)(?:/|$)", path)
+        if machine and machine.group(1) in self._disabled:
+            payload = {"ok": False, "error": "machine disabled", "slug": machine.group(1)}
+            if machine_api:
+                return jsonify(payload), 503
+            return payload["error"], 503
+        return None
 
     def _safe_next(self):
         """The ?next= target if it stays on this site, else this sandbox's home."""
@@ -436,14 +449,29 @@ class Sandbox:
 
         @app.route("/api/prototypes/<slug>/enabled", methods=["POST"])
         def set_enabled(slug):
-            """Enable/disable a machine and persist the choice."""
+            """Persist the choice, stop cleanly when possible, then restart."""
             if slug not in {p["slug"] for p in self._prototypes}:
                 return jsonify({"ok": False, "error": "unknown machine"}), 404
             enabled = bool((request.get_json(silent=True) or {}).get("enabled", True))
             with self._settings_lock:
+                changed = (slug in self._disabled) == enabled
                 self._disabled.discard(slug) if enabled else self._disabled.add(slug)
                 self._save_settings()
-            return jsonify({"ok": True, "slug": slug, "enabled": enabled})
+            if changed and not enabled:
+                hook = getattr(self._modules.get(slug), "hub_stop", None)
+                if callable(hook):
+                    try:
+                        hook()
+                    except Exception:
+                        print(f"  hub_stop failed for '{self.name}/{slug}':")
+                        traceback.print_exc()
+            restarting = bool(changed and hub._server is not None)
+            if restarting:
+                hub.schedule_restart(reason=f"{self.name}/{slug} {'enabled' if enabled else 'disabled'}")
+            return jsonify({
+                "ok": True, "slug": slug, "enabled": enabled,
+                "restarting": restarting,
+            })
 
         @app.route("/api/export")
         def export_zip():
@@ -657,10 +685,10 @@ class Hub:
         return app
 
     # ---- restart (after an import) --------------------------------------------
-    def schedule_restart(self, delay=0.8):
+    def schedule_restart(self, delay=0.8, reason="configuration changed"):
         """Re-exec this process shortly, after the import response flushes."""
         def _go():
-            print("\nRestarting hub (setup imported)...", flush=True)
+            print(f"\nRestarting hub ({reason})...", flush=True)
             # The listening socket is inheritable and would survive the exec,
             # leaving the new process unable to bind the port — close it first.
             server = self._server

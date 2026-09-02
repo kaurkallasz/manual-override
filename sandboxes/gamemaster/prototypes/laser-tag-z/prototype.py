@@ -8,15 +8,20 @@ import threading
 import time
 import datetime as dt
 
-from flask import Blueprint, Response, jsonify, request, send_file, send_from_directory
+from flask import (
+    Blueprint,
+    Response,
+    jsonify,
+    request,
+    send_file,
+    send_from_directory,
+)
 
 import live
 from photon_defence import (
+    ContractLevelModel,
     DefenseEngine,
-    LevelModel,
     SettingsStore,
-    SocketLayoutError,
-    update_socket_layout_file,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -89,6 +94,9 @@ _run = None
 _defence = DefenseEngine(LEVEL_PATH, WAVE_PATH)
 _defence_settings = SettingsStore(DEFENCE_SETTINGS_PATH)
 _aruco_marker_cache = {}
+_photon_level_revision = None
+_photon_level_source = "legacy-fallback"
+_photon_level_error = "Photon Level has not been connected"
 
 
 def _load_ltx_game_mode():
@@ -350,6 +358,105 @@ def append_external_event(source, kind, detail=None, category=None):
     return event, None
 
 
+def _photon_level_module():
+    if _hub_ctx is None:
+        return None, "Photon Level is not connected"
+    if not _hub_ctx.is_prototype_enabled("photon-level"):
+        return None, "Photon Level is unavailable or disabled"
+    module = _hub_ctx.get_prototype("photon-level")
+    if module is None:
+        return None, "Photon Level is not installed"
+    if not callable(getattr(module, "level_snapshot", None)):
+        return module, "Photon Level does not publish level_snapshot()"
+    return module, None
+
+
+def _photon_level_snapshot(module):
+    try:
+        snapshot = module.level_snapshot()
+    except Exception as exc:
+        return None, f"Photon Level failed: {exc}"
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("contract") != "photon.level"
+        or snapshot.get("version") != 2
+    ):
+        return None, "Photon Level contract mismatch (expected photon.level v2)"
+    if snapshot.get("status") != "ready":
+        return None, str(snapshot.get("error") or "Photon Level is not ready")
+    return snapshot, None
+
+
+def _photon_level_bundle(module, revision):
+    if not callable(getattr(module, "runtime_bundle", None)):
+        return None, "Photon Level does not publish runtime_bundle()"
+    try:
+        bundle = module.runtime_bundle()
+    except Exception as exc:
+        return None, f"Photon Level runtime failed: {exc}"
+    if (
+        not isinstance(bundle, dict)
+        or bundle.get("contract") != "photon.level.runtime"
+        or bundle.get("version") != 1
+    ):
+        return None, (
+            "Photon Level runtime contract mismatch "
+            "(expected photon.level.runtime v1)"
+        )
+    if (
+        bundle.get("status") != "ready"
+        or bundle.get("revision") != revision
+        or not isinstance(bundle.get("runtime"), dict)
+        or not isinstance(bundle.get("waves"), list)
+    ):
+        return None, str(bundle.get("error") or "Photon Level runtime is not ready")
+    return bundle, None
+
+
+def _sync_photon_level(force=False):
+    """Adopt a new Level output only while the game is safely in setup."""
+    global _photon_level_revision, _photon_level_source, _photon_level_error
+    module, error = _photon_level_module()
+    if error:
+        _photon_level_error = error
+        return False
+    snapshot, error = _photon_level_snapshot(module)
+    if error:
+        _photon_level_error = error
+        return False
+    revision = int(snapshot["revision"])
+    if not force and revision == _photon_level_revision:
+        _photon_level_error = None
+        return True
+    bundle, error = _photon_level_bundle(module, revision)
+    if error:
+        _photon_level_error = error
+        return False
+    try:
+        model = ContractLevelModel(bundle["runtime"])
+        _defence.reload_level(model, bundle["waves"])
+    except Exception as exc:
+        if _defence.phase != "setup":
+            _photon_level_error = (
+                f"Photon Level revision {revision} is pending until the run resets"
+            )
+        else:
+            _photon_level_error = f"Photon Level output rejected: {exc}"
+        return False
+    _photon_level_revision = revision
+    _photon_level_source = "photon-level"
+    _photon_level_error = None
+    return True
+
+
+def _defence_snapshot(*, compact_enemies=False):
+    _sync_photon_level()
+    state = _defence.snapshot(compact_enemies=compact_enemies)
+    state["level_source"] = _photon_level_source
+    state["level_input_error"] = _photon_level_error
+    return state
+
+
 def hub_init(ctx):
     global _hub_ctx
     _hub_ctx = ctx
@@ -373,7 +480,12 @@ def hub_init(ctx):
         return tags, arms
 
     _defence.set_physical_source(physical_source)
+    _sync_photon_level(force=True)
     _defence.start_background()
+
+
+def hub_stop():
+    _defence.stop_background()
 
 
 def _fresh_state(game_mode=None):
@@ -536,17 +648,50 @@ def tower_defence_asset(filename):
 
 @bp.route("/api/defence/level")
 def tower_defence_level():
+    module, error = _photon_level_module()
+    if module is not None:
+        if error is None:
+            snapshot, error = _photon_level_snapshot(module)
+        if error is not None:
+            return jsonify({"ok": False, "error": error}), 503
+        if not callable(getattr(module, "tiled_map_snapshot", None)):
+            return jsonify({
+                "ok": False,
+                "error": "Photon Level does not publish tiled_map_snapshot()",
+            }), 503
+        try:
+            response = jsonify(module.tiled_map_snapshot(
+                request.script_root.rstrip("/") + "/p/photon-level/assets/"
+            ))
+            response.headers["X-Level-Revision"] = str(snapshot["revision"])
+            response.headers["X-Level-Source"] = "photon-level"
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            return response
+        except Exception as exc:
+            return jsonify({
+                "ok": False, "error": f"Photon Level map failed: {exc}"
+            }), 503
     response = send_file(LEVEL_PATH, mimetype="application/json")
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["X-Level-Revision"] = str(_defence.level.layout_revision)
+    response.headers["X-Level-Source"] = "legacy-fallback"
     return response
 
 
 @bp.route("/api/defence/layout", methods=["POST"])
 def tower_defence_layout():
+    global _photon_level_revision, _photon_level_source, _photon_level_error
     if "gamemaster" not in _roles():
         return jsonify({"ok": False, "error": "gamemaster required"}), 403
     data = request.get_json(silent=True) or {}
+    module, error = _photon_level_module()
+    if error is None:
+        snapshot, error = _photon_level_snapshot(module)
+    if error is not None or not callable(getattr(module, "update_layout", None)):
+        return jsonify({
+            "ok": False,
+            "error": error or "Photon Level does not publish update_layout()",
+        }), 503
     try:
         with _socket_layout_lock, _defence.lock:
             if _defence.phase != "setup":
@@ -554,20 +699,32 @@ def tower_defence_layout():
                     "ok": False,
                     "error": "turret positions can only be changed before a run",
                 }), 409
-            revision, sockets = update_socket_layout_file(
-                LEVEL_PATH,
+            output = module.update_layout(
                 data.get("sockets"),
-                validate_candidate=LevelModel,
+                expected_revision=data.get("expected_revision", snapshot["revision"]),
             )
-            _defence.reload_level()
-    except (SocketLayoutError, TypeError, ValueError) as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+            bundle, error = _photon_level_bundle(module, output["revision"])
+            if error:
+                raise ValueError(error)
+            _defence.reload_level(
+                ContractLevelModel(bundle["runtime"]), bundle["waves"]
+            )
+            _photon_level_revision = int(output["revision"])
+            _photon_level_source = "photon-level"
+            _photon_level_error = None
+    except (TypeError, ValueError) as exc:
+        status = 409 if "revision changed" in str(exc) else 400
+        return jsonify({"ok": False, "error": str(exc)}), status
+    except Exception as exc:
+        return jsonify({
+            "ok": False, "error": f"Photon Level update failed: {exc}"
+        }), 503
     _defence_live.bump()
     return jsonify({
         "ok": True,
-        "level_revision": revision,
-        "sockets": sockets,
-        "state": _defence.snapshot(),
+        "level_revision": output["revision"],
+        "sockets": output["level"]["sockets"],
+        "state": _defence_snapshot(),
     })
 
 
@@ -609,8 +766,29 @@ def tower_defence_aruco_marker(marker_id):
 
 @bp.route("/api/defence/waves")
 def tower_defence_waves():
+    module, error = _photon_level_module()
+    if module is not None:
+        if error is None:
+            snapshot, error = _photon_level_snapshot(module)
+        if error is not None:
+            return jsonify({"ok": False, "error": error}), 503
+        if not callable(getattr(module, "waves_document", None)):
+            return jsonify({
+                "ok": False,
+                "error": "Photon Level does not publish waves_document()",
+            }), 503
+        try:
+            response = jsonify(module.waves_document())
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["X-Level-Source"] = "photon-level"
+            return response
+        except Exception as exc:
+            return jsonify({
+                "ok": False, "error": f"Photon Level waves failed: {exc}"
+            }), 503
     response = send_file(WAVE_PATH, mimetype="application/json")
     response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["X-Level-Source"] = "legacy-fallback"
     return response
 
 
@@ -630,13 +808,13 @@ def tower_defence_arms():
 
 @bp.route("/api/defence/state")
 def tower_defence_state():
-    return jsonify(_defence.snapshot())
+    return jsonify(_defence_snapshot())
 
 
 @bp.route("/api/defence/events")
 def tower_defence_events():
     return _defence_live.stream(
-        lambda: _defence.snapshot(compact_enemies=True), interval=0.25
+        lambda: _defence_snapshot(compact_enemies=True), interval=0.25
     )
 
 
@@ -649,6 +827,7 @@ def tower_defence_operator():
         requested_virtual = data.get("virtual_play") if "virtual_play" in data else None
         action = data.get("action")
         if action == "start":
+            _sync_photon_level()
             if requested_virtual is not None:
                 _defence.set_virtual_play(bool(requested_virtual))
             _defence.start(_defence_settings.snapshot())
@@ -658,6 +837,7 @@ def tower_defence_operator():
             _defence.pause(False)
         elif action == "reset":
             _defence.reset()
+            _sync_photon_level(force=True)
             _defence_live.bump()
         elif action not in (None, ""):
             return jsonify({"ok": False, "error": "invalid operator action"}), 400
@@ -665,7 +845,7 @@ def tower_defence_operator():
             _defence.set_virtual_play(bool(requested_virtual))
     except (TypeError, ValueError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    return jsonify({"ok": True, "state": _defence.snapshot()})
+    return jsonify({"ok": True, "state": _defence_snapshot()})
 
 
 @bp.route("/api/defence/settings", methods=["GET", "POST"])

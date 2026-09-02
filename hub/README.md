@@ -64,7 +64,11 @@ A machine is any sub-folder of a sandbox's `prototypes/` with a `prototype.py`
 that defines:
 
 ```python
-MANIFEST = { "name", "description", "default_page", "pages": [...] }
+MANIFEST = {
+    "name": "My module", "description": "One job.",
+    "default_page": "", "pages": [...],
+    "group": "Photon Engine",  # optional dashboard grouping only
+}
 bp       = flask.Blueprint(...)   # pages + API, all paths relative to /s/<sandbox>/p/<slug>/
 ```
 
@@ -75,6 +79,11 @@ Optional: a `hub_init(ctx)` hook receives a `HubContext`:
 * `ctx.local_base` — this server's own base URL (`http://127.0.0.1:<port>`);
 * `ctx.is_enabled()` / `ctx.get_prototype(slug)` / `ctx.is_prototype_enabled(slug)`
   — same-sandbox machine lookups.
+
+An optional `hub_stop()` hook releases module-owned threads or devices. Disabled
+modules are imported but do not receive `hub_init`; all of their page and API
+routes return HTTP 503. Changing enabled state restarts the hub so every module
+sees a clean dependency graph.
 
 Shared helpers like `live` are importable by plain name — the engine puts this
 folder on `sys.path` during discovery. A machine's OWN sibling modules
