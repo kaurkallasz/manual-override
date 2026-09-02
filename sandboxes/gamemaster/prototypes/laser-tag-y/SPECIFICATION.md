@@ -8,7 +8,11 @@ gameplay, level, board, camera, or persistent state.
 - Optional static input: immutable files from `photon.art` v2. Missing images use
   code-native Canvas fallbacks and do not stop the game.
 - Output: the physical-mode and virtual-mode Gamemaster presentation, plus a
-  control-free external screen. All three draw the same authoritative snapshot.
+  settings form and a control-free external screen. Every page reads the same
+  authoritative snapshot.
+- The settings form renders the nested `photon.game.settings` version 1 value
+  and forwards only `configure` or `reset_settings` intent. Defaults, presets,
+  validation, active-run freezing, and persistence remain owned by Photon Game.
 - The embedded level projection is display geometry, not a level-authoring
   input. Its renderer-neutral scene supplies stable art IDs and precomputed
   transforms; Y never interprets a Tiled GID, tileset, or alignment mode.

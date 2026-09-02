@@ -33,7 +33,10 @@ There is one snapshot contract and one live stream:
 
 The snapshot contains the authoritative phase, timers, enemies, towers,
 projectiles, combat effects, topology, core sequence, immutable run settings,
-input diagnostics, and a small level projection needed by presentations.
+input diagnostics, a nested `photon.game.settings` version 1 configuration
+projection, and a small level projection needed by presentations. The settings
+projection supplies the saved next-run draft, presets, numeric limits, and
+authored per-wave enemy counts; it is available even when Level is unavailable.
 That projection contains dimensions, named paths, and display-only socket
 identity/position/size/owner values, exact ArUco display positions, central-core
 geometry, and the opaque visual scene received from Level. Photon Game forwards

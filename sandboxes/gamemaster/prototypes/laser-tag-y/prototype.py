@@ -16,6 +16,7 @@ MANIFEST = {
     "default_page": "game",
     "pages": [
         {"path": "game", "label": "Game master"},
+        {"path": "settings", "label": "Game settings"},
         {"path": "screen", "label": "External screen", "newtab": True},
     ],
 }
@@ -80,6 +81,11 @@ def screen():
     return send_from_directory(HERE, "screen.html")
 
 
+@bp.route("/settings")
+def settings():
+    return send_from_directory(HERE, "settings.html")
+
+
 @bp.route("/tower-defence-view.js")
 def renderer():
     return send_from_directory(HERE, "tower-defence-view.js")
@@ -115,7 +121,11 @@ def command_api():
     try:
         return jsonify({"ok": True, "output": game.apply_command(request.get_json(silent=True))})
     except (TypeError, ValueError) as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+            "errors": getattr(exc, "fields", {}),
+        }), 400
 
 
 @bp.route("/api/art")

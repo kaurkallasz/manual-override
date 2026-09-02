@@ -62,6 +62,10 @@ _storage = {
 class GameError(ValueError):
     """A rejected operator command or unavailable required input."""
 
+    def __init__(self, message, *, fields=None):
+        super().__init__(message)
+        self.fields = dict(fields or {})
+
 
 def _copy(value):
     return json.loads(json.dumps(value))
@@ -336,6 +340,24 @@ def _engine_changed():
     _live.bump()
 
 
+def _configuration_snapshot(engine):
+    output = _settings.response()
+    output.pop("ok", None)
+    output.update({
+        "contract": "photon.game.settings",
+        "version": 1,
+        "status": "ready",
+        "authored_wave_enemy_counts": [],
+    })
+    if engine is not None:
+        with engine.lock:
+            output["authored_wave_enemy_counts"] = [
+                sum(max(0, int(group.get("count", 0))) for group in wave.get("groups", []))
+                for wave in engine.wave_source
+            ]
+    return output
+
+
 def _public_snapshot(*, compact_enemies=False):
     _sync_level()
     with _lock:
@@ -345,6 +367,7 @@ def _public_snapshot(*, compact_enemies=False):
         level = _copy(_level_projection)
         revision = _revision
         run_id = _run_id
+    configuration = _configuration_snapshot(engine)
     if engine is None:
         return {
             "contract": CONTRACT,
@@ -361,6 +384,7 @@ def _public_snapshot(*, compact_enemies=False):
             "towers": [],
             "inputs": inputs,
             "storage": storage,
+            "configuration": configuration,
             "server_time": time.time(),
         }
     simulation = engine.snapshot(compact_enemies=compact_enemies)
@@ -374,6 +398,7 @@ def _public_snapshot(*, compact_enemies=False):
         "level": level,
         "inputs": inputs,
         "storage": storage,
+        "configuration": configuration,
         **simulation,
     }
 
@@ -404,7 +429,10 @@ def apply_command(data):
     if not isinstance(data, dict):
         raise GameError("command must be an object")
     action = str(data.get("action") or "")
-    engine, level_ready = _require_engine()
+    engine = None
+    level_ready = False
+    if action not in {"configure", "reset_settings"}:
+        engine, level_ready = _require_engine()
     try:
         if action == "start":
             if not level_ready:
@@ -473,9 +501,10 @@ def apply_command(data):
                 data.get("settings") or {}, data.get("preset")
             )
             if errors:
-                raise GameError("settings validation failed: " + "; ".join(
-                    f"{key} {value}" for key, value in sorted(errors.items())
-                ))
+                raise GameError(
+                    "settings validation failed",
+                    fields=errors,
+                )
             with _lock:
                 _storage["settings"] = {"status": "ready", "error": None}
                 _revision += 1

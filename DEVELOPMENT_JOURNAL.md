@@ -608,6 +608,44 @@ the contracts, Art catalog, Y composition, compatibility fallback,
 specifications, and non-hardware verification. A full physical-camera and
 external-projector trial remains human work before Y replaces Z.
 
+### 2026-09-02 — Restore game settings through the modular boundary
+
+**Trigger:** Laser Tag Y had Start, Pause, Reset, placement, and aiming controls,
+but Phase 7 did not carry over Z's Tower Defense settings button or form. Photon
+Game already owned the validated settings store and command handlers, leaving
+the rules present but inaccessible to the Gamemaster.
+
+**Decision:** settings remain part of Photon Game rather than becoming another
+module. Its existing `photon.game` version 2 snapshot now embeds
+`photon.game.settings` version 1 with the saved next-run draft, preset values,
+numeric limits, revision, and authored per-wave enemy counts. No settings API or
+second changing output was added. Laser Tag Y owns only the settings HTML: it
+renders that value and forwards `configure` and `reset_settings` through its
+existing authenticated command proxy. Defaults, validation, atomic persistence
+in Photon Game's ignored `data/settings.json`, and immutable active-run settings
+remain server-owned.
+
+**Isolation decision:** configuration and reset do not require a live Level or
+simulation engine. This lets Photon Game's own input be repaired while a sibling
+repository is disabled or incompatible. Invalid fields return structured errors
+for Y to display, while the parent Game contract and all unrelated tabs remain
+available according to their existing failure rules.
+
+**Verification:** the 35-test focused framework suite and complete 127-test
+repository suite pass, including all 92 preserved Laser Tag Z tests. Tests cover
+the nested settings contract, limits/presets, authored-wave summary, persistence
+in a temporary module-local file, field errors, active-run freezing, operation
+without Level, the Y route, and the game-page link. A local browser trial loaded
+all 26 settings, three presets, limits, and calculated 12-wave/4,584-orc summary;
+an invalid wave count displayed Photon Game's field error and the return link
+reopened Y with no console warning or error. The invalid trial did not create or
+change the real settings file. No hardware command or robot motion was performed.
+
+**Owner:** the placement of the Gamemaster form in Y and settings authority in
+Photon Game follows the human-selected modular structure. OpenAI Codex
+implemented the projection, form, command/error bridge, specifications, journal,
+and non-hardware verification.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -632,6 +670,7 @@ external-projector trial remains human work before Y replaces Z.
 20. **Copy proven rules, not proven coupling.** Simulation behavior can move intact while file parsing, hardware lookup, rendering, and asset ownership are replaced by versioned values at the new boundary.
 21. **A presentation may receive geometry without owning the level.** A small display projection lets Canvas draw and hit-test authoritative state while TMJ parsing, editing, revision control, and authored files remain in the Level module.
 22. **Project source once; compose it at the edge.** Level converts editor-specific alignment into stable visual transforms, Game transports those values without interpretation, Art resolves stable IDs, and Y remains a presentation rather than a second level parser.
+23. **Put the form with the operator and the rules with the authority.** Y may present every tuning control, but Game publishes the schema, validates intent, freezes run settings, and owns persistence.
 
 ## Human and AI contribution record
 

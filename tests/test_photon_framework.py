@@ -128,6 +128,10 @@ class PhotonContractTests(unittest.TestCase):
             response = client.get("/p/laser-tag-y/api/state")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["contract"], "photon.game")
+            self.assertEqual(
+                response.get_json()["configuration"]["contract"],
+                "photon.game.settings",
+            )
             art = client.get("/p/laser-tag-y/api/art")
             self.assertEqual(art.get_json()["contract"], "photon.art")
 
@@ -157,13 +161,21 @@ class PhotonContractTests(unittest.TestCase):
         app.register_blueprint(self.presentation.bp, url_prefix="/p/laser-tag-y")
         with app.test_client() as client:
             game = client.get("/p/laser-tag-y/game")
+            settings = client.get("/p/laser-tag-y/settings")
             screen = client.get("/p/laser-tag-y/screen")
             renderer = client.get("/p/laser-tag-y/tower-defence-view.js")
-        self.assertEqual((game.status_code, screen.status_code, renderer.status_code), (200, 200, 200))
+        self.assertEqual(
+            (game.status_code, settings.status_code, screen.status_code, renderer.status_code),
+            (200, 200, 200, 200),
+        )
+        self.assertIn(b"Tower Defense settings", game.data)
+        self.assertIn(b"owned and validated by Photon Game", settings.data)
+        self.assertIn(b"photon.game.settings", settings.data)
         self.assertIn(b"Virtual Atom controls", game.data)
         self.assertNotIn(b"Virtual Atom controls", screen.data)
         self.assertIn(b"TowerDefenceView", renderer.data)
         game.close()
+        settings.close()
         screen.close()
         renderer.close()
 
@@ -778,6 +790,52 @@ class PhotonGameExtractionTests(unittest.TestCase):
                 self.assertTrue(any(item["kind"] == "game_event" for item in events))
                 self.assertTrue(any(item["kind"] == "settings_saved" for item in events))
                 self.assertEqual(game.game_snapshot()["storage"]["history"]["status"], "ready")
+            finally:
+                game.hub_stop()
+
+    def test_settings_projection_and_commands_work_without_a_level(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = load("photon-game")
+            game.LOG_PATH = str(Path(folder) / "runs.jsonl")
+            game._settings = game.SettingsStore(Path(folder) / "settings.json")
+            game.hub_init(FakeContext({}))
+            try:
+                before = game.game_snapshot()
+                self.assertEqual(before["status"], "unavailable")
+                configuration = before["configuration"]
+                self.assertEqual(
+                    (configuration["contract"], configuration["version"]),
+                    ("photon.game.settings", 1),
+                )
+                self.assertEqual(configuration["status"], "ready")
+                self.assertIn("balanced", configuration["presets"])
+                self.assertIn("wave_count", configuration["limits"])
+
+                after = game.apply_command({
+                    "action": "configure", "preset": "training",
+                })
+                self.assertEqual(after["status"], "unavailable")
+                self.assertEqual(after["configuration"]["preset"], "training")
+                self.assertTrue((Path(folder) / "settings.json").is_file())
+
+                with self.assertRaises(game.GameError) as rejected:
+                    game.apply_command({
+                        "action": "configure",
+                        "settings": {"wave_count": 99},
+                    })
+                self.assertIn("wave_count", rejected.exception.fields)
+            finally:
+                game.hub_stop()
+
+    def test_settings_projection_summarizes_authored_waves(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder)
+            try:
+                configuration = game.game_snapshot()["configuration"]
+                counts = configuration["authored_wave_enemy_counts"]
+                self.assertEqual(len(counts), 12)
+                self.assertEqual(counts[0], 118)
+                self.assertTrue(all(count > 0 for count in counts))
             finally:
                 game.hub_stop()
 

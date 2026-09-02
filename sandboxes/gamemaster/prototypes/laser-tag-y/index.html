@@ -21,7 +21,7 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
 <body>
 <header class="hero">
   <div><h1>Laser Tag Y</h1><div class="sub">Photon Game presentation · physical board or virtual controls</div></div>
-  <div class="actions"><a id="screenLink" class="button" target="_blank" rel="noopener">Open game screen ↗</a></div>
+  <div class="actions"><a id="settingsLink" class="button">Tower Defense settings</a><a id="screenLink" class="button" target="_blank" rel="noopener">Open game screen ↗</a></div>
 </header>
 <section class="stage-shell">
   <div id="stage" class="stage">
@@ -52,7 +52,7 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
 const $=id=>document.getElementById(id),ROOT=location.pathname.split('/p/')[0],SELF=`${ROOT}/p/laser-tag-y`;
 const ATOMS={100:{name:'Machine gun'},101:{name:'Flamethrower'},102:{name:'Mortar'},103:{name:'Tesla coil'}};
 const ui={state:null,view:null,selectedAtom:null,selectedTower:null,aimTimer:null,aimDraft:null,busy:false,events:null};
-$('screenLink').href=`${SELF}/screen`;
+$('settingsLink').href=`${SELF}/settings`;$('screenLink').href=`${SELF}/screen`;
 function log(message){$('log').textContent+=`\n[${new Date().toLocaleTimeString()}] ${message}`;$('log').scrollTop=$('log').scrollHeight}
 async function json(url,options={}){const response=await fetch(url,options),text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch(_){}if(!response.ok)throw Error(data.error||text||`HTTP ${response.status}`);return data}
 async function command(data){const result=await json(`${SELF}/api/command`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(result.output)applyState(result.output);return result.output}
