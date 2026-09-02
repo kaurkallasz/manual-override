@@ -281,6 +281,259 @@ class PhotonLevelExtractionTests(unittest.TestCase):
             z.hub_stop()
 
 
+class PhotonBoardExtractionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.board = load("photon-board")
+        cls.level = load("photon-level")
+
+    def tearDown(self):
+        self.board.hub_stop()
+
+    @staticmethod
+    def _production_inputs(*, webcam_version=1, correction_version=1, relay_version=1):
+        class Webcam:
+            calls = 0
+
+            @classmethod
+            def tag_snapshot(cls):
+                cls.calls += 1
+                tag = {
+                    "id": 100, "x": 420, "y": 300,
+                    "nx": 0.25, "ny": 0.3125, "rotation": 12.5,
+                    "missing": 0.04, "tracked": True,
+                    "corners": [[400, 280], [440, 280], [440, 320], [400, 320]],
+                }
+                return {
+                    "contract": "hhh.webcam.tags", "version": webcam_version,
+                    "status": "ready", "observed_at": time.time(),
+                    "width": 1696, "height": 960,
+                    "tags": [tag], "detections": [tag], "visible_ids": [100],
+                }
+
+        class Calibration:
+            calls = 0
+
+            @classmethod
+            def corrected_tag_snapshot(cls, tags, detections):
+                cls.calls += 1
+                corrected_tags = [dict(tag, nx=0.255, ny=0.31) for tag in tags]
+                corrected_detections = [
+                    dict(tag, nx=0.255, ny=0.31, ncorners=[
+                        [0.24, 0.29], [0.27, 0.29],
+                        [0.27, 0.33], [0.24, 0.33],
+                    ])
+                    for tag in detections
+                ]
+                return {
+                    "contract": "hhh.camera-correction",
+                    "version": correction_version,
+                    "status": "ready", "corrected": True,
+                    "observed_at": time.time(),
+                    "width": 1696, "height": 960,
+                    "tags": corrected_tags,
+                    "detections": corrected_detections,
+                }
+
+        class Relay:
+            calls = 0
+
+            @classmethod
+            def arms_snapshot(cls):
+                cls.calls += 1
+                return {
+                    "contract": "hhh.relay.arms", "version": relay_version,
+                    "status": "ready", "observed_at": time.time(),
+                    "arms": {
+                        "green": {
+                            "connected": True, "enabled": True,
+                            "mode_name": "ServoP", "pose": [1, 2, 3, 4],
+                            "target": [5, 6, 7, 8], "pump_mode": "off",
+                        },
+                        "purple": {
+                            "connected": False, "enabled": False,
+                            "pump_mode": "off",
+                        },
+                    },
+                }
+
+        return Webcam, Calibration, Relay
+
+    def test_runtime_composes_three_versioned_inputs_without_game_knowledge(self):
+        webcam, calibration, relay = self._production_inputs()
+        self.board.hub_init(FakeContext({
+            "webcam": webcam,
+            "camera-calibration": calibration,
+            "dobot-mg400-relay": relay,
+        }))
+        self.board.set_simulation(False, [])
+
+        runtime = self.board.runtime_observation()
+        generic = self.board.board_snapshot()
+        app = Flask("photon-board-runtime-route-test")
+        app.register_blueprint(self.board.bp, url_prefix="/p/photon-board")
+        with app.test_client() as client:
+            runtime_response = client.get("/p/photon-board/api/runtime")
+
+        self.assertEqual(runtime["contract"], "photon.board.runtime")
+        self.assertEqual(runtime["version"], 1)
+        self.assertEqual(runtime["status"], "ready")
+        self.assertEqual(runtime["source"], "camera")
+        self.assertEqual(runtime["tags"][0]["nx"], 0.255)
+        self.assertEqual(runtime["detections"][0]["ncorners"][0], [0.24, 0.29])
+        self.assertEqual(runtime["visible_ids"], [100])
+        self.assertEqual(runtime["arms"]["green"]["pose"], [1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(generic["contract"], "photon.board")
+        self.assertEqual(runtime_response.status_code, 200)
+        self.assertEqual(
+            runtime_response.get_json()["contract"], "photon.board.runtime"
+        )
+        self.assertNotIn("corners", generic["tags"][0])
+        self.assertNotIn("ncorners", generic["tags"][0])
+        self.assertNotIn("level", runtime)
+        self.assertNotIn("game", runtime)
+
+    def test_changed_hardware_contract_fails_closed_inside_board(self):
+        cases = (
+            ("webcam", {"webcam_version": 2}),
+            ("camera_calibration", {"correction_version": 2}),
+            ("relay", {"relay_version": 2}),
+        )
+        for changed_input, versions in cases:
+            with self.subTest(changed_input=changed_input):
+                webcam, calibration, relay = self._production_inputs(**versions)
+                self.board.hub_init(FakeContext({
+                    "webcam": webcam,
+                    "camera-calibration": calibration,
+                    "dobot-mg400-relay": relay,
+                }))
+                self.board.set_simulation(False, [])
+
+                runtime = self.board.runtime_observation()
+
+                self.assertEqual(runtime["status"], "unavailable")
+                self.assertEqual(runtime["tags"], [])
+                self.assertIn("contract mismatch", "; ".join(runtime["errors"]))
+                self.assertEqual(
+                    runtime["inputs"][changed_input]["status"], "unavailable"
+                )
+
+    def test_z_prefers_board_and_does_not_read_legacy_siblings(self):
+        class Board:
+            @staticmethod
+            def runtime_observation():
+                return {
+                    "contract": "photon.board.runtime", "version": 1,
+                    "status": "ready", "source": "camera", "corrected": True,
+                    "revision": 7, "observed_at": time.time(),
+                    "tags": [{"id": 100, "nx": 0.25, "ny": 0.31, "missing": 0}],
+                    "arms": {
+                        "green": {
+                            "connected": True, "enabled": True, "pump_mode": "off"
+                        }
+                    },
+                }
+
+        class LegacyMustNotRun:
+            def __getattr__(self, name):
+                raise AssertionError(f"legacy sibling was read through {name}")
+
+        z = load("laser-tag-z")
+        z.hub_init(FakeContext({
+            "photon-level": self.level,
+            "photon-board": Board(),
+            "webcam": LegacyMustNotRun(),
+            "camera-calibration": LegacyMustNotRun(),
+            "dobot-mg400-relay": LegacyMustNotRun(),
+        }))
+        try:
+            tags, arms = z._defence._physical_source()
+            state = z._defence_snapshot()
+            app = Flask("laser-tag-z-board-contract-test")
+            app.register_blueprint(z.bp, url_prefix="/p/laser-tag-z")
+            with app.test_client() as client:
+                arm_response = client.get("/p/laser-tag-z/api/defence/arms")
+            self.assertEqual(tags[0]["id"], 100)
+            self.assertTrue(arms["green"]["connected"])
+            self.assertEqual(state["board_source"], "photon-board")
+            self.assertEqual(state["board_status"], "ready")
+            self.assertEqual(state["board_revision"], 7)
+            self.assertIsNone(state["board_input_error"])
+            self.assertEqual(arm_response.status_code, 200)
+            self.assertEqual(arm_response.get_json()["board_source"], "photon-board")
+        finally:
+            z.hub_stop()
+
+    def test_incompatible_board_is_contained_and_does_not_bypass_to_legacy(self):
+        class ChangedBoard:
+            @staticmethod
+            def runtime_observation():
+                return {
+                    "contract": "photon.board.runtime", "version": 2,
+                    "status": "ready",
+                }
+
+        class LegacyMustNotRun:
+            def __getattr__(self, name):
+                raise AssertionError(f"legacy sibling was read through {name}")
+
+        z = load("laser-tag-z")
+        z.hub_init(FakeContext({
+            "photon-level": self.level,
+            "photon-board": ChangedBoard(),
+            "webcam": LegacyMustNotRun(),
+            "camera-calibration": LegacyMustNotRun(),
+            "dobot-mg400-relay": LegacyMustNotRun(),
+        }))
+        try:
+            tags, arms = z._defence._physical_source()
+            state = z._defence_snapshot()
+            self.assertEqual(tags, [])
+            self.assertEqual(arms, {})
+            self.assertEqual(state["board_source"], "photon-board")
+            self.assertEqual(state["board_status"], "unavailable")
+            self.assertIn("contract mismatch", state["board_input_error"])
+        finally:
+            z.hub_stop()
+
+    def test_absent_board_keeps_the_read_only_standalone_fallback(self):
+        class Webcam:
+            @staticmethod
+            def get_tags():
+                return [{"id": 100, "nx": 0.25, "ny": 0.31, "missing": 0}]
+
+        class Calibration:
+            @staticmethod
+            def correct_tag_sets(tags, detections):
+                return tags, detections, True
+
+        class Relay:
+            @staticmethod
+            def arm_state(side):
+                return {
+                    "connected": side == "green", "enabled": side == "green",
+                    "pump_mode": "off", "pose": [1, 2, 3, 4],
+                }
+
+        z = load("laser-tag-z")
+        z.hub_init(FakeContext({
+            "photon-level": self.level,
+            "webcam": Webcam(),
+            "camera-calibration": Calibration(),
+            "dobot-mg400-relay": Relay(),
+        }))
+        try:
+            tags, arms = z._defence._physical_source()
+            state = z._defence_snapshot()
+            self.assertEqual(tags[0]["id"], 100)
+            self.assertTrue(arms["green"]["connected"])
+            self.assertEqual(state["board_source"], "legacy-fallback")
+            self.assertEqual(state["board_status"], "ready")
+            self.assertIn("Photon Board", state["board_input_error"])
+        finally:
+            z.hub_stop()
+
+
 class HubLifecycleTests(unittest.TestCase):
     def test_group_is_reported_and_disabled_module_never_starts(self):
         with tempfile.TemporaryDirectory() as folder:

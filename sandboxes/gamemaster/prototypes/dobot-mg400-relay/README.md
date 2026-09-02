@@ -155,6 +155,9 @@ invalidates that side's old token; any token mismatch on
 ### Programmatic API (for other machines via the hub)
 
 - `arm_state(side)` → that side's arm sub-object (same shape as `state["arms"][side]`).
+- `arms_snapshot()` → the named `hhh.relay.arms` version 1 read-only output for
+  both sides. It reports current connection, pose, target, enabled, and pump
+  state and never issues a robot command.
 - `side_holder(side)` → the opaque token currently holding `side`, or `None`.
 - `full_state()` → the full relay state (same shape as `GET /api/state`).
 

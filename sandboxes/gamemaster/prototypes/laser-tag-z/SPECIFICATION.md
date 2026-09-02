@@ -28,6 +28,21 @@ The former Z map/parser remains an unchanged, read-only standalone rollback
 fallback during the extraction, but all live layout writes go through Photon
 Level so there is only one mutable authority.
 
+Photon Board is the production owner of corrected physical observations used by
+gameplay. Laser Tag Z consumes `photon.board.runtime` version 1 through the hub
+context and no longer reads Webcam, Camera Calibration, or Relay directly while
+an enabled compatible Board is present. The runtime value supplies corrected
+tracked tags and compact, read-only arm state. Z accepts only fresh output
+explicitly labeled `source: camera`; simulated, stale, uncorrected, malformed,
+or incompatible Board output fails closed and cannot activate a defence.
+
+Z retains its former direct reader only as a read-only standalone rollback path
+when Photon Board is absent or disabled. A present but broken Board is never
+silently bypassed. State snapshots expose `board_source`, `board_revision`, and
+`board_input_error` so the module boundary can be diagnosed without inspecting
+a sibling implementation. Camera video and calibrated arm drawing remain
+presentation-only and do not supply gameplay truth.
+
 ## Gamemaster pages
 
 - `game`, labeled **Tower Defense**, is the default page.
@@ -147,7 +162,8 @@ Tag Z never creates a second motion path.
 
 A physical placement becomes authoritative only when:
 
-1. camera calibration/correction is valid;
+1. Photon Board publishes fresh, corrected live-camera evidence (or the explicit
+   standalone rollback reader supplies the same evidence while Board is absent);
 2. a fixed marker and a uniquely owned Atom marker overlap stably;
 3. the matching Green or Purple arm is connected and enabled; and
 4. the arm pump is off, proving the unit has been released.

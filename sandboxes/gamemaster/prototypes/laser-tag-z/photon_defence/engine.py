@@ -1052,7 +1052,7 @@ class DefenseEngine:
     def set_wake(self, callback: Callable[[], None]) -> None:
         self._wake = callback
 
-    def set_physical_source(self, callback: Callable[[], tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]]) -> None:
+    def set_physical_source(self, callback: Callable[[], tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]] | None) -> None:
         self._physical_source = callback
 
     def reload_level(

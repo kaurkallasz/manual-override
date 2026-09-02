@@ -23,3 +23,12 @@ second `VideoCapture`. The corrected output matrix is recentered so the raw
 image's geometric centre remains at the same pixel after undistortion.
 OpenCV's cached `initUndistortRectifyMap` result is the fixed remapping mesh used
 by the preview, corrected stream, and tag-coordinate correction.
+
+## Programmatic output
+
+`corrected_tag_snapshot(tags, detections)` accepts Webcam's raw value arrays and
+publishes the named `hhh.camera-correction` version 1 contract. A ready output
+contains corrected tracked tags, corrected immediate detections, frame
+dimensions, and `corrected: true`. Missing or invalid calibration publishes an
+explicit unavailable output with empty tag arrays. It does not apply game rules
+or issue a robot command.

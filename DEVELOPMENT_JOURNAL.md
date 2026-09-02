@@ -419,6 +419,46 @@ human decision. OpenAI Codex implemented the contract, adapter, editor, module-
 local assets, specifications, and non-hardware verification. Human review and a
 live installation trial remain required before deleting the rollback fixtures.
 
+### 2026-09-02 — Phase 5: extract production board observation and fail closed
+
+**Trigger:** Photon Board's initial vertical slice normalized simulated tags,
+but Laser Tag Z still assembled gameplay evidence by calling Webcam, Camera
+Calibration, and Relay directly. A separately versioned Board repository could
+therefore be changed or disabled without its advertised boundary actually
+controlling the production game.
+
+**Options and decision:** moving camera capture or robot ownership into Board
+would merge unrelated jobs and create another robot-control path. Keeping Z's
+direct reads as an automatic fallback for every Board error would hide broken
+contracts and defeat isolation. Phase 5 instead adds three small versioned,
+read-only hardware outputs and makes Photon Board their validating adapter.
+`photon.board.runtime` version 1 carries the complete corrected observation;
+the existing `photon.board` version 1 remains the small generic projection.
+Laser Tag Z prefers the runtime contract and accepts only fresh output labeled
+as corrected live-camera evidence.
+
+**Failure and rollback decision:** missing or disabled Board permits Z's former
+direct reader solely as a standalone rollback path. Once an enabled Board is
+present, mismatch, malformed values, simulation, stale data, or invalid camera
+correction produces no tags and no arms; Z never bypasses the failure by reading
+the legacy siblings. Board reports each hardware input independently, and Relay
+failure removes arm evidence so the existing connected/enabled/pump-off safety
+gate still fails closed.
+
+**Verification:** the 17-test focused framework suite covers the three versioned
+input contracts, preservation of production tag corners and arm poses, the
+generic projection, local containment of a changed calibration contract, Z's
+Board-first adapter, its arm-state route, and refusal to bypass an incompatible
+Board and the explicit standalone rollback path. All 92 preserved Laser Tag Z
+tests pass, the complete 109-test repository
+suite passes, and the changed inline JavaScript parses. No hardware command or
+live robot movement was performed.
+
+**Owner:** The phased modular extraction and preservation of Laser Tag Z are
+human decisions. OpenAI Codex implemented the Phase 5 contracts, adapter,
+diagnostics, specifications, and non-hardware tests. Human review and a live
+camera/robot-state trial remain required before deleting the rollback reader.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -439,6 +479,7 @@ live installation trial remain required before deleting the rollback fixtures.
 16. **Keep simulation authority and visual richness separate.** The server owns targets, damage, timing, and outcomes. The browser may interpolate motion and render particles, but it must not invent combat results.
 17. **A module boundary needs a small contract, not a new platform.** In one trusted process, versioned public functions plus explicit unavailable states preserve isolation without a broker, registry, or universal I/O abstraction.
 18. **Extract one authority before deleting the fallback.** A versioned value contract and exact parity fixture let production consumers move first; the old parser can remain read-only until live operation proves removal safe.
+19. **A fallback must not mask an installed module failure.** Standalone rollback is useful when an adapter is absent, but a present incompatible safety input must fail closed and remain visible in diagnostics.
 
 ## Human and AI contribution record
 
@@ -480,6 +521,7 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - Ordinary force-field links preserve activation history while the objective ring is spatial and order-independent. This is intentional, but diagnostics and the connection contract must continue to make the distinction visible.
 - The deterministic ring solver explores spatial subsets from sixteen down to eight. Current pruning and tests keep the authored sixteen-socket level tractable; a materially larger socket set would require a new performance decision.
 - Phase 4 deliberately retains Laser Tag Z's legacy map/parser as a read-only rollback fixture. It is duplicate code, not a second mutable authority, and should be removed only after a live installation trial confirms Photon Level startup, editing, restart, and in-run revision deferral.
+- Phase 5 deliberately retains Z's direct Webcam/Calibration/Relay reader only for standalone operation when Photon Board is absent or disabled. Remove it only after a live trial confirms corrected marker freshness, arm-state propagation, pump-off gating, and Board failure diagnostics.
 
 ## How to record the next decision
 

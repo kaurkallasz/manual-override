@@ -44,6 +44,8 @@ from flask import Blueprint, jsonify, request, send_from_directory
 import live   # shared push helper (prototypes/live.py)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ARM_CONTRACT = "hhh.relay.arms"
+ARM_VERSION = 1
 sys.path.insert(0, HERE)  # so the sibling driver imports cleanly
 from relay_arm import DobotMG400, DobotError  # noqa: E402
 
@@ -559,6 +561,18 @@ def arm_state(side):
     if side not in SIDES:
         raise ValueError(f"side must be one of {SIDES}")
     return _arm_dict(side)
+
+
+def arms_snapshot():
+    """Versioned read-only arm output; this function never issues a command."""
+    return {
+        "contract": ARM_CONTRACT,
+        "version": ARM_VERSION,
+        "status": "ready",
+        "error": None,
+        "observed_at": time.time(),
+        "arms": {side: _arm_dict(side) for side in SIDES},
+    }
 
 
 def side_holder(side):

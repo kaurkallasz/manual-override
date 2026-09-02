@@ -34,6 +34,8 @@ from flask import Blueprint, Response, jsonify, request, send_from_directory
 import live   # shared push helper (prototypes/live.py)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+TAG_CONTRACT = "hhh.webcam.tags"
+TAG_VERSION = 1
 
 MANIFEST = {
     "name": "Webcam",
@@ -856,6 +858,32 @@ def set_tag_transformer(transformer):
     _tag_transformer = transformer if callable(transformer) else None
 
 
+def tag_snapshot():
+    """Versioned raw camera/tag output for observation adapters.
+
+    Coordinates are in the camera's uncorrected frame.  Lens correction belongs
+    to Camera Calibration; consumers must not treat this output as playfield
+    evidence until that contract has accepted it.
+    """
+    now = time.monotonic()
+    status = _mgr.status()
+    tags = _tracker.tags(now)
+    detections, visible_ids = _mgr.detection_snapshot(now)
+    ready = bool(status.get("open"))
+    return {
+        "contract": TAG_CONTRACT,
+        "version": TAG_VERSION,
+        "status": "ready" if ready else "unavailable",
+        "error": None if ready else str(status.get("error") or "camera is not open"),
+        "observed_at": time.time(),
+        "tags": tags,
+        "detections": detections,
+        "visible_ids": visible_ids,
+        "width": int(status.get("width") or 0),
+        "height": int(status.get("height") or 0),
+    }
+
+
 # ---- camera enumeration ----------------------------------------------------
 def probe_cameras(max_index=PROBE_MAX):
     """Probe indices 0..max_index-1 and report which ones open.
@@ -1036,9 +1064,10 @@ def api_events():
 def api_tags():
     """The debounced list of tracked ArUco tags: id, x, y (pixels), nx/ny
     (normalised 0..1), rotation (degrees), and how long it's been `missing`."""
-    now = time.monotonic()
-    tags = _tracker.tags(now)
-    detections, visible_ids = _mgr.detection_snapshot(now)
+    snapshot = tag_snapshot()
+    tags = snapshot["tags"]
+    detections = snapshot["detections"]
+    visible_ids = snapshot["visible_ids"]
     corrected = False
     if request.args.get("space") == "corrected" and _tag_transformer is not None:
         try:
@@ -1047,12 +1076,14 @@ def api_tags():
             # Detection must remain available even if a saved lens model is bad.
             corrected = False
     return jsonify({
+        "contract": TAG_CONTRACT,
+        "version": TAG_VERSION,
         "tags": tags,
         "detections": detections,
         "visible_ids": visible_ids,
         "corrected": corrected,
-        "width": _mgr.status()["width"],
-        "height": _mgr.status()["height"],
+        "width": snapshot["width"],
+        "height": snapshot["height"],
         "dict": "DICT_4X4_50",
         "additional_dicts": ["DICT_4X4_100:50-55", "ATOM_SCREEN_3X3:100-105"],
         "promote_secs": PROMOTE_SECS,

@@ -97,6 +97,10 @@ _aruco_marker_cache = {}
 _photon_level_revision = None
 _photon_level_source = "legacy-fallback"
 _photon_level_error = "Photon Level has not been connected"
+_photon_board_revision = None
+_photon_board_source = "legacy-fallback"
+_photon_board_status = "unavailable"
+_photon_board_error = "Photon Board has not been connected"
 
 
 def _load_ltx_game_mode():
@@ -454,7 +458,160 @@ def _defence_snapshot(*, compact_enemies=False):
     state = _defence.snapshot(compact_enemies=compact_enemies)
     state["level_source"] = _photon_level_source
     state["level_input_error"] = _photon_level_error
+    state["board_source"] = _photon_board_source
+    state["board_status"] = _photon_board_status
+    state["board_revision"] = _photon_board_revision
+    state["board_input_error"] = _photon_board_error
     return state
+
+
+def _photon_board_module():
+    if _hub_ctx is None:
+        return None, "Photon Board is not connected"
+    if not _hub_ctx.is_prototype_enabled("photon-board"):
+        return None, "Photon Board is unavailable or disabled"
+    module = _hub_ctx.get_prototype("photon-board")
+    if module is None:
+        return None, "Photon Board is not installed"
+    if not callable(getattr(module, "runtime_observation", None)):
+        return module, "Photon Board does not publish runtime_observation()"
+    return module, None
+
+
+def _photon_board_observation(module):
+    try:
+        observation = module.runtime_observation()
+    except Exception as exc:
+        return None, f"Photon Board failed: {exc}"
+    if (
+        not isinstance(observation, dict)
+        or observation.get("contract") != "photon.board.runtime"
+        or observation.get("version") != 1
+    ):
+        return None, (
+            "Photon Board runtime contract mismatch "
+            "(expected photon.board.runtime v1)"
+        )
+    if observation.get("status") != "ready":
+        errors = observation.get("errors")
+        detail = (
+            "; ".join(str(item) for item in errors)
+            if isinstance(errors, list) else ""
+        )
+        return None, str(observation.get("error") or detail or "Photon Board is not ready")
+    if observation.get("source") != "camera" or observation.get("corrected") is not True:
+        return None, "Photon Board is not publishing corrected live-camera evidence"
+    try:
+        revision = int(observation.get("revision") or 0)
+        observed_at = float(observation["observed_at"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None, "Photon Board observation metadata is invalid"
+    age = time.time() - observed_at
+    if revision < 0 or not math.isfinite(observed_at) or age < -1.0 or age > 2.0:
+        return None, "Photon Board observation is stale or invalid"
+    if not isinstance(observation.get("tags"), list) or not isinstance(
+        observation.get("arms"), dict
+    ):
+        return None, "Photon Board observation payload is invalid"
+    if len(observation["tags"]) > 128:
+        return None, "Photon Board observation contains too many tags"
+    seen = set()
+    try:
+        for tag in observation["tags"]:
+            if not isinstance(tag, dict):
+                raise ValueError("tag must be an object")
+            tag_id = int(tag["id"])
+            nx, ny = float(tag["nx"]), float(tag["ny"])
+            missing = float(tag.get("missing", 0))
+            if (
+                tag_id in seen or not 0 <= tag_id <= 999
+                or not all(math.isfinite(item) for item in (nx, ny, missing))
+                or not 0 <= nx <= 1 or not 0 <= ny <= 1 or missing < 0
+            ):
+                raise ValueError("tag values are invalid")
+            seen.add(tag_id)
+        for side, arm in observation["arms"].items():
+            if side not in {"green", "purple"} or not isinstance(arm, dict):
+                raise ValueError("arm values are invalid")
+            if str(arm.get("pump_mode") or "off") not in {
+                "suck", "blow", "off", "conflict"
+            }:
+                raise ValueError("arm pump mode is invalid")
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None, "Photon Board observation payload is invalid"
+    return observation, None
+
+
+def _legacy_physical_observation():
+    """Read-only standalone rollback path retained until the live Phase 5 trial."""
+    errors = []
+
+    def enabled_module(slug):
+        if _hub_ctx is None or not _hub_ctx.is_prototype_enabled(slug):
+            return None
+        return _hub_ctx.get_prototype(slug)
+
+    webcam = enabled_module("webcam")
+    calibration = enabled_module("camera-calibration")
+    relay = enabled_module("dobot-mg400-relay")
+    tags = []
+    if webcam is None or not callable(getattr(webcam, "get_tags", None)):
+        errors.append("legacy webcam unavailable")
+    elif calibration is None or not callable(
+        getattr(calibration, "correct_tag_sets", None)
+    ):
+        errors.append("legacy camera calibration unavailable")
+    else:
+        try:
+            tags, _, corrected = calibration.correct_tag_sets(webcam.get_tags(), [])
+            if not corrected:
+                tags = []
+                errors.append("legacy camera correction is not valid")
+        except Exception as exc:
+            tags = []
+            errors.append(f"legacy camera read failed: {exc}")
+    arms = {}
+    if relay is None or not callable(getattr(relay, "arm_state", None)):
+        errors.append("legacy relay unavailable")
+    else:
+        try:
+            arms = {
+                side: _public_arm_state(relay.arm_state(side))
+                for side in ("green", "purple")
+            }
+        except Exception as exc:
+            arms = {}
+            errors.append(f"legacy relay read failed: {exc}")
+    return tags, arms, "; ".join(errors) or None
+
+
+def _physical_observation():
+    """Prefer Photon Board; never bypass a present but incompatible contract."""
+    global _photon_board_revision, _photon_board_source
+    global _photon_board_status, _photon_board_error
+    module, error = _photon_board_module()
+    if module is None:
+        tags, arms, legacy_error = _legacy_physical_observation()
+        _photon_board_revision = None
+        _photon_board_source = "legacy-fallback"
+        _photon_board_status = "ready" if legacy_error is None else "unavailable"
+        _photon_board_error = "; ".join(
+            item for item in (error, legacy_error) if item
+        ) or None
+        return tags, arms
+    _photon_board_source = "photon-board"
+    observation = None
+    if error is None:
+        observation, error = _photon_board_observation(module)
+    if error:
+        _photon_board_revision = None
+        _photon_board_status = "unavailable"
+        _photon_board_error = error
+        return [], {}
+    _photon_board_revision = int(observation.get("revision") or 0)
+    _photon_board_status = "ready"
+    _photon_board_error = None
+    return observation["tags"], observation["arms"]
 
 
 def hub_init(ctx):
@@ -462,30 +619,17 @@ def hub_init(ctx):
     _hub_ctx = ctx
     _defence.set_wake(_defence_live.bump)
 
-    def physical_source():
-        webcam = _hub_ctx.get_prototype("webcam") if _hub_ctx is not None else None
-        calibration = _hub_ctx.get_prototype("camera-calibration") if _hub_ctx is not None else None
-        relay = _hub_ctx.get_prototype("dobot-mg400-relay") if _hub_ctx is not None else None
-        tags = webcam.get_tags() if webcam is not None and hasattr(webcam, "get_tags") else []
-        if calibration is not None and hasattr(calibration, "correct_tag_sets"):
-            tags, _, corrected = calibration.correct_tag_sets(tags, [])
-            if not corrected:
-                tags = []
-        else:
-            tags = []
-        arms = {
-            side: _public_arm_state(relay.arm_state(side))
-            for side in ("green", "purple")
-        } if relay is not None and hasattr(relay, "arm_state") else {}
-        return tags, arms
-
-    _defence.set_physical_source(physical_source)
+    _defence.set_physical_source(_physical_observation)
+    _physical_observation()
     _sync_photon_level(force=True)
     _defence.start_background()
 
 
 def hub_stop():
+    global _hub_ctx
     _defence.stop_background()
+    _defence.set_physical_source(None)
+    _hub_ctx = None
 
 
 def _fresh_state(game_mode=None):
@@ -794,16 +938,17 @@ def tower_defence_waves():
 
 @bp.route("/api/defence/arms")
 def tower_defence_arms():
-    relay = _hub_ctx.get_prototype("dobot-mg400-relay") if _hub_ctx is not None else None
-    if relay is None or not hasattr(relay, "arm_state"):
-        return jsonify({"arms": {}, "server_time": time.time()})
-    return jsonify({
-        "arms": {
-            "green": _public_arm_state(relay.arm_state("green")),
-            "purple": _public_arm_state(relay.arm_state("purple")),
-        },
+    _, arms = _physical_observation()
+    payload = {
+        "arms": arms,
         "server_time": time.time(),
-    })
+        "board_source": _photon_board_source,
+        "board_status": _photon_board_status,
+        "board_revision": _photon_board_revision,
+        "error": _photon_board_error,
+    }
+    status = 200 if _photon_board_status == "ready" else 503
+    return jsonify(payload), status
 
 
 @bp.route("/api/defence/state")

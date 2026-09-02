@@ -35,6 +35,11 @@ The list is available two ways:
           ...  # {id, x, y, nx, ny, rotation, missing}
   ```
 
+  New observation adapters should use `tag_snapshot()` instead. It publishes
+  the named `hhh.webcam.tags` version 1 contract with raw tracked tags,
+  immediate detections, visible IDs, frame dimensions, and status. Coordinates
+  are intentionally uncorrected; Camera Calibration owns lens correction.
+
 ## What it implements
 
 - **`prototype.py`** — Flask blueprint mounted by the hub. A `CameraManager`

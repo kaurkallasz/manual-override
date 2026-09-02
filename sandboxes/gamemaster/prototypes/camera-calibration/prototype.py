@@ -10,6 +10,8 @@ import numpy as np
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+CORRECTION_CONTRACT = "hhh.camera-correction"
+CORRECTION_VERSION = 1
 CALIBRATION_PATH = os.path.join(HERE, "calibration.json")
 JPEG_QUALITY = 85
 PREVIEW_FPS = 6
@@ -390,6 +392,29 @@ def correct_tag_sets(tags, detections):
         )
     except (cv2.error, ValueError, TypeError, KeyError):
         return tags, detections, False
+
+
+def corrected_tag_snapshot(tags, detections):
+    """Versioned corrected tag output for physical-observation adapters."""
+    manager = getattr(_webcam, "_mgr", None) if _webcam is not None else None
+    camera_status = manager.status() if manager is not None else {}
+    width = int(camera_status.get("width") or 0)
+    height = int(camera_status.get("height") or 0)
+    corrected_tags, corrected_detections, corrected = correct_tag_sets(
+        tags, detections
+    )
+    return {
+        "contract": CORRECTION_CONTRACT,
+        "version": CORRECTION_VERSION,
+        "status": "ready" if corrected else "unavailable",
+        "error": None if corrected else "camera correction is not valid",
+        "observed_at": time.time(),
+        "corrected": bool(corrected),
+        "width": width,
+        "height": height,
+        "tags": corrected_tags if corrected else [],
+        "detections": corrected_detections if corrected else [],
+    }
 
 
 @bp.route("/api/tags")
