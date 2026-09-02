@@ -57,6 +57,9 @@ class PhotonContractTests(unittest.TestCase):
         cls.presentation = load("laser-tag-y")
         cls.log_folder = tempfile.TemporaryDirectory()
         cls.game.LOG_PATH = str(Path(cls.log_folder.name) / "runs.jsonl")
+        cls.game._settings = cls.game.SettingsStore(
+            Path(cls.log_folder.name) / "settings.json"
+        )
         cls.board.hub_init(FakeContext({}))
         level = cls.level.level_snapshot()["level"]
         first = level["sockets"][0]
@@ -100,14 +103,21 @@ class PhotonContractTests(unittest.TestCase):
 
     def test_game_consumes_contracts_and_simulates_without_the_presenter(self):
         self.game.apply_command({"action": "reset"})
-        self.game.apply_command({"action": "configure", "enemy_count": 2, "spawn_interval": 0.2})
-        self.game.apply_command({"action": "start"})
+        self.game.apply_command({"action": "set_virtual", "virtual_play": True})
+        socket_id = self.game.game_snapshot()["level"]["sockets"][0]["id"]
+        self.game.apply_command({
+            "action": "place", "atom_tag_id": 100, "socket_id": socket_id,
+        })
+        self.game.apply_command({
+            "action": "configure", "settings": {"wave_count": 1},
+        })
+        self.game.apply_command({"action": "start", "virtual_play": True})
         deadline = time.time() + 1.5
         snapshot = self.game.game_snapshot()
-        while time.time() < deadline and not (snapshot["spawned"] and snapshot["towers"]):
+        while time.time() < deadline and not (snapshot["wave"] and snapshot["towers"]):
             time.sleep(0.05)
             snapshot = self.game.game_snapshot()
-        self.assertGreaterEqual(snapshot["spawned"], 1)
+        self.assertEqual(snapshot["wave"], 1)
         self.assertEqual(snapshot["towers"][0]["atom_tag_id"], 100)
         self.assertEqual(snapshot["level"]["name"], "z_pixel_first_map_01")
 
@@ -125,7 +135,7 @@ class PhotonContractTests(unittest.TestCase):
         class ChangedGame:
             @staticmethod
             def game_snapshot():
-                return {"contract": "photon.game", "version": 2, "status": "ready"}
+                return {"contract": "photon.game", "version": 3, "status": "ready"}
 
         self.presentation.hub_init(FakeContext({
             "photon-game": ChangedGame(), "photon-art": self.art,
@@ -532,6 +542,193 @@ class PhotonBoardExtractionTests(unittest.TestCase):
             self.assertIn("Photon Board", state["board_input_error"])
         finally:
             z.hub_stop()
+
+
+class PhotonGameExtractionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.level = load("photon-level")
+        package_dir = PROTOTYPES / "laser-tag-z" / "photon_defence"
+        spec = importlib.util.spec_from_file_location(
+            "phase6_legacy_photon_defence",
+            package_dir / "__init__.py",
+            submodule_search_locations=[str(package_dir)],
+        )
+        cls.legacy_runtime = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = cls.legacy_runtime
+        spec.loader.exec_module(cls.legacy_runtime)
+
+    def _game(self, folder, modules=None):
+        game = load("photon-game")
+        game.LOG_PATH = str(Path(folder) / "runs.jsonl")
+        game._settings = game.SettingsStore(Path(folder) / "settings.json")
+        game.hub_init(FakeContext(modules or {"photon-level": self.level}))
+        return game
+
+    def test_proven_simulation_matches_z_for_the_same_contract_input(self):
+        bundle = self.level.runtime_bundle()
+        legacy = self.legacy_runtime.DefenseEngine(
+            ROOT / "assets/tiled/levels/z-pixel-first-map.tmj",
+            ROOT / "assets/tiled/levels/z-pixel-first-map.waves.json",
+        )
+        legacy.reload_level(
+            self.legacy_runtime.ContractLevelModel(bundle["runtime"]),
+            bundle["waves"],
+        )
+        extracted = load("photon-game").DefenseEngine(
+            bundle["runtime"], bundle["waves"]
+        )
+        socket_id = sorted(extracted.level.sockets)[0]
+        settings = {"wave_count": 1, "max_active_enemies": 20}
+        for engine in (legacy, extracted):
+            engine.set_virtual_play(True)
+            engine.place(100, socket_id, source="virtual")
+            engine.start(settings)
+            for _ in range(20):
+                engine.step(0.1)
+
+        def comparable(engine):
+            value = engine.snapshot()
+            value.pop("server_time", None)
+            for event in value["events"]:
+                event.pop("sequence", None)
+            return value
+
+        self.assertEqual(comparable(extracted), comparable(legacy))
+
+    def test_runtime_has_no_file_level_camera_render_or_asset_dependency(self):
+        module_dir = PROTOTYPES / "photon-game"
+        engine_source = (module_dir / "photon_game_runtime/engine.py").read_text(
+            encoding="utf-8"
+        )
+        prototype_source = (module_dir / "prototype.py").read_text(encoding="utf-8")
+        self.assertNotIn("\nclass LevelModel:", engine_source)
+        self.assertNotIn("read_text(", engine_source)
+        self.assertNotIn(".tmj", engine_source.lower())
+        self.assertNotIn("webcam", prototype_source.lower())
+        self.assertNotIn("camera-calibration", prototype_source.lower())
+        self.assertNotIn("dobot-mg400-relay", prototype_source.lower())
+        self.assertNotIn("/assets/", prototype_source)
+        self.assertFalse((module_dir / "assets").exists())
+
+    def test_settings_and_jsonl_history_are_owned_and_run_settings_are_frozen(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder)
+            try:
+                self.assertTrue(
+                    Path(game.SETTINGS_PATH).is_relative_to(PROTOTYPES / "photon-game")
+                )
+                self.assertTrue(
+                    Path(game.LOG_PATH).is_relative_to(PROTOTYPES / "photon-game")
+                    or Path(game.LOG_PATH).is_relative_to(Path(folder))
+                )
+                game.apply_command({
+                    "action": "configure", "settings": {"wave_count": 1},
+                })
+                game.apply_command({"action": "start", "virtual_play": True})
+                active_settings = game.game_snapshot()["settings"]
+                game.apply_command({"action": "configure", "preset": "onslaught"})
+                self.assertEqual(game.game_snapshot()["settings"], active_settings)
+                lines = Path(game.LOG_PATH).read_text(encoding="utf-8").splitlines()
+                events = [json.loads(line) for line in lines]
+                self.assertTrue(any(item["kind"] == "game_event" for item in events))
+                self.assertTrue(any(item["kind"] == "settings_saved" for item in events))
+                self.assertEqual(game.game_snapshot()["storage"]["history"]["status"], "ready")
+            finally:
+                game.hub_stop()
+
+    def test_game_exposes_one_snapshot_and_one_sse_stream(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder)
+            try:
+                app = Flask("photon-game-output-test")
+                app.register_blueprint(game.bp, url_prefix="/p/photon-game")
+                api_gets = sorted(
+                    rule.rule for rule in app.url_map.iter_rules()
+                    if rule.rule.startswith("/p/photon-game/api/")
+                    and "GET" in rule.methods
+                )
+                self.assertEqual(api_gets, [
+                    "/p/photon-game/api/events", "/p/photon-game/api/state",
+                ])
+                with app.test_request_context("/p/photon-game/api/events"):
+                    response = game.game_events()
+                    first = next(iter(response.response))
+                    if isinstance(first, bytes):
+                        first = first.decode("utf-8")
+                    response.close()
+                payload = json.loads(first.removeprefix("data: ").strip())
+                self.assertEqual(payload["contract"], "photon.game")
+                self.assertEqual(payload["version"], 2)
+            finally:
+                game.hub_stop()
+
+    def test_changed_inputs_fail_locally_and_board_contributes_no_evidence(self):
+        class ChangedLevel:
+            @staticmethod
+            def runtime_bundle():
+                return {
+                    "contract": "photon.level.runtime", "version": 2,
+                    "status": "ready",
+                }
+
+        class ChangedBoard:
+            @staticmethod
+            def runtime_observation():
+                return {
+                    "contract": "photon.board.runtime", "version": 2,
+                    "status": "ready",
+                }
+
+        with tempfile.TemporaryDirectory() as folder:
+            unavailable = self._game(folder, {"photon-level": ChangedLevel()})
+            try:
+                snapshot = unavailable.game_snapshot()
+                self.assertEqual(snapshot["status"], "unavailable")
+                self.assertIn("contract mismatch", snapshot["inputs"]["level"]["error"])
+            finally:
+                unavailable.hub_stop()
+
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder, {
+                "photon-level": self.level, "photon-board": ChangedBoard(),
+            })
+            try:
+                tags, arms = game._physical_observation()
+                self.assertEqual((tags, arms), ([], {}))
+                self.assertEqual(game.game_snapshot()["status"], "ready")
+                self.assertIn(
+                    "contract mismatch", game.game_snapshot()["inputs"]["board"]["error"]
+                )
+            finally:
+                game.hub_stop()
+
+    def test_level_revision_waits_for_reset(self):
+        class MutableLevel:
+            def __init__(self, value):
+                self.value = value
+
+            def runtime_bundle(self):
+                return json.loads(json.dumps(self.value))
+
+        bundle = self.level.runtime_bundle()
+        source = MutableLevel(bundle)
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder, {"photon-level": source})
+            try:
+                game.apply_command({"action": "start", "virtual_play": True})
+                previous = game.game_snapshot()["level_revision"]
+                source.value["revision"] += 1
+                source.value["runtime"]["layout_revision"] += 1
+                during = game.game_snapshot()
+                self.assertEqual(during["level_revision"], previous)
+                self.assertEqual(
+                    during["inputs"]["level"]["pending_revision"], previous + 1
+                )
+                game.apply_command({"action": "reset"})
+                self.assertEqual(game.game_snapshot()["level_revision"], previous + 1)
+            finally:
+                game.hub_stop()
 
 
 class HubLifecycleTests(unittest.TestCase):

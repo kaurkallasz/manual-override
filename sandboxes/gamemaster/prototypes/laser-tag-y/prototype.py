@@ -6,6 +6,8 @@ import os
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+GAME_CONTRACT = "photon.game"
+GAME_VERSION = 2
 
 MANIFEST = {
     "name": "Laser Tag Y",
@@ -45,7 +47,11 @@ def _game():
         snapshot = module.game_snapshot()
     except Exception as exc:
         return None, f"Photon Game failed: {exc}"
-    if not isinstance(snapshot, dict) or snapshot.get("contract") != "photon.game" or snapshot.get("version") != 1:
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("contract") != GAME_CONTRACT
+        or snapshot.get("version") != GAME_VERSION
+    ):
         return None, "Photon Game contract mismatch"
     return module, None
 

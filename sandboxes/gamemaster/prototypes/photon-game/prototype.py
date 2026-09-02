@@ -1,4 +1,6 @@
-"""Photon Game: authoritative, presentation-free tower-defense simulation."""
+"""Photon Game: authoritative, presentation-free tower-defence simulation."""
+
+from __future__ import annotations
 
 import json
 import math
@@ -6,58 +8,59 @@ import os
 import threading
 import time
 import uuid
+from typing import Any
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
 import live
+from photon_game_runtime import ContractLevelModel, DefenseEngine, SettingsStore
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH = os.path.join(HERE, "data", "runs.jsonl")
+DATA_DIR = os.path.join(HERE, "data")
+SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
+LOG_PATH = os.path.join(DATA_DIR, "runs.jsonl")
 CONTRACT = "photon.game"
-VERSION = 1
-TOWER_TYPES = {
-    100: {"type": "pulse", "team": "green", "range": 175.0, "damage": 24.0, "period": 0.55},
-    101: {"type": "slow", "team": "green", "range": 145.0, "damage": 40.0, "period": 1.15},
-    102: {"type": "mortar", "team": "purple", "range": 220.0, "damage": 64.0, "period": 1.7},
-    103: {"type": "spark", "team": "purple", "range": 155.0, "damage": 20.0, "period": 0.42},
-}
+VERSION = 2
+LEVEL_CONTRACT = "photon.level.runtime"
+LEVEL_VERSION = 1
+BOARD_CONTRACT = "photon.board.runtime"
+BOARD_VERSION = 1
 
 MANIFEST = {
     "name": "Photon Game",
-    "description": "Input: Level, Board, and operator commands. Output: authoritative game snapshots and SSE.",
+    "description": (
+        "Input: Level, Board, settings, and operator commands. Output: one "
+        "authoritative game snapshot and one SSE stream."
+    ),
     "group": "Photon Engine",
     "default_page": "",
     "pages": [{"path": "", "label": "Game state"}],
 }
+
 bp = Blueprint("photon_game", __name__)
-_hub_ctx = None
 _lock = threading.RLock()
+_history_lock = threading.RLock()
+_level_install_lock = threading.Lock()
 _live = live.LiveState()
-_stop = threading.Event()
-_worker = None
+_hub_ctx = None
+_engine: DefenseEngine | None = None
+_settings = SettingsStore(SETTINGS_PATH)
+_level_projection: dict[str, Any] | None = None
+_revision = 1
+_run_id: str | None = None
+_history_sequence = 0
+_inputs = {
+    "level": {"status": "unavailable", "error": "not read yet"},
+    "board": {"status": "unavailable", "error": "not read yet"},
+}
+_storage = {
+    "settings": {"status": "ready", "error": None},
+    "history": {"status": "ready", "error": None},
+}
 
 
 class GameError(ValueError):
-    pass
-
-
-def _new_state(level=None):
-    return {
-        "revision": 1, "phase": "setup", "message": "Ready",
-        "run_id": None, "elapsed": 0.0, "core_hp": 100,
-        "score": 0, "spawned": 0, "defeated": 0,
-        "settings": {"enemy_count": 20, "spawn_interval": 1.25},
-        "level": level, "towers": [], "enemies": [],
-        "inputs": {
-            "level": {"status": "unavailable", "error": "not read yet"},
-            "board": {"status": "unavailable", "error": "not read yet"},
-            "log": {"status": "ready", "error": None},
-        },
-        "_next_enemy": 1, "_spawn_wait": 0.0,
-    }
-
-
-_state = _new_state()
+    """A rejected operator command or unavailable required input."""
 
 
 def _copy(value):
@@ -70,348 +73,420 @@ def _module(slug):
     return _hub_ctx.get_prototype(slug)
 
 
-def _level_input():
+def _set_input(name, *, status, error=None, **detail):
+    global _revision
+    value = {"status": status, "error": error, **detail}
+    with _lock:
+        if _inputs[name] != value:
+            _inputs[name] = value
+            _revision += 1
+
+
+def _level_bundle():
     module = _module("photon-level")
-    if module is None or not callable(getattr(module, "level_snapshot", None)):
-        return None, "Photon Level unavailable"
+    if module is None or not callable(getattr(module, "runtime_bundle", None)):
+        return None, "Photon Level is unavailable or disabled"
     try:
-        value = module.level_snapshot()
+        value = module.runtime_bundle()
     except Exception as exc:
         return None, f"Photon Level failed: {exc}"
     if (
         not isinstance(value, dict)
-        or value.get("contract") != "photon.level"
-        or value.get("version") not in {1, 2}
+        or value.get("contract") != LEVEL_CONTRACT
+        or value.get("version") != LEVEL_VERSION
     ):
-        return None, "Photon Level contract mismatch"
-    if value.get("status") != "ready" or not isinstance(value.get("level"), dict):
+        return None, f"Photon Level contract mismatch (expected {LEVEL_CONTRACT} v{LEVEL_VERSION})"
+    if value.get("status") != "ready":
         return None, str(value.get("error") or "Photon Level is not ready")
+    revision = value.get("revision")
+    if (
+        isinstance(revision, bool)
+        or not isinstance(revision, int)
+        or revision < 1
+        or not isinstance(value.get("runtime"), dict)
+        or not isinstance(value.get("waves"), list)
+        or not value["waves"]
+    ):
+        return None, "Photon Level runtime payload is invalid"
     return value, None
 
 
-def _board_input():
-    module = _module("photon-board")
-    if module is None or not callable(getattr(module, "board_snapshot", None)):
-        return None, "Photon Board unavailable"
+def _simple_level(runtime):
+    paths = {
+        str(name): [list(map(float, point)) for point in points]
+        for name, points in runtime["paths"].items()
+    }
+    first_path = next(iter(paths.values()), [])
+    sockets = []
+    for socket_id, raw in runtime["sockets"].items():
+        size = float(raw.get("size", 0))
+        sockets.append({
+            "id": str(socket_id),
+            "aruco_id": int(raw["aruco_id"]),
+            "x": float(raw["x"]),
+            "y": float(raw["y"]),
+            "radius": size / 2.0,
+        })
+    sockets.sort(key=lambda item: item["aruco_id"])
+    properties = runtime.get("map_properties") or {}
+    return {
+        "name": str(properties.get("level_id") or "photon-level"),
+        "width": int(runtime["width"]),
+        "height": int(runtime["height"]),
+        "path": first_path,
+        "paths": paths,
+        "sockets": sockets,
+    }
+
+
+def _install_level(bundle):
+    global _engine, _level_projection, _revision, _history_sequence
+    revision = bundle["revision"]
+    with _level_install_lock:
+        with _lock:
+            engine = _engine
+        if engine is not None and engine.level.layout_revision == revision:
+            _set_input("level", status="ready", revision=revision)
+            return True
+        if engine is not None:
+            with engine.lock:
+                active = engine.phase != "setup"
+            if active:
+                _set_input(
+                    "level", status="ready", revision=engine.level.layout_revision,
+                    pending_revision=revision,
+                )
+                return True
+
+        next_level = ContractLevelModel(bundle["runtime"])
+        projection = _simple_level(bundle["runtime"])
+        start_engine = False
+        if engine is None:
+            engine = DefenseEngine(bundle["runtime"], bundle["waves"])
+            engine.set_wake(_engine_changed)
+            engine.set_physical_source(_physical_observation)
+            with _lock:
+                _engine = engine
+                _history_sequence = 0
+                start_engine = _hub_ctx is not None
+        else:
+            engine.reload_level(next_level, bundle["waves"])
+        with _lock:
+            _level_projection = projection
+            _set_input("level", status="ready", revision=revision)
+            _revision += 1
+        if start_engine:
+            engine.start_background()
+    return True
+
+
+def _sync_level():
+    bundle, error = _level_bundle()
+    if error:
+        _set_input("level", status="unavailable", error=error)
+        return False
     try:
-        value = module.board_snapshot()
+        return _install_level(bundle)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        _set_input("level", status="unavailable", error=f"Photon Level output rejected: {exc}")
+        return False
+
+
+def _board_observation():
+    module = _module("photon-board")
+    if module is None or not callable(getattr(module, "runtime_observation", None)):
+        return None, "Photon Board is unavailable or disabled"
+    try:
+        value = module.runtime_observation()
     except Exception as exc:
         return None, f"Photon Board failed: {exc}"
-    if not isinstance(value, dict) or value.get("contract") != "photon.board" or value.get("version") != 1:
-        return None, "Photon Board contract mismatch"
+    if (
+        not isinstance(value, dict)
+        or value.get("contract") != BOARD_CONTRACT
+        or value.get("version") != BOARD_VERSION
+    ):
+        return None, f"Photon Board contract mismatch (expected {BOARD_CONTRACT} v{BOARD_VERSION})"
     if value.get("status") != "ready":
-        return value, "; ".join(value.get("errors") or []) or "Photon Board is not ready"
+        errors = value.get("errors")
+        detail = "; ".join(str(item) for item in errors) if isinstance(errors, list) else ""
+        return None, str(value.get("error") or detail or "Photon Board is not ready")
+    try:
+        revision = int(value["revision"])
+        observed_at = float(value["observed_at"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None, "Photon Board observation metadata is invalid"
+    age = time.time() - observed_at
+    if revision < 0 or not math.isfinite(observed_at) or age < -1.0 or age > 2.0:
+        return None, "Photon Board observation is stale or invalid"
+    if not isinstance(value.get("tags"), list) or not isinstance(value.get("arms"), dict):
+        return None, "Photon Board observation payload is invalid"
+    if len(value["tags"]) > 128:
+        return None, "Photon Board observation contains too many tags"
+    try:
+        seen = set()
+        for tag in value["tags"]:
+            if not isinstance(tag, dict):
+                raise ValueError
+            tag_id = int(tag["id"])
+            nx, ny = float(tag["nx"]), float(tag["ny"])
+            missing = float(tag.get("missing", 0))
+            if (
+                tag_id in seen
+                or not 0 <= tag_id <= 999
+                or not all(math.isfinite(item) for item in (nx, ny, missing))
+                or not 0 <= nx <= 1
+                or not 0 <= ny <= 1
+                or missing < 0
+            ):
+                raise ValueError
+            seen.add(tag_id)
+        for side, arm in value["arms"].items():
+            if side not in {"green", "purple"} or not isinstance(arm, dict):
+                raise ValueError
+            if str(arm.get("pump_mode") or "off") not in {"suck", "blow", "off", "conflict"}:
+                raise ValueError
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None, "Photon Board observation payload is invalid"
     return value, None
 
 
-def _public_state_locked():
-    public = {key: value for key, value in _state.items() if not key.startswith("_")}
+def _physical_observation():
+    observation, error = _board_observation()
+    if error:
+        _set_input("board", status="unavailable", error=error)
+        return [], {}
+    _set_input(
+        "board", status="ready", revision=int(observation["revision"]),
+        source=str(observation.get("source") or "unknown"),
+    )
+    return _copy(observation["tags"]), _copy(observation["arms"])
+
+
+def _append_history(kind, detail=None):
+    with _history_lock:
+        with _lock:
+            run_id = _run_id
+        entry = {
+            "recorded_at": time.time(),
+            "run_id": run_id,
+            "kind": str(kind),
+            "detail": _copy(detail or {}),
+        }
+        try:
+            os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+            with open(LOG_PATH, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, separators=(",", ":")) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            with _lock:
+                _storage["history"] = {"status": "ready", "error": None}
+        except OSError as exc:
+            with _lock:
+                _storage["history"] = {"status": "unavailable", "error": str(exc)}
+
+
+def _persist_engine_events():
+    global _history_sequence
+    with _lock:
+        engine = _engine
+    if engine is None:
+        return
+    with engine.lock:
+        events = _copy(engine.events)
+    with _history_lock:
+        for event in events:
+            sequence = int(event.get("sequence", 0))
+            if sequence <= _history_sequence:
+                continue
+            _append_history("game_event", event)
+            _history_sequence = sequence
+
+
+def _engine_changed():
+    global _revision
+    with _lock:
+        _revision += 1
+    _persist_engine_events()
+    _live.bump()
+
+
+def _public_snapshot(*, compact_enemies=False):
+    _sync_level()
+    with _lock:
+        engine = _engine
+        inputs = _copy(_inputs)
+        storage = _copy(_storage)
+        level = _copy(_level_projection)
+        revision = _revision
+        run_id = _run_id
+    if engine is None:
+        return {
+            "contract": CONTRACT,
+            "version": VERSION,
+            "status": "unavailable",
+            "error": inputs["level"].get("error") or "Photon Level is unavailable",
+            "revision": revision,
+            "run_id": run_id,
+            "phase": "setup",
+            "paused": False,
+            "virtual_play": False,
+            "level": None,
+            "enemies": [],
+            "towers": [],
+            "inputs": inputs,
+            "storage": storage,
+            "server_time": time.time(),
+        }
+    simulation = engine.snapshot(compact_enemies=compact_enemies)
     return {
-        "contract": CONTRACT, "version": VERSION, "status": "ready",
-        "server_time": time.time(), **_copy(public),
+        "contract": CONTRACT,
+        "version": VERSION,
+        "status": "ready",
+        "error": None,
+        "revision": revision,
+        "run_id": run_id,
+        "level": level,
+        "inputs": inputs,
+        "storage": storage,
+        **simulation,
     }
 
 
 def game_snapshot():
-    """Public read-only contract used by presentation modules."""
-    with _lock:
-        return _public_state_locked()
+    """The sole read-only Photon Game output consumed by presentations."""
+    return _public_snapshot()
 
 
 def game_events():
-    """Public SSE response used by a presentation module."""
-    return _live.stream(game_snapshot, interval=0.25)
+    """The sole Photon Game SSE output, carrying compact game snapshots."""
+    return _live.stream(lambda: _public_snapshot(compact_enemies=True), interval=0.25)
 
 
-def _touch_locked():
-    _state["revision"] += 1
-
-
-def _log(kind, detail=None):
-    event = {
-        "time": time.time(), "run_id": _state.get("run_id"),
-        "event": kind, "detail": detail or {},
-    }
-    try:
-        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-        with open(LOG_PATH, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, separators=(",", ":")) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        _state["inputs"]["log"] = {"status": "ready", "error": None}
-    except OSError as exc:
-        _state["inputs"]["log"] = {"status": "unavailable", "error": str(exc)}
-
-
-def _path_metrics(level):
-    points = level["path"]
-    lengths, total = [], 0.0
-    for first, second in zip(points, points[1:]):
-        length = math.hypot(second["x"] - first["x"], second["y"] - first["y"])
-        lengths.append(length)
-        total += length
-    return lengths, total
-
-
-def _path_position(level, distance):
-    points, (lengths, total) = level["path"], _path_metrics(level)
-    remaining = min(max(0.0, distance), total)
-    for index, length in enumerate(lengths):
-        if remaining <= length:
-            ratio = remaining / length if length else 0.0
-            first, second = points[index], points[index + 1]
-            return {
-                "x": round(first["x"] + (second["x"] - first["x"]) * ratio, 2),
-                "y": round(first["y"] + (second["y"] - first["y"]) * ratio, 2),
-            }
-        remaining -= length
-    return {"x": points[-1]["x"], "y": points[-1]["y"]}
-
-
-def _place_locked(socket_id, atom_tag_id, source):
-    if _state["level"] is None:
-        raise GameError("no level is available")
-    try:
-        atom_tag_id = int(atom_tag_id)
-    except (TypeError, ValueError) as exc:
-        raise GameError("atom_tag_id must be 100, 101, 102, or 103") from exc
-    tower_rule = TOWER_TYPES.get(atom_tag_id)
-    if tower_rule is None:
-        raise GameError("atom_tag_id must be 100, 101, 102, or 103")
-    socket = next((item for item in _state["level"]["sockets"] if item["id"] == str(socket_id)), None)
-    if socket is None:
-        raise GameError("unknown socket_id")
-    existing = next((item for item in _state["towers"] if item["socket_id"] == socket["id"]), None)
-    tower = {
-        "socket_id": socket["id"], "atom_tag_id": atom_tag_id,
-        "type": tower_rule["type"], "team": tower_rule["team"],
-        "x": socket["x"], "y": socket["y"], "health": 100,
-        "cooldown": 0.0, "source": source,
-    }
-    if existing:
-        if all(existing.get(key) == tower[key] for key in ("atom_tag_id", "type", "team", "source")) and existing.get("health") == 100:
-            return False
-        _state["towers"][_state["towers"].index(existing)] = tower
-    else:
-        _state["towers"].append(tower)
-    _log("tower_placed", {"socket_id": socket["id"], "atom_tag_id": atom_tag_id, "source": source})
-    return True
-
-
-def _apply_board_locked(board):
-    if not board or board.get("status") != "ready" or _state["level"] is None:
-        return False
-    changed = False
-    width, height = _state["level"]["width"], _state["level"]["height"]
-    arms = board.get("arms") or {}
-    for tag in board.get("tags") or []:
-        if tag.get("id") not in TOWER_TYPES:
-            continue
-        rule = TOWER_TYPES[tag["id"]]
-        if board.get("source") != "simulation":
-            arm = arms.get(rule["team"]) or {}
-            if not (arm.get("connected") and arm.get("enabled") and arm.get("pump_mode") == "off"):
-                continue
-        x, y = float(tag["nx"]) * width, float(tag["ny"]) * height
-        sockets = sorted(
-            _state["level"]["sockets"],
-            key=lambda item: math.hypot(item["x"] - x, item["y"] - y),
-        )
-        if sockets and math.hypot(sockets[0]["x"] - x, sockets[0]["y"] - y) <= sockets[0]["radius"]:
-            changed = _place_locked(sockets[0]["id"], tag["id"], board.get("source")) or changed
-    return changed
-
-
-def _start_locked(level):
-    settings = _copy(_state["settings"])
-    inputs = _copy(_state["inputs"])
-    _state.clear()
-    _state.update(_new_state(_copy(level)))
-    _state["settings"] = settings
-    _state["inputs"] = inputs
-    _state.update({
-        "phase": "running", "message": "Defend the learning core",
-        "run_id": uuid.uuid4().hex, "revision": 1,
-    })
-    _log("run_started", {"settings": settings})
+def _require_engine():
+    _sync_level()
+    with _lock:
+        engine = _engine
+        level_ready = _inputs["level"].get("status") == "ready"
+    if engine is None:
+        raise GameError("Photon Level is unavailable")
+    return engine, level_ready
 
 
 def apply_command(data):
-    """Public validated command input for presentation modules."""
+    """Apply one validated operator input and return the authoritative snapshot."""
+    global _run_id, _history_sequence, _revision
     if not isinstance(data, dict):
         raise GameError("command must be an object")
     action = str(data.get("action") or "")
-    level_value = None
-    if action in {"start", "reset"}:
-        snapshot, error = _level_input()
-        level_value = snapshot.get("level") if snapshot else None
-        with _lock:
-            _state["inputs"]["level"] = {
-                "status": "ready" if snapshot else "unavailable", "error": error,
-                "revision": snapshot.get("revision") if snapshot else None,
-            }
-        if action == "start" and level_value is None:
-            raise GameError(error)
-    with _lock:
+    engine, level_ready = _require_engine()
+    try:
         if action == "start":
-            _start_locked(level_value)
-        elif action == "reset":
-            settings = _copy(_state["settings"])
-            inputs = _copy(_state["inputs"])
-            _state.clear()
-            _state.update(_new_state(_copy(level_value) if level_value else None))
-            _state["settings"], _state["inputs"] = settings, inputs
-            _log("reset")
+            if not level_ready:
+                raise GameError(_inputs["level"].get("error") or "Photon Level is unavailable")
+            if "virtual_play" in data:
+                engine.set_virtual_play(bool(data["virtual_play"]))
+            with _lock:
+                _run_id = uuid.uuid4().hex
+                _history_sequence = 0
+            engine.start(_settings.snapshot())
         elif action == "pause":
-            if _state["phase"] != "running":
-                raise GameError(f"cannot pause from {_state['phase']}")
-            _state["phase"], _state["message"] = "paused", "Paused"
-            _log("paused")
+            if engine.snapshot()["phase"] != "running":
+                raise GameError("game is not running")
+            engine.pause(True)
         elif action == "resume":
-            if _state["phase"] != "paused":
-                raise GameError(f"cannot resume from {_state['phase']}")
-            _state["phase"], _state["message"] = "running", "Defend the learning core"
-            _log("resumed")
+            if engine.snapshot()["phase"] != "running":
+                raise GameError("game is not running")
+            engine.pause(False)
+        elif action == "reset":
+            engine.reset()
+            with _lock:
+                _run_id = None
+                _history_sequence = 0
+                _revision += 1
+            _sync_level()
+            _live.bump()
+        elif action == "set_virtual":
+            engine.set_virtual_play(bool(data.get("virtual_play")))
         elif action == "place":
-            _place_locked(data.get("socket_id"), data.get("atom_tag_id"), "operator")
+            socket_id = data.get("socket_id")
+            engine.place(
+                int(data["atom_tag_id"]),
+                str(socket_id) if socket_id not in (None, "") else None,
+                data.get("tower_type"),
+                source="virtual",
+                team=data.get("team"),
+            )
+        elif action == "activate_core":
+            engine.activate_core_tag(
+                int(data["atom_tag_id"]), source="virtual", team=data.get("team")
+            )
+        elif action == "loadout":
+            engine.set_loadout(int(data["atom_tag_id"]), str(data["tower_type"]))
+        elif action == "aim":
+            engine.set_tower_aim(
+                int(data["atom_tag_id"]),
+                float(data["angle_degrees"]),
+                float(data["spread"]),
+                socket_id=data.get("socket_id"),
+            )
         elif action == "configure":
-            if _state["phase"] != "setup":
-                raise GameError("settings can only change during setup")
-            try:
-                enemy_count = int(data.get("enemy_count"))
-                spawn_interval = float(data.get("spawn_interval"))
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise GameError("enemy_count and spawn_interval must be numbers") from exc
-            if not 1 <= enemy_count <= 200 or not 0.2 <= spawn_interval <= 10:
-                raise GameError("enemy_count must be 1–200 and spawn_interval 0.2–10")
-            _state["settings"] = {"enemy_count": enemy_count, "spawn_interval": spawn_interval}
+            response, errors = _settings.update(
+                data.get("settings") or {}, data.get("preset")
+            )
+            if errors:
+                raise GameError("settings validation failed: " + "; ".join(
+                    f"{key} {value}" for key, value in sorted(errors.items())
+                ))
+            with _lock:
+                _storage["settings"] = {"status": "ready", "error": None}
+                _revision += 1
+            _append_history("settings_saved", {
+                "revision": response["revision"], "preset": response["preset"]
+            })
+        elif action == "reset_settings":
+            response = _settings.reset_defaults()
+            with _lock:
+                _storage["settings"] = {"status": "ready", "error": None}
+                _revision += 1
+            _append_history("settings_reset", {"revision": response["revision"]})
         else:
             raise GameError("unknown action")
-        _touch_locked()
-        output = _public_state_locked()
-    _live.bump()
-    return output
-
-
-def _tick_locked(dt):
-    if _state["phase"] != "running" or _state["level"] is None:
-        return False
-    _state["elapsed"] = round(_state["elapsed"] + dt, 3)
-    _state["_spawn_wait"] -= dt
-    if _state["spawned"] < _state["settings"]["enemy_count"] and _state["_spawn_wait"] <= 0:
-        enemy_id = _state["_next_enemy"]
-        _state["_next_enemy"] += 1
-        _state["spawned"] += 1
-        _state["_spawn_wait"] += _state["settings"]["spawn_interval"]
-        position = _path_position(_state["level"], 0)
-        _state["enemies"].append({
-            "id": enemy_id, "distance": 0.0, "x": position["x"], "y": position["y"],
-            "health": 100.0, "max_health": 100.0,
-        })
-    _, path_length = _path_metrics(_state["level"])
-    escaped = []
-    for enemy in _state["enemies"]:
-        enemy["distance"] += 48.0 * dt
-        enemy.update(_path_position(_state["level"], enemy["distance"]))
-        if enemy["distance"] >= path_length:
-            escaped.append(enemy)
-    for enemy in escaped:
-        _state["enemies"].remove(enemy)
-        _state["core_hp"] = max(0, _state["core_hp"] - 10)
-
-    for tower in _state["towers"]:
-        tower["cooldown"] = max(0.0, tower["cooldown"] - dt)
-        rule = TOWER_TYPES[tower["atom_tag_id"]]
-        targets = [
-            enemy for enemy in _state["enemies"]
-            if math.hypot(enemy["x"] - tower["x"], enemy["y"] - tower["y"]) <= rule["range"]
-        ]
-        if tower["cooldown"] <= 0 and targets:
-            target = max(targets, key=lambda item: item["distance"])
-            target["health"] -= rule["damage"]
-            tower["cooldown"] = rule["period"]
-    defeated = [enemy for enemy in _state["enemies"] if enemy["health"] <= 0]
-    for enemy in defeated:
-        _state["enemies"].remove(enemy)
-        _state["defeated"] += 1
-        _state["score"] += 100
-
-    finished = _state["spawned"] >= _state["settings"]["enemy_count"] and not _state["enemies"]
-    if _state["core_hp"] <= 0:
-        _state["phase"], _state["message"] = "lost", "The learning core was overrun"
-        _log("run_finished", {"result": "lost", "score": _state["score"]})
-    elif finished:
-        _state["phase"], _state["message"] = "won", "Learning core secured"
-        _log("run_finished", {"result": "won", "score": _state["score"]})
-    return True
-
-
-def _loop():
-    last = time.monotonic()
-    next_inputs = 0.0
-    while not _stop.wait(0.05):
-        now = time.monotonic()
-        dt, last = min(0.1, now - last), now
-        level_snapshot = board_snapshot = None
-        level_error = board_error = None
-        if now >= next_inputs:
-            level_snapshot, level_error = _level_input()
-            board_snapshot, board_error = _board_input()
-            next_inputs = now + 0.25
-        with _lock:
-            changed = False
-            if level_snapshot is not None:
-                previous_revision = _state["inputs"]["level"].get("revision")
-                level_input = {
-                    "status": "ready", "error": None, "revision": level_snapshot["revision"],
-                }
-                changed = level_input != _state["inputs"]["level"] or changed
-                _state["inputs"]["level"] = level_input
-                if _state["phase"] == "setup" and (
-                    _state["level"] is None
-                    or previous_revision != level_snapshot["revision"]
-                ):
-                    _state["level"] = _copy(level_snapshot["level"])
-                    changed = True
-            elif level_error is not None:
-                level_input = {"status": "unavailable", "error": level_error}
-                changed = level_input != _state["inputs"]["level"] or changed
-                _state["inputs"]["level"] = level_input
-            if board_snapshot is not None:
-                board_input = {
-                    "status": board_snapshot.get("status"), "error": board_error,
-                    "source": board_snapshot.get("source"),
-                }
-                changed = board_input != _state["inputs"]["board"] or changed
-                _state["inputs"]["board"] = board_input
-                changed = _apply_board_locked(board_snapshot) or changed
-            elif board_error is not None:
-                board_input = {"status": "unavailable", "error": board_error}
-                changed = board_input != _state["inputs"]["board"] or changed
-                _state["inputs"]["board"] = board_input
-            changed = _tick_locked(dt) or changed
-            if changed:
-                _touch_locked()
-        if changed:
-            _live.bump()
+    except KeyError as exc:
+        raise GameError(f"{exc.args[0]} is required") from exc
+    except (PermissionError, TypeError, ValueError, OverflowError) as exc:
+        if isinstance(exc, GameError):
+            raise
+        raise GameError(str(exc)) from exc
+    if action not in {"configure", "reset_settings"}:
+        _append_history("operator_command", {"action": action})
+    return game_snapshot()
 
 
 def hub_init(ctx):
-    global _hub_ctx, _worker
+    global _hub_ctx
     _hub_ctx = ctx
-    _stop.clear()
-    if _worker is None or not _worker.is_alive():
-        _worker = threading.Thread(target=_loop, name="photon-game", daemon=True)
-        _worker.start()
+    _sync_level()
+    with _lock:
+        engine = _engine
+    if engine is not None:
+        engine.set_wake(_engine_changed)
+        engine.set_physical_source(_physical_observation)
+        engine.start_background()
 
 
 def hub_stop():
-    global _hub_ctx, _worker
-    _stop.set()
-    if _worker is not None and _worker is not threading.current_thread():
-        _worker.join(timeout=1.0)
-    _worker = None
-    _hub_ctx = None
+    global _hub_ctx, _engine, _level_projection
+    with _lock:
+        engine = _engine
+    if engine is not None:
+        engine.stop_background()
+        engine.set_physical_source(None)
+    with _lock:
+        _engine = None
+        _level_projection = None
+        _hub_ctx = None
+        _inputs["level"] = {"status": "unavailable", "error": "not read yet"}
+        _inputs["board"] = {"status": "unavailable", "error": "not read yet"}
 
 
 def _operator_only():

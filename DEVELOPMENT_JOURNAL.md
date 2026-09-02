@@ -459,6 +459,57 @@ human decisions. OpenAI Codex implemented the Phase 5 contracts, adapter,
 diagnostics, specifications, and non-hardware tests. Human review and a live
 camera/robot-state trial remain required before deleting the rollback reader.
 
+### 2026-09-02 — Phase 6: extract the proven simulation into Photon Game
+
+**Trigger:** the initial Photon Game tab proved a small input/output boundary,
+but its toy path follower did not implement Laser Tag Z's waves, particles,
+placement lifecycle, force fields, ring objective, core sequence, or four
+weapons. Laser Tag Y could therefore demonstrate modular wiring without being a
+credible production game.
+
+**Options and decision:** gradually reimplement Z mechanics in the toy engine
+would create two subtly different games, while importing Z's package or reading
+its files would make the repository boundary false. Phase 6 instead copies the
+proven server-authoritative simulation and settings store into Photon Game's own
+package. The file-based LevelModel, TMJ helpers, path constants, rendering, and
+asset serving are omitted. Construction and reload accept only validated
+`photon.level.runtime` version 1 values; physical ingestion accepts only
+validated `photon.board.runtime` version 1 values.
+
+**Contract and ownership decision:** `photon.game` advances to version 2 because
+the production snapshot replaces the toy schema. One `game_snapshot()` output
+contains authoritative simulation state, input/storage diagnostics, and the
+small level projection a presenter needs. One `game_events()` SSE stream carries
+compact instances of the same contract. Settings are atomically stored under
+Photon Game, and numbered simulation events plus operator commands append to its
+module-local JSONL history. Changes saved during a run apply to the next Start;
+the active settings snapshot remains immutable. Laser Tag Y was adjusted only
+to consume version 2 and render its value shapes. Laser Tag Z remains untouched
+as the proven rollback game.
+
+**Failure and lifecycle decision:** no valid Level means no engine thread and an
+explicit unavailable snapshot. A changed Level revision is adopted in setup and
+deferred during a run. Bad Board output supplies no tags or arms but does not
+prevent virtual play. The hub lifecycle owns the copied simulation thread, and
+history writes are serialized so simultaneous simulation and operator events
+cannot interleave JSONL records.
+
+**Verification:** the focused framework suite now passes 23 tests. New coverage
+compares deterministic production snapshots from Z and the extracted engine for
+the same contract input, rejects file/TMJ/camera/renderer/asset dependencies,
+checks module-local settings and JSONL history, proves active settings remain
+frozen, verifies exactly one snapshot route and one SSE route, contains changed
+Level and Board versions locally, and defers Level revision adoption until
+reset. All 92 preserved Laser Tag Z tests pass as part of the complete 115-test
+suite, and both changed inline scripts parse. No hardware command or live robot
+movement was performed.
+
+**Owner:** The Phase 6 scope and the instruction to copy the proven simulation
+are human decisions. OpenAI Codex implemented the value-only runtime, storage,
+contract adapter, Y compatibility update, specifications, and non-hardware
+verification. Human review and a live full-game trial remain required before Z
+can cease being the production rollback reference.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -480,6 +531,7 @@ camera/robot-state trial remain required before deleting the rollback reader.
 17. **A module boundary needs a small contract, not a new platform.** In one trusted process, versioned public functions plus explicit unavailable states preserve isolation without a broker, registry, or universal I/O abstraction.
 18. **Extract one authority before deleting the fallback.** A versioned value contract and exact parity fixture let production consumers move first; the old parser can remain read-only until live operation proves removal safe.
 19. **A fallback must not mask an installed module failure.** Standalone rollback is useful when an adapter is absent, but a present incompatible safety input must fail closed and remain visible in diagnostics.
+20. **Copy proven rules, not proven coupling.** Simulation behavior can move intact while file parsing, hardware lookup, rendering, and asset ownership are replaced by versioned values at the new boundary.
 
 ## Human and AI contribution record
 
@@ -522,6 +574,7 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - The deterministic ring solver explores spatial subsets from sixteen down to eight. Current pruning and tests keep the authored sixteen-socket level tractable; a materially larger socket set would require a new performance decision.
 - Phase 4 deliberately retains Laser Tag Z's legacy map/parser as a read-only rollback fixture. It is duplicate code, not a second mutable authority, and should be removed only after a live installation trial confirms Photon Level startup, editing, restart, and in-run revision deferral.
 - Phase 5 deliberately retains Z's direct Webcam/Calibration/Relay reader only for standalone operation when Photon Board is absent or disabled. Remove it only after a live trial confirms corrected marker freshness, arm-state propagation, pump-off gating, and Board failure diagnostics.
+- Phase 6 deliberately retains the proven simulation in both Laser Tag Z and Photon Game. Photon Game is the new modular owner used by Y; remove Z's rollback copy only after production presentation parity and a complete live game prove the new Level → Board → Game chain.
 
 ## How to record the next decision
 
