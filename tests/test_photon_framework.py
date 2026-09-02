@@ -241,6 +241,14 @@ class LaserTagYExtractionTests(unittest.TestCase):
         self.assertIn("Promise.allSettled", renderer)
         self.assertIn('context.fillStyle = "#84c74a"', renderer)
 
+    def test_y_displays_the_authoritative_ring_immunity_countdown(self):
+        game_page = (PROTOTYPES / "laser-tag-y/index.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("sequence.field_immunity_remaining_s", game_page)
+        self.assertIn("Ring immune ${Math.ceil(immunity)}s", game_page)
+        self.assertNotIn("field_immunity_until", game_page)
+
     def test_photon_art_owns_the_copied_immutable_runtime_pack(self):
         art = load("photon-art")
         manifest = art.art_snapshot()

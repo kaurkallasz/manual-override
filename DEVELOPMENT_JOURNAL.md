@@ -646,6 +646,25 @@ Photon Game follows the human-selected modular structure. OpenAI Codex
 implemented the projection, form, command/error bridge, specifications, journal,
 and non-hardware verification.
 
+### 2026-09-02 — Restore the ring-immunity HUD counter in Y
+
+**Trigger and decision:** Laser Tag Y showed only `Ring complete` after closing
+the objective ring, omitting Z's remaining-immunity counter. Photon Game already
+publishes the authoritative `core_sequence.field_immunity_remaining_s`, so no
+simulation or contract change was needed. Y now displays `Ring immune Ns`, using
+the reported value rounded up for legibility, and returns to `Ring complete` at
+zero. It does not derive an immunity deadline or modify force-field rules.
+
+**Verification:** the inline Y script parses, the focused 36-test framework
+suite passes, and the complete 128-test suite passes including all 92 preserved
+Laser Tag Z tests. Regression coverage requires the reported remaining-time
+field and forbids Y from consuming the internal absolute immunity deadline. No
+hardware command or robot motion was performed.
+
+**Owner:** restoring the operator-visible counter is a human decision. OpenAI
+Codex implemented the presentation-only change, specification, regression test,
+and non-hardware verification.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.

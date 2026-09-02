@@ -19,6 +19,9 @@ gameplay, level, board, camera, or persistent state.
 - ArUco 38 and 40–55 are immutable Photon Art images. Their exact optical
   centers and sizes arrive through Photon Game, so physical, virtual, and
   external views use one alignment.
+- The Gamemaster HUD displays Photon Game's authoritative completed-ring field
+  immunity countdown, rounded up for display, and returns to `Ring complete`
+  when the reported remaining duration reaches zero.
 - Y never reads Photon Level or Photon Board, opens a camera, parses TMJ, edits a
   level, calculates combat, mutates game state locally, persists runs, or controls
   hardware.
