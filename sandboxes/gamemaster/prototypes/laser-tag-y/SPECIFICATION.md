@@ -1,8 +1,16 @@
 # Laser Tag Y
 
-Presents the game to the Gamemaster and external display. It owns no gameplay state.
+Presents Photon Game to the Gamemaster and to an external display. It owns no
+gameplay, level, board, camera, or persistent state.
 
-- Input: `photon.game` v2 snapshots/SSE and optional `photon.art` v1; authenticated UI commands are forwarded to Photon Game.
-- Output: an HTML Canvas view, operator controls, and a control-free external screen.
-- If Game is missing or has the wrong contract, Y displays `unavailable`. If Art is missing, Canvas fallbacks keep the game usable.
-- It does not read Level or Board directly, calculate combat, persist runs, or control hardware.
+- Live input: only `photon.game` v2 snapshots/SSE. Authenticated operator intent
+  is forwarded unchanged to Photon Game's command input.
+- Optional static input: immutable files from `photon.art` v2. Missing images use
+  code-native Canvas fallbacks and do not stop the game.
+- Output: the physical-mode and virtual-mode Gamemaster presentation, plus a
+  control-free external screen. All three draw the same authoritative snapshot.
+- The embedded level projection is display geometry, not a level-authoring input.
+- Y never reads Photon Level or Photon Board, opens a camera, parses TMJ, edits a
+  level, calculates combat, mutates game state locally, persists runs, or controls
+  hardware.
+- A Game contract mismatch is contained here and displayed as `unavailable`.

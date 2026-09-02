@@ -152,6 +152,94 @@ class PhotonContractTests(unittest.TestCase):
         finally:
             self.presentation.hub_init(FakeContext(self.modules))
 
+    def test_y_serves_separate_gamemaster_and_external_presentations(self):
+        app = Flask("laser-tag-y-pages-test")
+        app.register_blueprint(self.presentation.bp, url_prefix="/p/laser-tag-y")
+        with app.test_client() as client:
+            game = client.get("/p/laser-tag-y/game")
+            screen = client.get("/p/laser-tag-y/screen")
+            renderer = client.get("/p/laser-tag-y/tower-defence-view.js")
+        self.assertEqual((game.status_code, screen.status_code, renderer.status_code), (200, 200, 200))
+        self.assertIn(b"Virtual Atom controls", game.data)
+        self.assertNotIn(b"Virtual Atom controls", screen.data)
+        self.assertIn(b"TowerDefenceView", renderer.data)
+        game.close()
+        screen.close()
+        renderer.close()
+
+    def test_y_forwards_operator_intent_without_implementing_commands(self):
+        class RecordingGame:
+            command = None
+
+            @staticmethod
+            def game_snapshot():
+                return {
+                    "contract": "photon.game", "version": 2,
+                    "status": "ready", "phase": "setup",
+                }
+
+            @classmethod
+            def apply_command(cls, command):
+                cls.command = command
+                return {**cls.game_snapshot(), "accepted": True}
+
+        self.presentation.hub_init(FakeContext({"photon-game": RecordingGame()}))
+        try:
+            app = Flask("laser-tag-y-command-test")
+            app.register_blueprint(self.presentation.bp, url_prefix="/p/laser-tag-y")
+            with app.test_client() as client:
+                denied = client.post("/p/laser-tag-y/api/command", json={"action": "pause"})
+                accepted = client.post(
+                    "/p/laser-tag-y/api/command",
+                    json={"action": "aim", "atom_tag_id": 100, "spread": 0.4},
+                    environ_overrides={"hhh.roles": {"gamemaster"}},
+                )
+            self.assertEqual(denied.status_code, 403)
+            self.assertEqual(accepted.status_code, 200)
+            self.assertEqual(RecordingGame.command, {
+                "action": "aim", "atom_tag_id": 100, "spread": 0.4,
+            })
+        finally:
+            self.presentation.hub_init(FakeContext(self.modules))
+
+
+class LaserTagYExtractionTests(unittest.TestCase):
+    def test_y_has_no_level_board_camera_or_editor_runtime_dependency(self):
+        module_dir = PROTOTYPES / "laser-tag-y"
+        runtime_source = "\n".join(
+            (module_dir / name).read_text(encoding="utf-8")
+            for name in ("prototype.py", "index.html", "screen.html", "tower-defence-view.js")
+        ).lower()
+        for forbidden in (
+            "photon-level", "photon-board", "webcam", "camera-calibration",
+            ".tmj", "layout-edit", "loadlevel", "setsocket",
+        ):
+            self.assertNotIn(forbidden, runtime_source)
+        self.assertNotIn("fetch(", (module_dir / "tower-defence-view.js").read_text(encoding="utf-8"))
+
+    def test_y_keeps_z_combat_presentation_and_canvas_fallbacks(self):
+        renderer = (PROTOTYPES / "laser-tag-y/tower-defence-view.js").read_text(
+            encoding="utf-8"
+        )
+        for behavior in (
+            "drawFlamethrowerPilotFlame", "drawMortarEffects", "drawLightning",
+            "drawForceFields", "drawCoreSequence", "drawTowerDestruction",
+        ):
+            self.assertIn(f"function {behavior}", renderer)
+        self.assertIn("Promise.allSettled", renderer)
+        self.assertIn('context.fillStyle = "#84c74a"', renderer)
+
+    def test_photon_art_owns_the_copied_immutable_runtime_pack(self):
+        art = load("photon-art")
+        manifest = art.art_snapshot()
+        self.assertEqual((manifest["contract"], manifest["version"]), ("photon.art", 2))
+        self.assertEqual(manifest["sprites"]["enemy"], "enemy.svg")
+        pack = PROTOTYPES / "photon-art/assets" / manifest["packs"]["laser_tag_z_runtime"]["root"]
+        self.assertTrue((pack / "sprites/enemies-light-orcs-v2/grunt-walk-01.png").is_file())
+        self.assertTrue((pack / "z-pixel-v2/normalized/structures/runtime/mortar-base-v1.png").is_file())
+        self.assertTrue((pack / "z-pixel-v2/normalized/effects/combat/core-purge-wave-v1.png").is_file())
+        self.assertGreaterEqual(len(list(pack.rglob("*.png"))), 60)
+
 
 class PhotonLevelExtractionTests(unittest.TestCase):
     @classmethod
@@ -660,6 +748,34 @@ class PhotonGameExtractionTests(unittest.TestCase):
                 payload = json.loads(first.removeprefix("data: ").strip())
                 self.assertEqual(payload["contract"], "photon.game")
                 self.assertEqual(payload["version"], 2)
+            finally:
+                game.hub_stop()
+
+    def test_game_projection_is_complete_for_a_presentation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder)
+            try:
+                snapshot = game.game_snapshot()
+                socket = snapshot["level"]["sockets"][0]
+                self.assertEqual(
+                    set(("id", "socket_id", "owner", "aruco_id", "x", "y", "size", "radius"))
+                    - set(socket),
+                    set(),
+                )
+                self.assertEqual(socket["id"], socket["socket_id"])
+                self.assertGreater(socket["size"], 0)
+            finally:
+                game.hub_stop()
+
+    def test_physical_start_readiness_is_decided_by_game_not_presentation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder)
+            try:
+                with self.assertRaisesRegex(game.GameError, "Photon Board"):
+                    game.apply_command({"action": "start", "virtual_play": False})
+                self.assertEqual(game.game_snapshot()["phase"], "setup")
+                started = game.apply_command({"action": "start", "virtual_play": True})
+                self.assertEqual(started["phase"], "running")
             finally:
                 game.hub_stop()
 

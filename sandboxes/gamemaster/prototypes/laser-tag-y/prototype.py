@@ -71,9 +71,18 @@ def _operator_only():
 
 @bp.route("/")
 @bp.route("/game")
-@bp.route("/screen")
 def page():
     return send_from_directory(HERE, "index.html")
+
+
+@bp.route("/screen")
+def screen():
+    return send_from_directory(HERE, "screen.html")
+
+
+@bp.route("/tower-defence-view.js")
+def renderer():
+    return send_from_directory(HERE, "tower-defence-view.js")
 
 
 @bp.route("/api/state")
@@ -118,8 +127,8 @@ def art_api():
         output = art.art_snapshot()
     except Exception as exc:
         return jsonify({"status": "unavailable", "error": f"Photon Art failed: {exc}"}), 503
-    if not isinstance(output, dict) or output.get("contract") != "photon.art" or output.get("version") != 1:
+    if not isinstance(output, dict) or output.get("contract") != "photon.art" or output.get("version") != 2:
         return jsonify({"status": "unavailable", "error": "Photon Art contract mismatch"}), 503
     output = dict(output)
-    output["base"] = request.script_root + "/p/photon-art/"
+    output["base"] = request.script_root + "/p/photon-art/assets"
     return jsonify(output)

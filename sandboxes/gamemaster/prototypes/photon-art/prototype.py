@@ -19,11 +19,20 @@ bp = Blueprint("photon_art", __name__)
 
 def art_snapshot():
     return {
-        "contract": "photon.art", "version": 1, "status": "ready",
+        "contract": "photon.art", "version": 2, "status": "ready",
         "sprites": {
-            "enemy": "assets/enemy.svg",
-            "tower": "assets/tower.svg",
-            "core": "assets/core.svg",
+            "enemy": "enemy.svg",
+            "tower": "tower.svg",
+            "core": "core.svg",
+        },
+        "packs": {
+            "laser_tag_z_runtime": {
+                "root": "game-art/",
+                "description": (
+                    "Immutable tower, enemy, and combat-effect images copied "
+                    "from the proven Laser Tag Z presentation."
+                ),
+            },
         },
     }
 

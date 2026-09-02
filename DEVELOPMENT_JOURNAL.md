@@ -510,6 +510,58 @@ contract adapter, Y compatibility update, specifications, and non-hardware
 verification. Human review and a live full-game trial remain required before Z
 can cease being the production rollback reference.
 
+### 2026-09-02 — Phase 7: create the Photon Game presentation in Laser Tag Y
+
+**Trigger:** Photon Game version 2 could run the proven simulation in isolation,
+but Laser Tag Y still used a toy single-Canvas view. It omitted Z's combat
+presentation, physical/virtual operator experience, and dedicated external
+screen, so it could not yet exercise the intended production boundary.
+
+**Options and decision:** importing Z's browser code or continuing to fetch its
+map and assets would couple two repositories. Rebuilding every effect would
+discard proven presentation work. Phase 7 therefore copies Z's renderer into
+Y, removes its TMJ loading, level editor, camera overlays and interpretations,
+and replaces those inputs with the display projection embedded in
+`photon.game` version 2. The renderer retains towers, directional aiming,
+enemy animation, weapon effects, force fields, destruction, and the core
+sequence. Its map layer is drawn from snapshot paths and sockets rather than
+authoring files.
+
+**Contract and ownership decision:** Photon Game is Y's only changing input.
+Y's physical, virtual, and external-screen views all render that same snapshot,
+and authenticated UI intent is forwarded to Game without local gameplay
+mutation. Physical-start readiness moved into Photon Game so the presentation
+cannot become the rules authority. The display projection adds socket owner and
+size fields without exposing a Level file or sibling API. Photon Art advances
+to `photon.art` version 2 and owns the copied immutable Z runtime images. Y may
+read that optional static repository; all units still have Canvas fallbacks.
+
+**Isolation and rollback decision:** Y looks up only Photon Game and optional
+Photon Art through the hub. It contains no Level or Board lookup, camera URL,
+TMJ parser, level mutation, settings/history owner, or combat calculation. A
+bad Game contract produces a local unavailable presentation; missing Art only
+reduces visual fidelity. Laser Tag Z and all of its files remain unchanged as
+the rollback reference.
+
+**Verification:** the focused framework suite passes 30 tests. New coverage
+checks separate Gamemaster and external routes, exact command forwarding,
+physical-start authority in Game, complete display geometry, forbidden Y
+dependencies, preserved Z combat drawing, Canvas fallbacks, and Art ownership.
+The complete 122-test repository suite passes, including all 92 preserved Laser
+Tag Z tests. The copied renderer and both inline browser programs pass Node
+syntax checks. A live local browser trial rendered the Game projection, loaded
+the production tower/effect assets, changed to virtual mode, placed Atom 100 on
+socket 40 through Game, and showed the same state on the control-free external
+screen with no browser warnings or errors. No hardware command or robot motion
+was performed; the physical path still needs an installation trial.
+
+**Owner:** The Phase 7 scope and requirement to preserve Laser Tag Z are human
+decisions. OpenAI Codex implemented Y, the display projection additions,
+Photon Art pack, physical-start validation, specifications, and automated/live
+non-hardware verification. Human review and a complete physical game remain
+required before making Y the production default or removing any Z rollback
+copy.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -532,6 +584,7 @@ can cease being the production rollback reference.
 18. **Extract one authority before deleting the fallback.** A versioned value contract and exact parity fixture let production consumers move first; the old parser can remain read-only until live operation proves removal safe.
 19. **A fallback must not mask an installed module failure.** Standalone rollback is useful when an adapter is absent, but a present incompatible safety input must fail closed and remain visible in diagnostics.
 20. **Copy proven rules, not proven coupling.** Simulation behavior can move intact while file parsing, hardware lookup, rendering, and asset ownership are replaced by versioned values at the new boundary.
+21. **A presentation may receive geometry without owning the level.** A small display projection lets Canvas draw and hit-test authoritative state while TMJ parsing, editing, revision control, and authored files remain in the Level module.
 
 ## Human and AI contribution record
 
@@ -575,6 +628,7 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - Phase 4 deliberately retains Laser Tag Z's legacy map/parser as a read-only rollback fixture. It is duplicate code, not a second mutable authority, and should be removed only after a live installation trial confirms Photon Level startup, editing, restart, and in-run revision deferral.
 - Phase 5 deliberately retains Z's direct Webcam/Calibration/Relay reader only for standalone operation when Photon Board is absent or disabled. Remove it only after a live trial confirms corrected marker freshness, arm-state propagation, pump-off gating, and Board failure diagnostics.
 - Phase 6 deliberately retains the proven simulation in both Laser Tag Z and Photon Game. Photon Game is the new modular owner used by Y; remove Z's rollback copy only after production presentation parity and a complete live game prove the new Level → Board → Game chain.
+- Phase 7 preserves Z's renderer logic in Y and its immutable runtime images in Photon Art, so visual behavior is duplicated during migration. Remove Z's rollback copy only after a full physical Game → Y trial proves camera-derived Board placement, all four weapons, ring/core completion, failure handling, and external display continuity.
 
 ## How to record the next decision
 

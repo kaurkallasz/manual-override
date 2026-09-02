@@ -16,6 +16,9 @@ own authored levels, physical observation, presentation, or artwork.
 - `apply_command(value)` and authenticated `POST /api/command` accept the
   bounded actions `start`, `pause`, `resume`, `reset`, `set_virtual`, `place`,
   `activate_core`, `loadout`, `aim`, `configure`, and `reset_settings`.
+  Physical Start performs a fresh Board read and fails closed unless that input
+  is ready; virtual Start does not require Board. This decision belongs here,
+  never in a presentation.
 
 Photon Game calls siblings only through the hub context after checking that the
 module is enabled. It imports no sibling package and reads no sibling file.
@@ -31,7 +34,9 @@ There is one snapshot contract and one live stream:
 The snapshot contains the authoritative phase, timers, enemies, towers,
 projectiles, combat effects, topology, core sequence, immutable run settings,
 input diagnostics, and a small level projection needed by presentations.
-Browsers do not advance time or calculate damage.
+That projection contains dimensions, named paths, and display-only socket
+identity/position/size/owner values. Browsers do not advance time or calculate
+damage.
 
 ## Owned state
 

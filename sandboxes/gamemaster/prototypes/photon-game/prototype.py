@@ -122,9 +122,12 @@ def _simple_level(runtime):
         size = float(raw.get("size", 0))
         sockets.append({
             "id": str(socket_id),
+            "socket_id": str(socket_id),
+            "owner": str(raw.get("owner") or ""),
             "aruco_id": int(raw["aruco_id"]),
             "x": float(raw["x"]),
             "y": float(raw["y"]),
+            "size": size,
             "radius": size / 2.0,
         })
     sockets.sort(key=lambda item: item["aruco_id"])
@@ -383,8 +386,19 @@ def apply_command(data):
         if action == "start":
             if not level_ready:
                 raise GameError(_inputs["level"].get("error") or "Photon Level is unavailable")
-            if "virtual_play" in data:
-                engine.set_virtual_play(bool(data["virtual_play"]))
+            virtual_play = (
+                bool(data["virtual_play"])
+                if "virtual_play" in data
+                else bool(engine.snapshot()["virtual_play"])
+            )
+            if not virtual_play:
+                _physical_observation()
+                with _lock:
+                    board_error = _inputs["board"].get("error")
+                    board_ready = _inputs["board"].get("status") == "ready"
+                if not board_ready:
+                    raise GameError(board_error or "Photon Board is unavailable")
+            engine.set_virtual_play(virtual_play)
             with _lock:
                 _run_id = uuid.uuid4().hex
                 _history_sequence = 0
@@ -399,6 +413,8 @@ def apply_command(data):
             engine.pause(False)
         elif action == "reset":
             engine.reset()
+            if "virtual_play" in data:
+                engine.set_virtual_play(bool(data["virtual_play"]))
             with _lock:
                 _run_id = None
                 _history_sequence = 0
