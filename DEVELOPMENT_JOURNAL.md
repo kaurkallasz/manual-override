@@ -562,6 +562,52 @@ non-hardware verification. Human review and a complete physical game remain
 required before making Y the production default or removing any Z rollback
 copy.
 
+### 2026-09-02 — Phase 7 visual-parity correction
+
+**Trigger:** a live Laser Tag Y screenshot showed the authoritative game and
+combat effects over a schematic fallback: modular terrain and road sprites were
+absent, socket markers were plain numbered boxes, and marker-to-tower placement
+could no longer be checked against Laser Tag Z. The Photon Level source itself
+was still complete, so this was a presentation-boundary omission rather than a
+damaged authored map.
+
+**Options and decision:** letting Y fetch or parse the TMJ would restore pixels
+but violate the one-job boundary and couple Y to Level's source format. Letting
+Game resolve image paths would mix simulation with artwork. Level now projects
+visible Tiled objects once into `photon.visual-scene` version 1 values containing
+stable asset IDs and precomputed draw transforms. Game forwards that opaque
+scene and exact socket/core marker geometry in its existing version 2 snapshot.
+Photon Art owns the independently served normalized image copies and real ArUco
+PNG files; Y joins IDs to the Art manifest and only draws. The local Level image
+copies remain solely so its Tiled project is independently editable.
+
+**Compatibility and failure decision:** the visual-scene, exact marker, and
+core fields are additive to `photon.level.runtime` version 1. Photon Game accepts
+an older compatible Level without them and supplies Y's plain Canvas fallback,
+so repository updates do not require a lockstep deployment. Missing or invalid
+Art likewise reduces fidelity without changing game truth. Asset URLs do not
+cross module filesystems, and neither Level nor Art imports the other.
+
+**Verification:** Photon Art's 12 scene assets all resolve from the Level IDs;
+all 17 generated marker images (38 and 40–55) decode to their intended OpenCV
+ArUco IDs. Alpha/visible-bounds inspection confirmed edge-filled ground/road
+tiles and intentionally transparent objective/structure sprites. The modular
+map audit still reports 18 ground modules, 61 road modules using six road
+assets, 16 sockets, 23 nodes, 40 edges, full ground coverage, and no visible
+reference layer. Native Tiled 1.12.2 opened, round-tripped, and rasterized the
+14-layer/eight-tileset source successfully. In a local browser, Y displayed the
+full industrial terrain, road, core and real markers; placing Atom 100 on marker
+40 produced the same touching 112-pixel tower / 77-pixel marker alignment as Z,
+with no browser warnings. The 33-test focused framework suite and complete
+125-test repository suite pass, including all 92 preserved Z tests. No hardware
+command or robot motion was performed.
+
+**Owner:** the request to restore Z's graphics and ArUco presentation while
+following the new module rules is a human decision. OpenAI Codex implemented
+the contracts, Art catalog, Y composition, compatibility fallback,
+specifications, and non-hardware verification. A full physical-camera and
+external-projector trial remains human work before Y replaces Z.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -585,6 +631,7 @@ copy.
 19. **A fallback must not mask an installed module failure.** Standalone rollback is useful when an adapter is absent, but a present incompatible safety input must fail closed and remain visible in diagnostics.
 20. **Copy proven rules, not proven coupling.** Simulation behavior can move intact while file parsing, hardware lookup, rendering, and asset ownership are replaced by versioned values at the new boundary.
 21. **A presentation may receive geometry without owning the level.** A small display projection lets Canvas draw and hit-test authoritative state while TMJ parsing, editing, revision control, and authored files remain in the Level module.
+22. **Project source once; compose it at the edge.** Level converts editor-specific alignment into stable visual transforms, Game transports those values without interpretation, Art resolves stable IDs, and Y remains a presentation rather than a second level parser.
 
 ## Human and AI contribution record
 
@@ -629,6 +676,7 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - Phase 5 deliberately retains Z's direct Webcam/Calibration/Relay reader only for standalone operation when Photon Board is absent or disabled. Remove it only after a live trial confirms corrected marker freshness, arm-state propagation, pump-off gating, and Board failure diagnostics.
 - Phase 6 deliberately retains the proven simulation in both Laser Tag Z and Photon Game. Photon Game is the new modular owner used by Y; remove Z's rollback copy only after production presentation parity and a complete live game prove the new Level → Board → Game chain.
 - Phase 7 preserves Z's renderer logic in Y and its immutable runtime images in Photon Art, so visual behavior is duplicated during migration. Remove Z's rollback copy only after a full physical Game → Y trial proves camera-derived Board placement, all four weapons, ring/core completion, failure handling, and external display continuity.
+- Photon Level and Photon Art intentionally hold separate copies of the normalized map images: Level needs local files for standalone Tiled editing, while Art owns runtime delivery. Stable asset IDs and automated coverage tests prevent this repository-boundary duplication from becoming an implicit file dependency.
 
 ## How to record the next decision
 

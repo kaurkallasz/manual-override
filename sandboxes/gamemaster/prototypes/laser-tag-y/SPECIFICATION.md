@@ -9,7 +9,12 @@ gameplay, level, board, camera, or persistent state.
   code-native Canvas fallbacks and do not stop the game.
 - Output: the physical-mode and virtual-mode Gamemaster presentation, plus a
   control-free external screen. All three draw the same authoritative snapshot.
-- The embedded level projection is display geometry, not a level-authoring input.
+- The embedded level projection is display geometry, not a level-authoring
+  input. Its renderer-neutral scene supplies stable art IDs and precomputed
+  transforms; Y never interprets a Tiled GID, tileset, or alignment mode.
+- ArUco 38 and 40–55 are immutable Photon Art images. Their exact optical
+  centers and sizes arrive through Photon Game, so physical, virtual, and
+  external views use one alignment.
 - Y never reads Photon Level or Photon Board, opens a camera, parses TMJ, edits a
   level, calculates combat, mutates game state locally, persists runs, or controls
   hardware.

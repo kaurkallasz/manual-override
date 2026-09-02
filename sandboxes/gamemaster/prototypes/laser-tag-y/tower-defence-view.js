@@ -252,6 +252,9 @@
 
   function createTowerDefenceView(options) {
     const assetRoot = String(options.assetRoot || "").replace(/\/$/, "");
+    const assetPaths = options.assetPaths && typeof options.assetPaths === "object"
+      ? options.assetPaths
+      : {};
     const mapCanvas = options.mapCanvas;
     const gameCanvas = options.gameCanvas;
     if (!mapCanvas || !gameCanvas) {
@@ -260,6 +263,8 @@
 
     const images = new Map();
     const gameImages = new Map();
+    const sceneImages = new Map();
+    const markerImages = new Map();
     const tintedEffectCache = new Map();
     const enemySpriteCache = new Map();
     const enemyTrailHistory = new Map();
@@ -295,19 +300,21 @@
       return promise;
     }
 
+    function assetUrl(assetId) {
+      const path = assetPaths[String(assetId)];
+      return assetRoot && path ? `${assetRoot}/${String(path).replace(/^\//, "")}` : "";
+    }
+
     function towerRuntimeImagePath(type, layer) {
-      const version = type === "tesla_coil" && layer === "head" ? 2 : 1;
-      return `${assetRoot}/game-art/z-pixel-v2/normalized/structures/runtime/${type.replace("_", "-")}-${layer}-v${version}.png`;
+      return assetUrl(`tower/${type}/${layer}`);
     }
 
     function enemyImagePath(type, frame) {
-      const group = type === "brute" ? "enemies-heavy-orcs-v2" : "enemies-light-orcs-v2";
-      return `${assetRoot}/game-art/sprites/${group}/${type}-walk-${String(frame).padStart(2, "0")}.png`;
+      return assetUrl(`enemy/${type}/${frame}`);
     }
 
     function combatEffectPath(name) {
-      const version = name === "flame-gasoline" ? "v3" : "v1";
-      return `${assetRoot}/game-art/z-pixel-v2/normalized/effects/combat/${name}-${version}.png`;
+      return assetUrl(`effect/${name}`);
     }
 
     async function loadGameImages() {
@@ -317,9 +324,9 @@
       for (const type of ["machine_gun", "flamethrower", "mortar", "tesla_coil"]) {
         pending.push(loadImage(towerRuntimeImagePath(type, "base")).then((image) => gameImages.set(`tower:${type}:base`, image)));
         pending.push(loadImage(towerRuntimeImagePath(type, "head")).then((image) => gameImages.set(`tower:${type}:head`, image)));
-        pending.push(loadImage(`${assetRoot}/game-art/z-pixel-v2/normalized/structures/runtime/activation/${type.replace("_", "-")}-activation-v2.png`).then((image) => gameImages.set(`tower:${type}:activation`, image)));
+        pending.push(loadImage(assetUrl(`tower/${type}/activation`)).then((image) => gameImages.set(`tower:${type}:activation`, image)));
       }
-      pending.push(loadImage(`${assetRoot}/game-art/z-pixel-v2/normalized/structures/runtime/tower-socket-cover-v1.png`).then((image) => gameImages.set("tower:socket-cover", image)));
+      pending.push(loadImage(assetUrl("tower/socket-cover")).then((image) => gameImages.set("tower:socket-cover", image)));
       for (const type of ["grunt", "runner", "breaker", "brute"]) {
         for (let frame = 1; frame <= 4; frame += 1) {
           pending.push(loadImage(enemyImagePath(type, frame)).then((image) => {
@@ -330,7 +337,26 @@
       for (const effect of ["machine-gun-impact", "machine-gun-bullet", "flame-burn", "flame-gasoline", "mortar-impact", "mortar-shell", "tesla-spark", "tower-smoke", "tower-fire", "tower-stress-cracks", "tower-destruction-blast", "tower-debris", "force-field-impact", "force-field-zap-skeleton", "core-ring-aura", "core-detonation-burst", "core-purge-wave"]) {
         pending.push(loadImage(combatEffectPath(effect)).then((image) => gameImages.set(`effect:${effect}`, image)));
       }
+      for (const markerId of [38, ...Array.from({ length: 16 }, (_, index) => index + 40)]) {
+        pending.push(loadImage(assetUrl(`marker/${markerId}`)).then((image) => {
+          markerImages.set(markerId, image);
+        }));
+      }
       await Promise.allSettled(pending);
+    }
+
+    async function loadSceneImages(scene) {
+      const assetIds = new Set();
+      for (const layer of scene?.layers || []) {
+        for (const item of layer.items || []) {
+          if (item.kind === "sprite" && item.asset_id) assetIds.add(String(item.asset_id));
+        }
+      }
+      await Promise.allSettled([...assetIds].map((assetId) => (
+        loadImage(assetUrl(`map/${assetId}`)).then((image) => {
+          sceneImages.set(assetId, image);
+        })
+      )));
     }
 
     function socketMarkerVisualSize() {
@@ -341,6 +367,14 @@
     function drawMarker(context, x, y, size, id) {
       const left = Math.round(x - size / 2);
       const top = Math.round(y - size / 2);
+      const marker = markerImages.get(Number(id));
+      if (marker) {
+        context.save();
+        context.imageSmoothingEnabled = false;
+        context.drawImage(marker, left, top, size, size);
+        context.restore();
+        return;
+      }
       context.save();
       context.fillStyle = "#f4f8ff";
       context.fillRect(left, top, size, size);
@@ -362,6 +396,9 @@
     }
 
     function centralCoreCenter() {
+      const x = Number(level?.core?.x);
+      const y = Number(level?.core?.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
       const paths = Object.values(level?.paths || {});
       const endpoints = paths.map((path) => path[path.length - 1]).filter(Boolean);
       if (!endpoints.length) return { x: 880, y: 480 };
@@ -375,8 +412,13 @@
       const center = centralCoreCenter();
       const configured = Number(state?.core_aruco_code_footprint_px);
       return {
-        ...center,
-        size: Number.isFinite(configured) ? configured : CORE_MARKER_VISUAL_SIZE,
+        x: Number.isFinite(Number(level?.core?.marker_x))
+          ? Number(level.core.marker_x) : center.x,
+        y: Number.isFinite(Number(level?.core?.marker_y))
+          ? Number(level.core.marker_y) : center.y,
+        size: Number.isFinite(Number(level?.core?.marker_size))
+          ? Number(level.core.marker_size)
+          : Number.isFinite(configured) ? configured : CORE_MARKER_VISUAL_SIZE,
       };
     }
 
@@ -387,10 +429,47 @@
       drawMarker(context, record.x, record.y, record.size, 38);
     }
 
-    function renderMap() {
+    function drawSceneItem(context, item) {
+      if (item.kind === "sprite") {
+        const image = sceneImages.get(String(item.asset_id));
+        if (!image) return;
+        context.save();
+        context.translate(Number(item.origin_x), Number(item.origin_y));
+        context.rotate(Number(item.rotation_degrees || 0) * Math.PI / 180);
+        const destination = [
+          Number(item.draw_x), Number(item.draw_y),
+          Number(item.width), Number(item.height),
+        ];
+        if (Array.isArray(item.source) && item.source.length === 4) {
+          context.drawImage(image, ...item.source.map(Number), ...destination);
+        } else {
+          context.drawImage(image, ...destination);
+        }
+        context.restore();
+        return;
+      }
+      if (item.kind === "activation_zone") {
+        context.fillStyle = "#ff9f4326";
+        context.strokeStyle = "#ff9f43";
+        context.lineWidth = 3;
+        context.fillRect(Number(item.x), Number(item.y), Number(item.width), Number(item.height));
+        context.strokeRect(Number(item.x), Number(item.y), Number(item.width), Number(item.height));
+        return;
+      }
+      if (item.kind === "atom_start") {
+        context.fillStyle = item.owner === "green" ? "#35d07f" : "#c084fc";
+        context.beginPath();
+        context.arc(Number(item.x), Number(item.y), 15, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = "#061018";
+        context.font = "900 13px ui-monospace";
+        context.textAlign = "center";
+        context.fillText(String(item.atom_tag_id), Number(item.x), Number(item.y) + 5);
+      }
+    }
+
+    function renderMapFallback(context) {
       if (!level) return;
-      const context = mapCanvas.getContext("2d");
-      context.clearRect(0, 0, WIDTH, HEIGHT);
       context.fillStyle = "#0b1717";
       context.fillRect(0, 0, WIDTH, HEIGHT);
       context.strokeStyle = "#355750";
@@ -421,6 +500,39 @@
       context.lineWidth = 4;
       context.fillRect(core.x - 72, core.y - 72, 144, 144);
       context.strokeRect(core.x - 72, core.y - 72, 144, 144);
+    }
+
+    function renderMap() {
+      if (!level) return;
+      const context = mapCanvas.getContext("2d");
+      context.clearRect(0, 0, WIDTH, HEIGHT);
+      const scene = level.scene;
+      if (
+        scene?.contract === "photon.visual-scene"
+        && Number(scene.version) === 1
+        && Array.isArray(scene.layers)
+      ) {
+        const sceneSprites = scene.layers.flatMap((layer) => (
+          (layer.items || []).filter((item) => item.kind === "sprite")
+        ));
+        if (sceneSprites.some((item) => !sceneImages.has(String(item.asset_id)))) {
+          renderMapFallback(context);
+        } else {
+          context.fillStyle = "#030609";
+          context.fillRect(0, 0, WIDTH, HEIGHT);
+        }
+        context.imageSmoothingEnabled = false;
+        for (const layer of scene.layers) {
+          context.save();
+          context.globalAlpha = Number(layer.opacity ?? 1);
+          for (const item of layer.items || []) drawSceneItem(context, item);
+          context.restore();
+        }
+      } else {
+        renderMapFallback(context);
+      }
+      const marker = coreMarkerRecord();
+      drawMarker(context, marker.x, marker.y, marker.size, 38);
     }
 
     function visualSimulationTime(now, gameState) {
@@ -1754,7 +1866,10 @@
       level = nextLevel;
       levelRevision = Number.isFinite(Number(revision)) ? Number(revision) : null;
       invalidateSocketGeometry();
-      loadGameImages().then(renderGame);
+      Promise.all([loadGameImages(), loadSceneImages(nextLevel.scene)]).then(() => {
+        renderMap();
+        renderGame();
+      });
       renderMap();
       renderGame();
       return level;
@@ -1773,9 +1888,12 @@
           aruco_id: Number(socket.aruco_id),
           x,
           y,
-          marker_x: x,
-          marker_y: y,
-          marker_size: markerSize,
+          marker_x: Number.isFinite(Number(socket.marker_x))
+            ? Number(socket.marker_x) : x,
+          marker_y: Number.isFinite(Number(socket.marker_y))
+            ? Number(socket.marker_y) : y,
+          marker_size: Number.isFinite(Number(socket.marker_size))
+            ? Number(socket.marker_size) : markerSize,
           size,
         };
       });

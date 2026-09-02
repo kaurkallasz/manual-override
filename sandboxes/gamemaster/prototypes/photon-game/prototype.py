@@ -120,18 +120,37 @@ def _simple_level(runtime):
     sockets = []
     for socket_id, raw in runtime["sockets"].items():
         size = float(raw.get("size", 0))
+        x = float(raw["x"])
+        y = float(raw["y"])
+        marker_size = float(raw.get("marker_size", runtime.get("aruco", {}).get("size", size)))
         sockets.append({
             "id": str(socket_id),
             "socket_id": str(socket_id),
             "owner": str(raw.get("owner") or ""),
             "aruco_id": int(raw["aruco_id"]),
-            "x": float(raw["x"]),
-            "y": float(raw["y"]),
+            "x": x,
+            "y": y,
             "size": size,
             "radius": size / 2.0,
+            "marker_x": float(raw.get("marker_x", x)),
+            "marker_y": float(raw.get("marker_y", y)),
+            "marker_size": marker_size,
         })
     sockets.sort(key=lambda item: item["aruco_id"])
     properties = runtime.get("map_properties") or {}
+    raw_core = runtime.get("core_visual")
+    if not isinstance(raw_core, dict):
+        raw_core = runtime.get("core") or {}
+        core_x = float(raw_core.get("x", runtime["width"] / 2))
+        core_y = float(raw_core.get("y", runtime["height"] / 2))
+        raw_core = {
+            "x": core_x,
+            "y": core_y,
+            "marker_x": core_x,
+            "marker_y": core_y,
+            "marker_size": float(runtime.get("aruco", {}).get("core_size", 116)),
+        }
+    visual_scene = runtime.get("visual_scene")
     return {
         "name": str(properties.get("level_id") or "photon-level"),
         "width": int(runtime["width"]),
@@ -139,6 +158,10 @@ def _simple_level(runtime):
         "path": first_path,
         "paths": paths,
         "sockets": sockets,
+        "core": _copy(raw_core),
+        # Additive Level v1 fields stay optional so an older compatible Level
+        # can still drive the game while a presentation uses its fallback map.
+        "scene": _copy(visual_scene) if isinstance(visual_scene, dict) else None,
     }
 
 

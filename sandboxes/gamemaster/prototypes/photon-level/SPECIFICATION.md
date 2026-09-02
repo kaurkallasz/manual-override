@@ -23,8 +23,10 @@ ring topology, and the complete candidate TMJ before one atomic file replace.
   revision, and discoverable map/wave endpoints.
 - `runtime_bundle()` and `GET /api/runtime` publish
   `photon.level.runtime` version 1: the parsed path graph, routes, sockets,
-  marker geometry, blockers, ring topology, map properties, and waves as plain
-  JSON-compatible values. Consumers receive values, never source-file paths.
+  marker geometry, blockers, ring topology, map properties, a renderer-neutral
+  `photon.visual-scene` version 1 projection, and waves as plain JSON-compatible
+  values. Consumers receive stable art IDs and transforms, never source-file
+  paths, Tiled GIDs, or tileset interpretation work.
 - `GET /api/tiled-map` publishes the editable TMJ with tileset references
   rewritten to Photon Level's own HTTP asset boundary.
 - `waves_document()` and `GET /api/waves` publish the authored wave document.
@@ -48,6 +50,10 @@ The map remains an editable modular Tiled project. A visible flattened style
 reference is forbidden. The extracted production map must continue to pass the
 modular validator, native Tiled round-trip, native raster render, and the
 Laser Tag Z parity fixture.
+
+The local PNG copies keep the Tiled authoring project independently editable.
+Photon Art separately owns the runtime-served immutable copies; the two modules
+coordinate only through stable `asset_id` strings in the visual-scene contract.
 
 ## Independence rule
 

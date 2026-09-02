@@ -35,8 +35,11 @@ The snapshot contains the authoritative phase, timers, enemies, towers,
 projectiles, combat effects, topology, core sequence, immutable run settings,
 input diagnostics, and a small level projection needed by presentations.
 That projection contains dimensions, named paths, and display-only socket
-identity/position/size/owner values. Browsers do not advance time or calculate
-damage.
+identity/position/size/owner values, exact ArUco display positions, central-core
+geometry, and the opaque visual scene received from Level. Photon Game forwards
+the scene without resolving art or interpreting renderer concerns. Browsers do
+not advance time or calculate damage. These visual fields are additive in Level
+version 1: an older compatible Level still runs, with Y's plain Canvas fallback.
 
 ## Owned state
 

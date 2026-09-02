@@ -39,7 +39,10 @@ def _tile_draw_offset(alignment: str, width: float, height: float) -> tuple[floa
     return dx, dy
 
 
-def _tile_object_center(obj: dict[str, Any], alignments: list[tuple[int, str]]) -> tuple[float, float]:
+def _tile_object_point(
+    obj: dict[str, Any], alignments: list[tuple[int, str]],
+    normalized_x: float = 0.5, normalized_y: float = 0.5,
+) -> tuple[float, float]:
     gid = int(obj["gid"])
     alignment = "bottomleft"
     for first_gid, candidate in alignments:
@@ -48,13 +51,140 @@ def _tile_object_center(obj: dict[str, Any], alignments: list[tuple[int, str]]) 
         alignment = candidate
     width, height = float(obj["width"]), float(obj["height"])
     dx, dy = _tile_draw_offset(alignment, width, height)
-    local_x, local_y = dx + width / 2.0, dy + height / 2.0
+    local_x = dx + width * normalized_x
+    local_y = dy + height * normalized_y
     rotation = math.radians(float(obj.get("rotation", 0.0)))
     cosine, sine = math.cos(rotation), math.sin(rotation)
     return (
         float(obj["x"]) + local_x * cosine - local_y * sine,
         float(obj["y"]) + local_x * sine + local_y * cosine,
     )
+
+
+def _tile_object_center(
+    obj: dict[str, Any], alignments: list[tuple[int, str]]
+) -> tuple[float, float]:
+    return _tile_object_point(obj, alignments)
+
+
+def _tileset_catalog(
+    map_path: Path, data: dict[str, Any]
+) -> tuple[list[tuple[int, str]], dict[int, dict[str, Any]]]:
+    """Resolve Tiled GIDs into portable art IDs and precomputed draw metadata."""
+    alignments: list[tuple[int, str]] = []
+    catalog: dict[int, dict[str, Any]] = {}
+    for reference in data.get("tilesets", []):
+        source = reference.get("source")
+        if not source:
+            continue
+        tileset_path = (map_path.parent / source).resolve()
+        tileset = json.loads(tileset_path.read_text(encoding="utf-8"))
+        first_gid = int(reference["firstgid"])
+        alignment = str(tileset.get("objectalignment") or "bottomleft")
+        alignments.append((first_gid, alignment))
+        sheet_image = tileset.get("image")
+        columns = int(tileset.get("columns") or 0)
+        tile_width = int(tileset.get("tilewidth") or 0)
+        tile_height = int(tileset.get("tileheight") or 0)
+        margin = int(tileset.get("margin") or 0)
+        spacing = int(tileset.get("spacing") or 0)
+        for tile in tileset.get("tiles", []):
+            tile_id = int(tile["id"])
+            asset_id = str(properties(tile).get("asset_id") or "")
+            if not asset_id:
+                raise ValueError(
+                    f"tileset {tileset_path.name} tile {tile_id} needs asset_id"
+                )
+            item: dict[str, Any] = {
+                "asset_id": asset_id,
+                "alignment": alignment,
+            }
+            if tile.get("image"):
+                item["source"] = None
+            elif sheet_image and columns > 0 and tile_width > 0 and tile_height > 0:
+                column, row = tile_id % columns, tile_id // columns
+                item["source"] = [
+                    margin + column * (tile_width + spacing),
+                    margin + row * (tile_height + spacing),
+                    tile_width,
+                    tile_height,
+                ]
+            else:
+                raise ValueError(
+                    f"tileset {tileset_path.name} tile {tile_id} has no image"
+                )
+            catalog[first_gid + tile_id] = item
+    alignments.sort()
+    return alignments, catalog
+
+
+def _visual_scene(
+    data: dict[str, Any], catalog: dict[int, dict[str, Any]],
+    map_properties: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert visible Tiled objects into renderer-neutral sprite transforms."""
+    layers = []
+    hide_sockets = map_properties.get("runtime_socket_art_visibility") == "editor_only"
+    for layer in data.get("layers", []):
+        if layer.get("visible") is False:
+            continue
+        if hide_sockets and "Placement Spots" in str(layer.get("name") or ""):
+            continue
+        items = []
+        for obj in layer.get("objects", []):
+            if obj.get("visible") is False:
+                continue
+            if obj.get("gid"):
+                tile = catalog.get(int(obj["gid"]))
+                if tile is None:
+                    raise ValueError(f"visible object {obj.get('id')} has unresolved GID")
+                width = float(obj.get("width") or 0)
+                height = float(obj.get("height") or 0)
+                if width <= 0 or height <= 0:
+                    raise ValueError(f"visible object {obj.get('id')} has invalid size")
+                draw_x, draw_y = _tile_draw_offset(
+                    str(tile["alignment"]), width, height
+                )
+                item = {
+                    "kind": "sprite",
+                    "asset_id": str(tile["asset_id"]),
+                    "origin_x": float(obj.get("x") or 0),
+                    "origin_y": float(obj.get("y") or 0),
+                    "draw_x": draw_x,
+                    "draw_y": draw_y,
+                    "width": width,
+                    "height": height,
+                    "rotation_degrees": float(obj.get("rotation") or 0),
+                }
+                if tile.get("source") is not None:
+                    item["source"] = list(tile["source"])
+                items.append(item)
+                continue
+            object_type = str(obj.get("class") or obj.get("type") or "")
+            props = properties(obj)
+            if object_type == "ActivationStagingZone":
+                items.append({
+                    "kind": "activation_zone",
+                    "x": float(obj.get("x") or 0),
+                    "y": float(obj.get("y") or 0),
+                    "width": float(obj.get("width") or 0),
+                    "height": float(obj.get("height") or 0),
+                })
+            elif object_type == "ActivatorStart":
+                items.append({
+                    "kind": "atom_start",
+                    "x": float(obj.get("x") or 0),
+                    "y": float(obj.get("y") or 0),
+                    "atom_tag_id": int(props["atom_tag_id"]),
+                    "owner": str(props["owner"]),
+                })
+        if items:
+            layers.append({
+                "name": str(layer.get("name") or ""),
+                "opacity": float(layer.get("opacity", 1)),
+                "items": items,
+            })
+    return {"contract": "photon.visual-scene", "version": 1, "layers": layers}
 
 
 def _segments_intersect(a, b, c, d) -> bool:
@@ -182,18 +312,8 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
         map_properties, "force_field_marker_clearance_px", zero=True
     )
 
-    alignments = []
-    for reference in data.get("tilesets", []):
-        source = reference.get("source")
-        if not source:
-            continue
-        tileset_path = (map_path.parent / source).resolve()
-        tileset = json.loads(tileset_path.read_text(encoding="utf-8"))
-        alignments.append((
-            int(reference["firstgid"]),
-            str(tileset.get("objectalignment") or "bottomleft"),
-        ))
-    alignments.sort()
+    alignments, tile_catalog = _tileset_catalog(map_path, data)
+    visual_scene = _visual_scene(data, tile_catalog, map_properties)
 
     layers = {layer["name"]: layer for layer in data["layers"]}
     nodes = {}
@@ -253,12 +373,31 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
             continue
         socket_id, marker = str(props["socket_id"]), int(props["aruco_id"])
         center_x, center_y = _tile_object_center(obj, alignments)
+        marker_side = float(props["aruco_side"])
+        optical_v = float(props["aruco_optical_center_v"])
+        turret_size = float(map_properties["active_turret_visual_size_px"])
+        marker_gap = float(map_properties["active_turret_aruco_gap_px"])
+        marker_offset_x = marker_side * (
+            turret_size / 2.0 + marker_size / 2.0 + marker_gap
+        )
+        marker_offset_y = (optical_v - 0.5) * float(obj.get("height", 208))
+        rotation = math.radians(float(obj.get("rotation", 0)))
+        marker_x = (
+            center_x + marker_offset_x * math.cos(rotation)
+            - marker_offset_y * math.sin(rotation)
+        )
+        marker_y = (
+            center_y + marker_offset_x * math.sin(rotation)
+            + marker_offset_y * math.cos(rotation)
+        )
         if socket_id in sockets or marker in socket_by_marker:
             raise ValueError("socket IDs and ArUco markers must be unique")
         sockets[socket_id] = {
             "socket_id": socket_id, "aruco_id": marker,
             "owner": str(props["owner"]), "x": center_x, "y": center_y,
             "size": float(obj.get("width", 208)), "object_id": int(obj["id"]),
+            "marker_x": marker_x, "marker_y": marker_y,
+            "marker_size": marker_size,
         }
         socket_by_marker[marker] = socket_id
         try:
@@ -286,6 +425,25 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
     ring_cycles = _ring_cycles(sockets, adjacency, core)
     if not ring_cycles:
         raise ValueError("level must define at least one valid 8-16 socket ring")
+
+    core_layer = layers["12 Central Square Core"]
+    core_visual = next(
+        (
+            obj for obj in core_layer.get("objects", [])
+            if obj.get("name") == "central_core_square_base"
+        ),
+        None,
+    )
+    if core_visual is None or not core_visual.get("gid"):
+        raise ValueError("level must define the central core visual")
+    core_visual_properties = properties(core_visual)
+    core_x, core_y = _tile_object_center(core_visual, alignments)
+    core_marker_x, core_marker_y = _tile_object_point(
+        core_visual,
+        alignments,
+        float(core_visual_properties.get("aruco_anchor_u", 0.5)),
+        float(core_visual_properties.get("aruco_anchor_v", 0.5)),
+    )
 
     blockers, blocker_ids = [], set()
     pending_layers = list(data.get("layers", []))
@@ -334,6 +492,12 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
             if node.get("node_kind") in {"junction", "arrival", "turnaround"}
         ],
         "sockets": sockets,
+        "core_visual": {
+            "x": core_x, "y": core_y,
+            "marker_x": core_marker_x, "marker_y": core_marker_y,
+            "marker_size": core_marker_size,
+        },
+        "visual_scene": visual_scene,
         "socket_by_marker": {str(key): value for key, value in socket_by_marker.items()},
         "ring_adjacency": {key: sorted(value) for key, value in adjacency.items()},
         "ring_edges": sorted({
@@ -363,8 +527,13 @@ def simple_level(runtime: dict[str, Any]) -> dict[str, Any]:
                 "id": socket["socket_id"], "socket_id": socket["socket_id"],
                 "aruco_id": socket["aruco_id"], "owner": socket["owner"],
                 "x": socket["x"], "y": socket["y"], "size": socket["size"],
+                "marker_x": socket["marker_x"],
+                "marker_y": socket["marker_y"],
+                "marker_size": socket["marker_size"],
                 "radius": runtime["aruco_code_footprint_px"] / 2.0,
             }
             for socket in sorted(runtime["sockets"].values(), key=lambda item: item["aruco_id"])
         ],
+        "core": dict(runtime["core_visual"]),
+        "scene": json.loads(json.dumps(runtime["visual_scene"])),
     }

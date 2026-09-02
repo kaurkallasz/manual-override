@@ -240,6 +240,33 @@ class LaserTagYExtractionTests(unittest.TestCase):
         self.assertTrue((pack / "z-pixel-v2/normalized/effects/combat/core-purge-wave-v1.png").is_file())
         self.assertGreaterEqual(len(list(pack.rglob("*.png"))), 60)
 
+    def test_every_scene_and_marker_asset_resolves_inside_photon_art(self):
+        import cv2
+
+        art = load("photon-art").art_snapshot()
+        level = load("photon-level").runtime_bundle()["runtime"]
+        art_root = PROTOTYPES / "photon-art/assets"
+        scene_keys = {
+            f"map/{item['asset_id']}"
+            for layer in level["visual_scene"]["layers"]
+            for item in layer["items"]
+            if item["kind"] == "sprite"
+        }
+        self.assertFalse(scene_keys - set(art["assets"]))
+        for key in scene_keys:
+            self.assertTrue((art_root / art["assets"][key]).is_file())
+        for marker_id in (38, *range(40, 56)):
+            marker = cv2.imread(
+                str(art_root / art["assets"][f"marker/{marker_id}"]),
+                cv2.IMREAD_GRAYSCALE,
+            )
+            dictionary = cv2.aruco.getPredefinedDictionary(
+                cv2.aruco.DICT_4X4_50
+                if marker_id <= 49 else cv2.aruco.DICT_4X4_100
+            )
+            _, detected, _ = cv2.aruco.ArucoDetector(dictionary).detectMarkers(marker)
+            self.assertEqual(detected.flatten().tolist(), [marker_id])
+
 
 class PhotonLevelExtractionTests(unittest.TestCase):
     @classmethod
@@ -295,6 +322,35 @@ class PhotonLevelExtractionTests(unittest.TestCase):
         for socket_id, socket in legacy.sockets.items():
             for key in ("socket_id", "aruco_id", "owner", "x", "y", "size"):
                 self.assertEqual(adapted.sockets[socket_id][key], socket[key])
+
+    def test_runtime_projects_the_modular_scene_and_exact_marker_alignment(self):
+        runtime = self.level.runtime_bundle()["runtime"]
+        scene = runtime["visual_scene"]
+        self.assertEqual(
+            (scene["contract"], scene["version"]),
+            ("photon.visual-scene", 1),
+        )
+        counts = {
+            layer["name"]: len(layer["items"])
+            for layer in scene["layers"]
+        }
+        self.assertEqual(counts, {
+            "02 Ground Modules": 18,
+            "03 Road Modules": 61,
+            "12 Central Square Core": 2,
+            "14 Activation Unit Staging": 5,
+        })
+        serialized = json.dumps(scene).lower()
+        self.assertNotIn(".tmj", serialized)
+        self.assertNotIn(".tsj", serialized)
+        self.assertNotIn("gid", serialized)
+        for socket in runtime["sockets"].values():
+            expected_distance = 112 / 2 + socket["marker_size"] / 2
+            actual_distance = abs(socket["marker_x"] - socket["x"])
+            self.assertAlmostEqual(actual_distance, expected_distance, places=5)
+        core = runtime["core_visual"]
+        self.assertEqual((core["x"], core["y"]), (880.0, 480.0))
+        self.assertEqual(core["marker_size"], 116.0)
 
     def test_z_engine_runs_from_contract_without_level_file_knowledge(self):
         bundle = self.level.runtime_bundle()
@@ -758,14 +814,39 @@ class PhotonGameExtractionTests(unittest.TestCase):
                 snapshot = game.game_snapshot()
                 socket = snapshot["level"]["sockets"][0]
                 self.assertEqual(
-                    set(("id", "socket_id", "owner", "aruco_id", "x", "y", "size", "radius"))
+                    set((
+                        "id", "socket_id", "owner", "aruco_id", "x", "y",
+                        "size", "radius", "marker_x", "marker_y", "marker_size",
+                    ))
                     - set(socket),
                     set(),
                 )
                 self.assertEqual(socket["id"], socket["socket_id"])
                 self.assertGreater(socket["size"], 0)
+                self.assertEqual(
+                    snapshot["level"]["scene"]["contract"],
+                    "photon.visual-scene",
+                )
+                self.assertEqual(snapshot["level"]["core"]["marker_size"], 116.0)
             finally:
                 game.hub_stop()
+
+    def test_additive_level_visuals_keep_an_older_version_one_input_running(self):
+        game = load("photon-game")
+        runtime = json.loads(json.dumps(self.level.runtime_bundle()["runtime"]))
+        runtime.pop("visual_scene")
+        runtime.pop("core_visual")
+        for socket in runtime["sockets"].values():
+            socket.pop("marker_x")
+            socket.pop("marker_y")
+            socket.pop("marker_size")
+        projection = game._simple_level(runtime)
+        self.assertIsNone(projection["scene"])
+        self.assertEqual(
+            (projection["sockets"][0]["marker_x"], projection["sockets"][0]["marker_y"]),
+            (projection["sockets"][0]["x"], projection["sockets"][0]["y"]),
+        )
+        self.assertGreater(projection["core"]["marker_size"], 0)
 
     def test_physical_start_readiness_is_decided_by_game_not_presentation(self):
         with tempfile.TemporaryDirectory() as folder:
