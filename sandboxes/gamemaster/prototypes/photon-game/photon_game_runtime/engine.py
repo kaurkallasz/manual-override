@@ -95,8 +95,6 @@ TOWER_LINK_MULTIPLIER_STEP = 0.1
 RING_MIN_TURRETS = 8
 RING_MAX_TURRETS = 16
 CORE_MARKER_ID = 38
-CORE_TAG_STABLE_S = 0.55
-CORE_TAG_DISTANCE = 0.05
 CORE_DETONATION_DURATION_S = 2.4
 DEFAULT_SETTINGS = {
     "wave_count": 12,
@@ -752,7 +750,7 @@ class DefenseEngine:
         self.lock = threading.RLock()
         self._wake: Callable[[], None] | None = None
         self._last_simulation_wake_at = 0.0
-        self._physical_source: Callable[[], tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]] | None = None
+        self._physical_source: Callable[[], dict[str, Any]] | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._rng = random.Random(42055)
@@ -789,9 +787,10 @@ class DefenseEngine:
             self.force_fields: dict[str, dict[str, Any]] = {}
             self.force_field_impacts: list[dict[str, Any]] = []
             self.next_force_field_impact_id = 1
-            self.marker_cache: dict[int, dict[str, Any]] = {}
-            self.physical_candidates: dict[int, dict[str, Any]] = {}
+            self.physical_relation_tokens: dict[int, str] = {}
+            self.physical_input_error: str | None = None
             self.ring_completed_at: float | None = None
+            self.ring_completed_wall_at: float | None = None
             self.ring_socket_ids: list[str] = []
             self.ring_candidate_socket_ids: list[str] = []
             self.ring_candidate_source: str | None = None
@@ -813,7 +812,7 @@ class DefenseEngine:
     def set_wake(self, callback: Callable[[], None]) -> None:
         self._wake = callback
 
-    def set_physical_source(self, callback: Callable[[], tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]] | None) -> None:
+    def set_physical_source(self, callback: Callable[[], dict[str, Any]] | None) -> None:
         self._physical_source = callback
 
     def reload_level(
@@ -862,10 +861,14 @@ class DefenseEngine:
             last = now
             if self._physical_source and not self.virtual_play:
                 try:
-                    tags, arms = self._physical_source()
-                    self.ingest_physical(tags, arms, now=now)
-                except Exception:
-                    pass
+                    placement = self._physical_source()
+                    self.ingest_physical(placement)
+                except Exception as exc:
+                    self.ingest_physical({
+                        "contract": "photon.board.placement", "version": 1,
+                        "status": "unavailable", "relations": [],
+                        "error": f"Physical input failed: {exc}",
+                    })
             self.step(dt)
 
     def start(self, settings: dict[str, Any] | None = None) -> None:
@@ -1310,63 +1313,62 @@ class DefenseEngine:
                 raise ValueError("The ArUco 38 sequence is already complete")
         self._changed()
 
-    def ingest_physical(self, tags: list[dict[str, Any]], arms: dict[str, dict[str, Any]], *, now: float | None = None) -> None:
-        now = time.monotonic() if now is None else float(now)
-        current = {int(tag["id"]): tag for tag in tags if tag.get("id") is not None and float(tag.get("missing", 0.0)) <= 0.35}
+    def ingest_physical(self, placement: dict[str, Any]) -> None:
+        """Apply Board-owned stable relationships through Game-owned rules."""
         with self.lock:
-            for marker in (CORE_MARKER_ID, *range(40, 56)):
-                tag = current.get(marker)
-                if tag and all(isinstance(tag.get(axis), (int, float)) for axis in ("nx", "ny")):
-                    self.marker_cache[marker] = {"nx": float(tag["nx"]), "ny": float(tag["ny"]), "seen_at": now}
+            if not isinstance(placement, dict) or placement.get("status") != "ready":
+                self.physical_relation_tokens.clear()
+                self.physical_input_error = str(
+                    placement.get("error") if isinstance(placement, dict) else None
+                    or "Photon Board placement evidence unavailable"
+                )[:500]
+                return
+            self.physical_input_error = None
+            relations = placement.get("relations") or []
+            sampled_at = float(placement["sampled_at"])
             for atom_tag_id, owner in ATOM_OWNERS.items():
-                atom = current.get(atom_tag_id)
-                arm = arms.get(owner) or {}
-                arm_ready = (
-                    bool(arm.get("connected")) and
-                    arm.get("enabled", True) is not False and
-                    str(arm.get("pump_mode") or "off") == "off"
-                )
-                if not atom or not arm_ready:
-                    self.physical_candidates.pop(atom_tag_id, None)
-                    continue
-                nx, ny = float(atom.get("nx", -1)), float(atom.get("ny", -1))
                 candidates = [
-                    (math.hypot(nx - target["nx"], ny - target["ny"]), "socket", marker)
-                    for marker, target in self.marker_cache.items()
-                    if marker in self.level.socket_by_marker and now - target["seen_at"] <= 120.0
+                    (float(relation["distance"]), "socket", int(relation["marker_id"]), relation)
+                    for relation in relations
+                    if relation.get("stable") is True
+                    and int(relation.get("movable_id", -1)) == atom_tag_id
+                    and relation.get("arm") == owner
+                    and int(relation.get("marker_id", -1)) in self.level.socket_by_marker
                 ]
-                core_target = self.marker_cache.get(CORE_MARKER_ID)
                 if (
                     self.ring_completed_at is not None
                     and self.core_stage in {"ring_ready", "first_tag"}
-                    and core_target
-                    and now - core_target["seen_at"] <= 120.0
                 ):
-                    candidates.append((
-                        math.hypot(nx - core_target["nx"], ny - core_target["ny"]),
-                        "core",
-                        CORE_MARKER_ID,
-                    ))
-                distance, target_kind, marker = min(
-                    candidates, default=(math.inf, None, None)
+                    candidates.extend(
+                        (float(relation["distance"]), "core", CORE_MARKER_ID, relation)
+                        for relation in relations
+                        if relation.get("stable") is True
+                        and int(relation.get("movable_id", -1)) == atom_tag_id
+                        and relation.get("arm") == owner
+                        and int(relation.get("marker_id", -1)) == CORE_MARKER_ID
+                    )
+                _distance, target_kind, marker, relation = min(
+                    candidates, key=lambda item: (item[0], item[2]),
+                    default=(math.inf, None, None, None),
                 )
-                if marker is None or distance > CORE_TAG_DISTANCE:
-                    self.physical_candidates.pop(atom_tag_id, None)
+                if marker is None or relation is None:
+                    self.physical_relation_tokens.pop(atom_tag_id, None)
                     continue
-                candidate = self.physical_candidates.get(atom_tag_id)
-                if (
-                    not candidate
-                    or candidate.get("marker") != marker
-                    or candidate.get("target_kind") != target_kind
-                ):
-                    self.physical_candidates[atom_tag_id] = {
-                        "marker": marker,
-                        "target_kind": target_kind,
-                        "since": now,
-                        "activated": False,
-                    }
+                # A relation that was already stable before a new run/ring must
+                # still provide one full Board-defined evidence window after
+                # that gameplay gate opens. Game does not infer tag stability.
+                duration = max(
+                    0.0,
+                    float(relation["stable_at"])
+                    - float(relation["observed_since"]),
+                )
+                gate_at = self.run_started_at
+                if target_kind == "core":
+                    gate_at = self.ring_completed_wall_at
+                if gate_at is None or sampled_at < gate_at + duration:
                     continue
-                if candidate.get("activated") or now - candidate["since"] < CORE_TAG_STABLE_S:
+                relation_id = str(relation["relation_id"])
+                if self.physical_relation_tokens.get(atom_tag_id) == relation_id:
                     continue
                 try:
                     if target_kind == "core":
@@ -1382,7 +1384,7 @@ class DefenseEngine:
                         )
                 except (PermissionError, ValueError):
                     pass
-                candidate["activated"] = True
+                self.physical_relation_tokens[atom_tag_id] = relation_id
 
     def _launch_wave(self, number: int) -> None:
         limit = min(int(self.settings["wave_count"]), len(self.wave_source))
@@ -1901,7 +1903,7 @@ class DefenseEngine:
             if not enemy["attacking"]:
                 self._update_road_progress(enemy)
 
-    def _tower_targeting(self, tower: dict[str, Any]) -> dict[str, float]:
+    def _tower_targeting(self, tower: dict[str, Any]) -> dict[str, Any]:
         spread = max(0.0, min(1.0, float(tower.get("aim_spread", 0.5))))
         angle = float(tower.get("aim_angle", 0.0))
         kind = tower["tower_type"]
@@ -1926,6 +1928,12 @@ class DefenseEngine:
                 "damage_multiplier": damage_multiplier,
                 "visual_intensity": visual_intensity,
                 "half_angle": 180.0,
+                "control": {
+                    "directional": False,
+                    "target_point": False,
+                    "range_at_spread_0": minimum_range,
+                    "range_at_spread_1": maximum_range,
+                },
             }
         if kind == "mortar":
             distance = stats["min_range"] + (stats["max_range"] - stats["min_range"]) * spread
@@ -1940,6 +1948,14 @@ class DefenseEngine:
                 "range": distance,
                 "blast_radius": radius,
                 "damage_multiplier": multiplier,
+                "control": {
+                    "directional": True,
+                    "target_point": True,
+                    "range_at_spread_0": float(stats["min_range"]),
+                    "range_at_spread_1": float(stats["max_range"]),
+                    "blast_radius_at_spread_0": float(stats["near_splash"]),
+                    "blast_radius_at_spread_1": float(stats["far_splash"]),
+                },
             }
         maximum_range = stats["far_range"] + (stats["near_range"] - stats["far_range"]) * spread
         half_angle = stats["narrow_half_angle"] + (stats["wide_half_angle"] - stats["narrow_half_angle"]) * spread
@@ -1949,6 +1965,14 @@ class DefenseEngine:
             "spread": spread,
             "range": maximum_range,
             "half_angle": half_angle,
+            "control": {
+                "directional": True,
+                "target_point": False,
+                "range_at_spread_0": float(stats["far_range"]),
+                "range_at_spread_1": float(stats["near_range"]),
+                "half_angle_at_spread_0": float(stats["narrow_half_angle"]),
+                "half_angle_at_spread_1": float(stats["wide_half_angle"]),
+            },
         }
         if kind == "flamethrower":
             targeting["sweep_angle"] = self._flamethrower_sweep_angle(
@@ -2151,6 +2175,7 @@ class DefenseEngine:
             )
         if retired_ring_boundary:
             self.ring_completed_at = None
+            self.ring_completed_wall_at = None
             self.ring_socket_ids = []
             self.ring_candidate_socket_ids = []
             self.ring_candidate_source = None
@@ -2972,6 +2997,7 @@ class DefenseEngine:
         ):
             return
         self.ring_completed_at = self.sim_time
+        self.ring_completed_wall_at = time.time()
         self.ring_socket_ids = list(order)
         self.field_immunity_until = self.sim_time + float(
             self.settings["ring_field_immunity_s"]
@@ -4254,6 +4280,7 @@ class DefenseEngine:
                 "activation_order": list(self.activation_order),
                 "loadout": {str(key): value for key, value in self.loadout.items()},
                 "settings": dict(self.settings),
+                "physical_input_error": self.physical_input_error,
                 "events": list(self.events[-30:]),
                 "server_time": time.time(),
             }

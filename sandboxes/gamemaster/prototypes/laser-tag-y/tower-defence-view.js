@@ -22,12 +22,6 @@
   const FLAMETHROWER_PILOT_LAG_S = 0.08;
   const TESLA_DISCHARGE_FLASH_S = 0.16;
   const AIM_HANDLE_RADIUS = 17;
-  const AIM_GEOMETRY = Object.freeze({
-    machine_gun: Object.freeze({ near: 190, far: 360, narrow: 12, wide: 55, inverse: true }),
-    flamethrower: Object.freeze({ near: 130, far: 235, narrow: 18, wide: 65, inverse: true }),
-    mortar: Object.freeze({ near: 110, far: 500, inverse: false }),
-    tesla_coil: Object.freeze({ near: 120, far: 265, inverse: false }),
-  });
   const TOWER_CORNER_OFFSETS = Object.freeze([
     Object.freeze([-44, -44]),
     Object.freeze([44, -44]),
@@ -92,33 +86,58 @@
     return EFFECT_QUALITY_PROFILES.full;
   }
 
-  function towerAimDistance(towerType, spread) {
-    const geometry = AIM_GEOMETRY[String(towerType)] || AIM_GEOMETRY.machine_gun;
+  function aimControl(value) {
+    const control = value?.control || value;
+    if (!control || typeof control !== "object") return null;
+    const start = Number(control.range_at_spread_0);
+    const end = Number(control.range_at_spread_1);
+    return Number.isFinite(start) && Number.isFinite(end)
+      ? control
+      : null;
+  }
+
+  function controlValue(control, name, spread) {
+    const start = Number(control?.[`${name}_at_spread_0`]);
+    const end = Number(control?.[`${name}_at_spread_1`]);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return NaN;
     const amount = Math.max(0, Math.min(1, Number(spread) || 0));
-    return geometry.inverse
-      ? geometry.far + (geometry.near - geometry.far) * amount
-      : geometry.near + (geometry.far - geometry.near) * amount;
+    return start + (end - start) * amount;
+  }
+
+  function towerAimDistance(control, spread) {
+    const geometry = aimControl(control);
+    return geometry ? controlValue(geometry, "range", spread) : NaN;
   }
 
   function towerAimFromPoint(
-    towerType, towerX, towerY, pointerX, pointerY, currentAngleDegrees = 0,
+    control, towerX, towerY, pointerX, pointerY, currentAngleDegrees = 0,
   ) {
-    const geometry = AIM_GEOMETRY[String(towerType)] || AIM_GEOMETRY.machine_gun;
+    const geometry = aimControl(control);
+    if (!geometry) return null;
     const dx = Number(pointerX) - Number(towerX);
     const dy = Number(pointerY) - Number(towerY);
     const distance = Math.hypot(dx, dy);
-    const span = Math.max(1, geometry.far - geometry.near);
-    const spread = Math.max(0, Math.min(1, geometry.inverse
-      ? (geometry.far - distance) / span
-      : (distance - geometry.near) / span));
+    const start = Number(geometry.range_at_spread_0);
+    const end = Number(geometry.range_at_spread_1);
+    const spread = Math.max(0, Math.min(1,
+      Math.abs(end - start) < 0.000001 ? 0 : (distance - start) / (end - start)
+    ));
     const pointerAngle = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
     return {
-      angle: String(towerType) === "tesla_coil"
+      angle: geometry.directional === false
         ? ((Number(currentAngleDegrees) % 360) + 360) % 360
         : pointerAngle,
       spread,
-      distance: towerAimDistance(towerType, spread),
+      distance: towerAimDistance(geometry, spread),
     };
+  }
+
+  function boundedVisualAge(receivedAt, now, connected, frozenAge = 0, maximum = 0.5) {
+    const limit = Math.max(0, Number(maximum) || 0);
+    const age = connected
+      ? Math.max(0, Number(now) - Number(receivedAt)) / 1000
+      : Math.max(0, Number(frozenAge) || 0);
+    return Math.min(limit, age);
   }
 
   function targetingHandlePoint(tower, targeting) {
@@ -182,13 +201,13 @@
   function towerLinkMultiplierLabel(tower) {
     const linkedTurretCount = Math.max(1, Math.round(Number(tower.linked_turret_count) || 1));
     const snapshotMultiplier = Number(tower.link_multiplier);
-    const linkMultiplier = Number.isFinite(snapshotMultiplier)
-      ? snapshotMultiplier
-      : 0.9 + (linkedTurretCount - 1) * 0.1;
+    const linkMultiplier = Number.isFinite(snapshotMultiplier) ? snapshotMultiplier : null;
     return {
       linkedTurretCount,
       linkMultiplier,
-      label: `×${linkMultiplier.toFixed(2).replace(/0$/, "")}`,
+      label: linkMultiplier == null
+        ? "×—"
+        : `×${linkMultiplier.toFixed(2).replace(/0$/, "")}`,
     };
   }
 
@@ -296,10 +315,12 @@
   }
 
   function createTowerDefenceView(options) {
-    const assetRoot = String(options.assetRoot || "").replace(/\/$/, "");
-    const assetPaths = options.assetPaths && typeof options.assetPaths === "object"
-      ? options.assetPaths
-      : {};
+    const sandboxRoot = String(options.sandboxRoot || "").replace(/\/$/, "");
+    let assetRoot = "";
+    let assetPaths = {};
+    let assetRevision = null;
+    let assetGeneration = 0;
+    let assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null};
     const mapCanvas = options.mapCanvas;
     const gameCanvas = options.gameCanvas;
     if (!mapCanvas || !gameCanvas) {
@@ -321,6 +342,8 @@
     let levelRevision = null;
     let state = null;
     let stateReceivedAt = performance.now();
+    let feedConnected = false;
+    let frozenVisualAge = 0;
     let lastGameRenderAt = 0;
     let animationFrame = 0;
     let destroyed = false;
@@ -332,17 +355,55 @@
     mapCanvas.height = HEIGHT;
     gameCanvas.width = WIDTH;
     gameCanvas.height = HEIGHT;
+    function reportAssetLoads() {
+      // Optional presentation diagnostics must never interrupt drawing.
+      try { options.onAssetStatus?.({...assetLoads, base:assetRoot, revision:assetRevision}); }
+      catch(error) { console.warn("Asset diagnostics unavailable", error); }
+    }
     function loadImage(url) {
       if (!url) return Promise.reject(new Error("asset unavailable"));
       if (images.has(url)) return images.get(url);
       const promise = new Promise((resolve, reject) => {
+        const generation = assetGeneration;
         const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error(`asset failed: ${url}`));
+        assetLoads.requested++; assetLoads.pending++; assetLoads.last_url=url;
+        reportAssetLoads();
+        image.onload = () => {
+          if(generation !== assetGeneration) { reject(new Error("superseded asset request")); return; }
+          assetLoads.loaded++; assetLoads.pending--; assetLoads.last_url=url;
+          reportAssetLoads(); resolve(image);
+        };
+        image.onerror = () => {
+          if (generation === assetGeneration) {
+            assetLoads.failed++; assetLoads.pending--; assetLoads.last_url=url;
+            assetLoads.last_error=`Artwork failed to load: ${url}`;
+            reportAssetLoads();
+            const report = options.onAssetError || console.warn;
+            report(`Artwork failed to load: ${url}`);
+          }
+          reject(new Error(`asset failed: ${url}`));
+        };
         image.src = url;
       });
       images.set(url, promise);
       return promise;
+    }
+
+    function setPresentation(value) {
+      const valid = value?.contract === "photon.level.assets" && value.version === 1;
+      const next = valid ? value : {};
+      const revision = JSON.stringify([next.base, next.revision, next.status]);
+      if (revision === assetRevision) return false;
+      assetRevision = revision;
+      assetGeneration += 1;
+      assetRoot = next.base ? sandboxRoot + String(next.base).replace(/\/$/, "") : "";
+      assetPaths = next.assets || {};
+      images.clear(); gameImages.clear(); sceneImages.clear(); markerImages.clear();
+      tintedEffectCache.clear(); enemySpriteCache.clear();
+      gameImagesStarted = false;
+      assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null};
+      reportAssetLoads();
+      return true;
     }
 
     function assetUrl(assetId) {
@@ -583,11 +644,14 @@
     function visualSimulationTime(now, gameState) {
       const serverTime = Number(gameState.sim_time || 0);
       const advancing = gameState.phase === "running" && !gameState.paused;
-      return serverTime + (advancing ? Math.max(0, now - stateReceivedAt) / 1000 : 0);
+      return serverTime + (advancing
+        ? boundedVisualAge(stateReceivedAt, now, feedConnected, frozenVisualAge)
+        : 0);
     }
 
     function visualRuntimeTime(now, gameState) {
-      return Number(gameState.runtime_time || 0) + Math.max(0, now - stateReceivedAt) / 1000;
+      return Number(gameState.runtime_time || 0)
+        + boundedVisualAge(stateReceivedAt, now, feedConnected, frozenVisualAge);
     }
 
     function renderCoreHealth(context, gameState) {
@@ -705,28 +769,29 @@
 
     function towerTargeting(tower) {
       const preview = towerAimPreview.get(towerPlacementId(tower));
-      if (!preview) return tower.targeting || {};
-      const angle = Number(preview.angle) * Math.PI / 180;
+      const targeting = tower.targeting || {};
+      if (!preview) return targeting;
+      const control = aimControl(targeting);
+      if (!control) return targeting;
       const spread = Math.max(0, Math.min(1, Number(preview.spread)));
-      if (tower.tower_type === "mortar") {
-        const distance = towerAimDistance(tower.tower_type, spread);
-        return { angle, angle_degrees: preview.angle, spread, range: distance, target_x: tower.x + Math.cos(angle) * distance, target_y: tower.y + Math.sin(angle) * distance, blast_radius: 72 + (155 - 72) * spread };
+      const angleDegrees = control.directional === false
+        ? Number(targeting.angle_degrees || 0)
+        : Number(preview.angle);
+      const angle = angleDegrees * Math.PI / 180;
+      const range = towerAimDistance(control, spread);
+      const result = {
+        ...targeting, control, angle, angle_degrees: angleDegrees,
+        spread, range,
+      };
+      const halfAngle = controlValue(control, "half_angle", spread);
+      if (Number.isFinite(halfAngle)) result.half_angle = halfAngle;
+      const blastRadius = controlValue(control, "blast_radius", spread);
+      if (Number.isFinite(blastRadius)) result.blast_radius = blastRadius;
+      if (control.target_point === true) {
+        result.target_x = Number(tower.x) + Math.cos(angle) * range;
+        result.target_y = Number(tower.y) + Math.sin(angle) * range;
       }
-      if (tower.tower_type === "tesla_coil") {
-        return {
-          angle,
-          angle_degrees: preview.angle,
-          spread,
-          range: towerAimDistance(tower.tower_type, spread),
-          min_range: AIM_GEOMETRY.tesla_coil.near,
-          max_range: AIM_GEOMETRY.tesla_coil.far,
-          damage_multiplier: 1.75 - 0.75 * spread,
-          visual_intensity: 1 - 0.42 * spread,
-          half_angle: 180,
-        };
-      }
-      const config = AIM_GEOMETRY[tower.tower_type] || AIM_GEOMETRY.machine_gun;
-      return { angle, angle_degrees: preview.angle, spread, range: towerAimDistance(tower.tower_type, spread), half_angle: config.narrow + (config.wide - config.narrow) * spread };
+      return result;
     }
 
     function drawTargetingOverlay(context, tower) {
@@ -751,7 +816,7 @@
         context.stroke();
       } else if (tower.tower_type === "tesla_coil") {
         context.beginPath();
-        context.arc(tower.x, tower.y, Number(targeting.range || 265), 0, Math.PI * 2);
+        context.arc(tower.x, tower.y, Number(targeting.range || 0), 0, Math.PI * 2);
         context.fill();
         context.stroke();
         if (selected) {
@@ -1758,7 +1823,7 @@
       const visualTime = visualSimulationTime(now, state);
       const runtimeVisualTime = visualRuntimeTime(now, state);
       const extrapolationAge = state.phase === "running" && !state.paused
-        ? Math.min(0.14, Math.max(0, now - stateReceivedAt) / 1000)
+        ? boundedVisualAge(stateReceivedAt, now, feedConnected, frozenVisualAge, 0.14)
         : 0;
       for (const tower of visualState.towers || []) {
         if (!towerIsActivating(tower, runtimeVisualTime, visualState)) {
@@ -1831,7 +1896,9 @@
         const linkBonus = towerLinkMultiplierLabel(tower);
         context.fillStyle = "rgba(4,11,18,0.88)";
         context.fillRect(tower.x - 21, tower.y - 70, 42, 15);
-        context.strokeStyle = linkBonus.linkMultiplier > 1
+        context.strokeStyle = linkBonus.linkMultiplier == null
+          ? "#dce9f5"
+          : linkBonus.linkMultiplier > 1
           ? "#36dfff"
           : linkBonus.linkMultiplier < 1
             ? "#ffb347"
@@ -1922,10 +1989,12 @@
     function applyState(nextState) {
       state = nextState;
       stateReceivedAt = performance.now();
+      frozenVisualAge = 0;
+      const assetsChanged = setPresentation(nextState?.presentation);
       const nextRevision = Number(nextState?.level_revision);
       if (
         nextState?.level
-        && (!level || !Number.isFinite(nextRevision) || nextRevision !== levelRevision)
+        && (assetsChanged || !level || !Number.isFinite(nextRevision) || nextRevision !== levelRevision)
       ) setLevel(nextState.level, nextRevision);
     }
 
@@ -2064,13 +2133,26 @@
       if (!tower || tower.destroyed) return null;
       const targeting = towerTargeting(tower);
       return towerAimFromPoint(
-        tower.tower_type,
+        targeting.control,
         tower.x,
         tower.y,
         x,
         y,
         targeting.angle_degrees,
       );
+    }
+
+    function setFeedConnected(connected) {
+      const next = Boolean(connected);
+      const now = performance.now();
+      if (!next && feedConnected) {
+        frozenVisualAge = boundedVisualAge(
+          stateReceivedAt, now, true, frozenVisualAge,
+        );
+      } else if (next && !feedConnected && frozenVisualAge > 0) {
+        stateReceivedAt = now - frozenVisualAge * 1000;
+      }
+      feedConnected = next;
     }
 
     animationFrame = global.requestAnimationFrame(gameRenderLoop);
@@ -2095,6 +2177,7 @@
       clearTowerAimPreview,
       aimHandle,
       aimFromPoint,
+      setFeedConnected,
       coreAtPoint,
       markerAtPoint,
       socketAtPoint,
@@ -2109,6 +2192,7 @@
     geometry: {
       ARUCO_FIELD_CLEARANCE,
       advancedWeaponCharge,
+      boundedVisualAge,
       effectQualityForEnemyCount,
       fieldSegmentsOutsideKeepOuts,
       fixedMarkerVisualSize,

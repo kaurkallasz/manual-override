@@ -348,6 +348,15 @@ def corrected_stream():
                     mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
+def preview_snapshot():
+    """hhh.camera-preview v1: existing read-only corrected video endpoint."""
+    state = corrected_tag_snapshot([], [])
+    return {"contract": "hhh.camera-preview", "version": 1,
+            "status": state["status"], "error": state.get("error"),
+            "coordinate_space": "corrected-camera-normalized",
+            "stream_path": "/api/corrected-stream"}
+
+
 def _correct_tag(tag, width, height, calibration):
     corners = tag.get("corners") or []
     source = corners if len(corners) >= 4 else [[tag["x"], tag["y"]]]

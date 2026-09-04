@@ -697,6 +697,336 @@ or robot motion was performed.
 OpenAI Codex implemented the Y-only interaction, renderer geometry, contract
 documentation, regression coverage, and non-hardware verification.
 
+### 2026-09-04 — Complete Photon Level's authored-map preview
+
+**Trigger:** Photon Level's tab drew plain path strokes and socket circles,
+despite the existing projection already containing a renderer-neutral visual
+scene. The authoring screen did not show the terrain, roads, core artwork, or
+side-mounted marker locations that the operator needed for placement editing.
+
+**Decision:** add a small Level-owned Canvas preview of the existing scene,
+using the module's local Tiled assets. A module-local `photon.level.editor` v1
+endpoint captures the layout, scene, image URLs, and marker resize vectors at
+one revision. The browser draws precomputed sprite transforms and affine marker
+offsets, without parsing TMJ, importing Y, or depending on Game/Board/Art being
+enabled. Local authoring copies of ArUco 38 and 40–55 are the only new images.
+No runtime OpenCV dependency is added. Public Level/Game contracts, simulation,
+Z, the map, and wave definitions remain unchanged.
+
+Owner-colored placement bounds, centers, labels, real marker codes, and optional
+route guides sit above the static scene. Dragging either a placement or its
+marker preserves the pointer offset; resizing preserves the fixed code footprint.
+The existing authenticated all-socket validation and optimistic revision check
+remain the only write path. Rejections retain the draft. Reload uses an inline
+discard confirmation, avoiding a blocking browser-native dialog in embedded tabs.
+Missing source artwork fails explicitly instead of silently showing a schematic.
+
+**Verification:** 136 tests passed (the existing 130 plus six editor tests).
+The six additions cover local image serving with no sibling modules, unchanged
+runtime output, real ArUco decoding, missing-asset/source failures, authentication
+and stale revisions, and Node display geometry checked against Python's parsed
+TMJ at three socket sizes for every socket. Browser checks used a temporary map
+copy: graphics loaded, marker dragging changed the corresponding coordinates,
+a resized placement saved and reloaded at the next revision, and an out-of-bounds
+marker was rejected without clearing the draft. The unchanged map passed the
+modular validator (18 ground objects, 61 road objects, 16 sockets, full terrain
+coverage, no visible reference painting), Tiled 1.12.2 round-trip, and native
+raster inspection. No physical camera/projector or robot trial was performed.
+
+**Owner:** the human requested an art-backed authoring preview. OpenAI Codex
+implemented the Level-only preview, documentation, and non-hardware verification.
+
+### 2026-09-04 — Put the settings form with Photon Game
+
+**Trigger:** the operator requested that the Photon Game tab contain its own
+configuration controls rather than requiring Laser Tag Y to edit game settings.
+Game already owned the presets, defaults, validation, persistence, and immutable
+active-run settings; only the form remained in Y.
+
+**Decision:** move the existing form into Photon Game's default page, with a
+stable `/settings` alias. It uses Game's existing state and command endpoints
+directly. Game's command response now includes field-level validation errors,
+matching the information previously supplied by Y's forwarding route. There is
+no new settings API, module, or data migration. Status and collapsible input and
+storage diagnostics below the form consume the existing SSE stream without
+overwriting unsaved form values. Immediate Start/Pause/Reset and turret controls
+remain in Y; Game still serves no live renderer or artwork.
+
+Y's existing settings button and bookmarked `/settings` route now redirect to
+Game's form, checking that Game is enabled and contract-compatible and preserving
+the sandbox URL prefix. The duplicate Y settings HTML is removed. Game's own
+page links back to the hub and remains usable without Y, Level, Board, or Art.
+Existing saved configuration and Z are unchanged.
+
+**Verification:** all 139 tests passed, including three added regressions for
+shortcut isolation/prefix handling, the standalone Game settings page and HTTP
+validation/persistence, and a Node form test proving SSE does not replace draft
+edits. Existing tests continue to verify frozen active-run settings. A local
+browser trial followed Y's shortcut into Game, saved seven waves, rejected an
+invalid 99-wave value with its inline field error, and reloaded the saved value.
+The trial used temporary settings/history files and no camera or robot module.
+The temporary server and browser tab were closed; the running installation was
+not restarted.
+
+**Owner:** the human requested moving the form to its module owner. OpenAI Codex
+implemented the move, compatibility shortcut, documentation, and verification.
+
+### 2026-09-04 — Give Photon Board physical tracking diagnostics
+
+**Trigger:** the human requested arm tracking, target proximity, observed tag
+transport stages, a diagnostic overlay and per-tag table, with the same
+segmented proximity-meter appearance as the LTX player.
+
+**Decision:** extend the existing Board, not add another runtime module. One
+Python sampler owns physical observation and bounded transport/dwell state;
+browser refreshes and additional readers cannot advance it or multiply hardware
+sampling. Existing Board/runtime v1 outputs add `photon.board.tracking` v1 and
+the existing SSE stream carries it. The tab renders corrected-frame tag pins,
+projected base-to-TCP arm illustrations, candidate/target lines, two arm panels
+with 24-segment amber/green meters, per-tag evidence and optional fixed markers.
+Both normal marker destinations and other raised tags can be measured; source
+tags are excluded from their own destination list.
+
+**Boundaries:** Auto Pickup remains the owner of Auto PP Cal 2. It now exports
+read-only projection and last authenticated LTX controller-report contracts;
+Board never reads its calibration files or imports its implementation. Webcam
+exports the processed-frame timestamp; Relay exports source feedback time.
+Cartesian movement-target error is separated from calibrated marker proximity,
+and joint angles cannot be shown as millimetres. Calibrated Z is an estimate,
+explicitly excluding player-local fine tuning. Camera preview uses the existing
+corrected stream through a discovered, versioned preview descriptor.
+
+**Truth and failure handling:** the physical stage is separate from the
+controller-reported stage. Near-arm occlusion with suction can infer a pickup or
+likely carry, never guarantee a grip. Pump release still needs camera placement
+confirmation. Ambiguity, stale frames/feedback, missing parallax, malformed or
+incompatible outputs and sampling gaps do not preserve authoritative inferred
+state. Stable placement is diagnostic, not turret activation. Z is unchanged;
+Game's existing physical placement acceptance remains pending Phase 8 parity
+work, and no robot-command, scoring or combat path was added or changed.
+
+**Verification:** 27 dedicated tracking tests cover projection/parallax,
+candidate ambiguity, two-arm conflicts, pickup/carry/release/stable placement,
+frame-unique dwell, stacked-target distances, source freshness, contract errors,
+simulation/authentication, lifecycle and cached readers. A plain-JS DOM smoke
+test verifies the bars, frame alignment, SSE/draft behavior and stale clearing.
+The combined Photon suite has 74 passing tests; the full suite passed all 166
+tests in 64.468 seconds. Browser inspection used a
+temporary localhost server with synthetic tags, arm feedback and calibration;
+it verified the visual meters, fixed-marker filter and loss-of-stream clearing.
+The temporary server and tab were closed. No robots were connected or moved,
+no installation calibration was changed, and the user's hub was not restarted.
+
+**Owner:** the human requested the feature and module boundary. OpenAI Codex
+implemented and verified this working-tree change; it is not yet committed.
+
+### 2026-09-04 — Merge Photon Art into the Level content package
+
+**Human request:** proceed with the proposed merge: Level owns maps, waves,
+and static artwork; Game forwards the asset references; Y consumes only Game's
+output. Preserve Laser Tag Z and the independent module boundaries.
+
+**Decision:** the standalone Art prototype is removed from hub discovery.
+Its runtime images and manifest now belong to Photon Level. The original
+163 Art files were compared byte-for-byte: 90 were already identical Level
+files, 73 were added, and no conflicting files were overwritten. The remaining
+old folder was moved to `/private/tmp/photon-art-merged.tj8iPs/photon-art` as a
+temporary recovery copy. Tracked originals also remain recoverable from Git.
+No new dependency, service, module registry, or hub change was needed.
+
+Level's existing Artwork gallery moved to its local `/art` page, linked from
+the editor and Level's module entry. The new additive `photon.level.assets` v1
+descriptor lives in `runtime_bundle().presentation` and `/api/assets`.
+Scene asset IDs resolve from the local tilesets rather than a duplicate filename
+table. Runtime and editor images share the same package files. Content hashes
+version image URLs; stat-cached hashing avoids rereading unchanged images.
+HTTP responses revalidate because Level does not promise historical image bytes.
+
+Game checks and forwards the descriptor, never reading or serving asset files.
+Missing/incompatible artwork reports an unavailable presentation input while
+valid simulation and settings continue. Art-only updates do not reset a run;
+pending geometry and its associated presentation stay deferred together.
+Both Y displays now take asset references from their Game snapshot/SSE, refresh
+image caches on content revision changes, and reject late superseded image
+loads. Y has no Art or Level module lookup. Its old `/api/art` is only a
+compatibility projection of Game's output. No image bytes are placed in SSE.
+
+**Verification:** all 174 tests pass, including eight new content-boundary tests,
+78 manifest URL/hash checks, ArUco decoding, shared editor/runtime file mapping,
+asset replacement/removal/recovery, incompatible optional inputs, state/command/
+SSE pass-through, active-run preservation, sandbox prefixes, and the real Y
+renderer exercised with a deterministic Canvas/Image harness. Modular validation
+reports 18 ground modules, 61 roads, 16 sockets, complete coverage, and no visible
+reference painting. Tiled 1.12.2 round-trip and native render pass. Browser checks
+of the Level editor, merged gallery, Y gamemaster, and Y external screen passed
+on an isolated localhost fixture with temporary game settings/history and no
+hardware modules. Canonical map and Laser Tag Z checksums are unchanged.
+
+The running hardware-connected hub was not restarted. A safe hub restart and
+page refresh are required to load the new Python module layout; physical trials
+and Phase 8 cleanup remain separate work. No commit or push was made.
+
+**Ownership:** user-directed architecture; OpenAI Codex implementation and
+non-hardware verification in the current uncommitted working tree.
+
+### 2026-09-04 — Make Board proximity diagnostics configurable
+
+**Human request:** allow editing Near XY, Near Z, unique margin, and stale age
+in Photon Board while retaining the original defaults: 90 mm, 60 mm, 20 mm,
+and 1.5 seconds.
+
+**Implementation:** Board's new **Proximity settings** form offers four numeric
+fields, persistent **Apply settings**, and **Use defaults** (draft until applied).
+Defaults and bounds come from the module's `photon.board.settings` v1 output,
+also carried in the existing tracking/SSE output. Saved overrides live only in
+`photon-board/data/tracking-settings.json`, loaded at hub initialization and
+replaced atomically after complete server validation and gamemaster auth.
+No settings file is created on first use. Invalid saved files are reported and
+left untouched while defaults are used; failed writes preserve prior settings.
+SSE does not overwrite unsaved values or dismiss save errors.
+
+The next sample uses the new thresholds; old consideration, carry and placement
+dwell inference is cleared to avoid mixing evidence collected under different
+limits. Equal-distance ties stay ambiguous, including at zero unique margin.
+The configurable sensor timeout is diagnostic only. Board reads inputs once,
+then derives the diagnostic and game-facing observations with separate age
+gates. The existing 1.5-second game-facing gate, sampler/stream liveness,
+placement tolerances, calibration ownership, robot safety, and Game's rules
+remain unchanged. No new module, dependency, or control path was introduced.
+
+**Verification:** 187 tests passed, including 13 new settings tests and expanded
+plain-JS UI tests. Coverage includes defaults, numeric boundaries, proximity
+and meter behavior, ambiguity, shorter/longer freshness, auth, atomic save
+failure, corrupted-file diagnostics, restart persistence, explicit defaults,
+missing-input operation, evidence reset, and isolation from game-facing gates.
+An isolated browser fixture confirmed editing all four fields, active limits
+updating, reload persistence, and restoring the original defaults. It used
+fake sensor/arm inputs and temporary settings, not the hardware-connected hub.
+
+**Ownership:** user-directed change; OpenAI Codex implementation and verification.
+The change is uncommitted. The running hub was not restarted; load the new
+Python code at a safe stopping point and refresh the Board page.
+
+### 2026-09-04 — Show Y's data flow without adding dependencies
+
+**Human request:** add a visual window to Laser Tag Y showing its information
+sources, connected nodes, flowing animation, and labels.
+
+**Decision:** keep observability inside the presentation instead of adding a
+monitoring service or independent reads of Level and Board. The **Data flow**
+button opens a native dialog with Level/Board → Game → Y and image files → Y.
+Upstream edges are dotted and labelled as Game-reported dependencies. Image
+source addresses come from Game's presentation descriptor, not module discovery.
+Clicking a node reveals fields, input addresses, health and received counts.
+
+The window consumes callbacks from Y's existing snapshot/SSE and renderer image
+loader. Moving dots indicate recent SSE or actual image-loader activity;
+cached image completions are not claimed to measure network traffic. Missing,
+incompatible, disconnected or stale feeds show explicit diagnostic states and
+stop the live-state animation. Controls allow pausing motion, reduced-motion
+preferences are respected, and a local age-refresh timer exists only while the
+window is open. The external screen uses the same contract but is not remotely
+monitored. Game, Board, hardware controls, and Laser Tag Z are unchanged.
+
+**Verification:** 190 tests passed. New route, boundary and plain-JS smoke tests
+cover source labels, initial snapshots, SSE arrival/loss/staleness, reconnects,
+incompatible contracts, image failures, pause/resume, narrow-layout connector
+geometry, and cleanup. Renderer tests also verify image counters and rejection
+of late superseded asset loads. An isolated, hardware-free browser preview
+confirmed the diagram layout, source details, real image counts and motion
+controls using temporary game data. No live hub restart or hardware action was
+performed. New static routes require a safe hub restart before page refresh.
+
+**Ownership:** user-directed change; OpenAI Codex implementation and non-hardware
+verification. The implementation remains in the uncommitted working tree.
+
+### 2026-09-04 — Trace Y inputs back to their original sources
+
+**Human request:** extend Y's data-flow tree through calibration, Dobot relay
+and camera feed to the ultimate sources, rather than stopping at Board/Level.
+
+**Decision:** show the existing architecture, not add another dependency chain.
+The expanded tree distinguishes captured pixels, raw ArUco detections, corrected
+tags, saved lens calibration, saved Auto PP Cal 2 arm calibration, MG400 feedback,
+relay command/pump state, Player LTX stage intent, authored content, and Game's
+settings/operator inputs. Board's projection call into Auto Pickup and its
+returned diagnostic values are both visible. Corrected video ends at the Board
+preview and is never presented as a Game/Y input. Static files stay with their
+owner. Branch jumps keep the larger scrollable tree readable.
+
+Game now forwards a bounded `inputs.board.upstream` health summary from the
+Board value it already reads. Compatible unavailable input retains useful error
+reports while contributing no physical evidence. Missing/incompatible input
+clears the report. No new read, endpoint, module, calibration copy or hardware
+control path was added. Y describes known routes and displays only forwarded
+reports; hardware identities and video connections are explicitly unmonitored.
+Report age is independent of Game SSE age, and virtual play marks Board unused.
+
+**Verification:** 194 tests passed, including four new Game diagnostic-boundary
+tests and expanded real-JS diagram tests. Coverage includes one-read behavior,
+unavailable/incompatible/malformed inputs, no raw-data leakage, contract version
+checks, all source branches, video exclusion, historical health during live SSE,
+and diagram cleanup. A hardware-free browser preview checked the scrollable
+layout and source details; no live camera/robot was opened or hub restarted.
+
+**Ownership:** user-directed change; OpenAI Codex implementation and verification
+in the uncommitted working tree. Reload the new Python code at a safe stopping
+point and refresh Y; there was no commit, push, or hardware action.
+
+### 2026-09-04 — Phase 8 authority cleanup after deterministic parity
+
+**Human request:** execute Phase 8 in the accepted order: baseline, Board
+contract, parity comparison, Game migration, Y cleanup and final acceptance,
+without a new module, broker or calibration-ownership change. Laser Tag Z must
+remain unchanged.
+
+**Baseline:** the complete 194-test suite passed before cleanup. The exact
+Laser Tag Z tree fingerprint was
+`1412875013ae9a0218f08925d4483c2c1c846490ac05257a87bae2c5f7488c6b`.
+The audit confirmed Photon Game already had no copied LTX state/scoring system
+and neither Game nor Y parsed TMJ. Remaining duplication was Game's raw
+normalized-coordinate placement detector and Y's weapon-control formulas.
+
+**Decision:** add one nested `photon.board.placement` v1 value to Board's
+existing sample. Board now owns game-facing movable/fixed marker association,
+fixed-marker memory, arm-ready/pump-off gating, target-order resets and dwell.
+It uses corrected normalized camera data directly and does not depend on Auto
+PP Cal 2. Calibration and robot-control ownership did not move. The descriptor
+contains generic physical relationships only; Photon Game still owns tag/team
+identity, Level marker-to-socket mapping, placement legality and core sequence.
+No endpoint, stream, module or process was added.
+
+A deterministic fixture compares unchanged Z's original raw-input detector to
+Board → Game for suction blocking, the original dwell, first placement and a
+second placement after moving the same tag. After parity passed, Game's marker
+cache, distance calculation and physical candidate timers were removed. Game
+now validates and consumes only the named placement descriptor. Board failures
+clear current evidence and are surfaced instead of being swallowed. Run/core
+gates require one Board-declared evidence window after opening, without Game
+recalculating physical stability.
+
+Y's copied weapon range/cone/splash/damage preview table and link-multiplier
+fallback were removed. Game publishes generic control endpoints with each
+authoritative tower targeting result; Y only interpolates those supplied values
+for the existing handle and sliders. Both Y displays cap interpolation and
+freeze it when the SSE feed disconnects. Game settings now validate saved-file
+shape, expose load errors, persist before publishing a new draft/revision, and
+preserve the previous in-memory state on save failure.
+
+**Verification:** 204 automated tests pass, including new Board-contract,
+unchanged-Z parity, malformed-boundary, settings-corruption/write-failure,
+Game-supplied drag-geometry and disconnected-feed tests. This is hardware-free
+acceptance only. An isolated browser fixture rendered Level-owned map art and
+ArUco markers, all four turret sprites, the selectable aim handle, Game's own
+settings page, and Y's external screen. The final Z fingerprint remained
+`1412875013ae9a0218f08925d4483c2c1c846490ac05257a87bae2c5f7488c6b`
+with no Z diff. No camera or robot was opened and no live hub was restarted. A
+full physical four-weapon/ring/core/external-screen run remains an operator
+acceptance step.
+
+**Ownership:** user-directed change; OpenAI Codex implementation and
+non-hardware verification. The work remains uncommitted.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -765,8 +1095,8 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - Phase 4 deliberately retains Laser Tag Z's legacy map/parser as a read-only rollback fixture. It is duplicate code, not a second mutable authority, and should be removed only after a live installation trial confirms Photon Level startup, editing, restart, and in-run revision deferral.
 - Phase 5 deliberately retains Z's direct Webcam/Calibration/Relay reader only for standalone operation when Photon Board is absent or disabled. Remove it only after a live trial confirms corrected marker freshness, arm-state propagation, pump-off gating, and Board failure diagnostics.
 - Phase 6 deliberately retains the proven simulation in both Laser Tag Z and Photon Game. Photon Game is the new modular owner used by Y; remove Z's rollback copy only after production presentation parity and a complete live game prove the new Level → Board → Game chain.
-- Phase 7 preserves Z's renderer logic in Y and its immutable runtime images in Photon Art, so visual behavior is duplicated during migration. Remove Z's rollback copy only after a full physical Game → Y trial proves camera-derived Board placement, all four weapons, ring/core completion, failure handling, and external display continuity.
-- Photon Level and Photon Art intentionally hold separate copies of the normalized map images: Level needs local files for standalone Tiled editing, while Art owns runtime delivery. Stable asset IDs and automated coverage tests prevent this repository-boundary duplication from becoming an implicit file dependency.
+- Phase 8 completed the deterministic authority cleanup after direct Z parity. Z remains unchanged as the requested rollback/reference implementation. A full physical Game → Y trial is still needed to prove camera-derived Board placement, all four weapons, ring/core completion, failure handling, and external display continuity before declaring an installation release.
+- The former Level/Art normalized-image duplication is resolved: Level owns one shared authored content package for Tiled editing and runtime delivery, and Game forwards its versioned asset descriptor to Y.
 
 ## How to record the next decision
 

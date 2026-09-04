@@ -658,6 +658,7 @@ def _arm_dict(side):
         "mode_name": raw["mode_name"],
         "joints": raw["joints"],
         "pose": raw["pose"],
+        "feedback_at": raw.get("last_feedback", 0.0),
         "servo_active": raw["servo_active"],
         "servo_error": raw["servo_error"],
         "error": raw.get("error", False),

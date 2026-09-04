@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
@@ -34,7 +35,7 @@ MANIFEST = {
     ),
     "group": "Photon Engine",
     "default_page": "",
-    "pages": [{"path": "", "label": "Game state"}],
+    "pages": [{"path": "", "label": "Game settings"}],
 }
 
 bp = Blueprint("photon_game", __name__)
@@ -46,12 +47,14 @@ _hub_ctx = None
 _engine: DefenseEngine | None = None
 _settings = SettingsStore(SETTINGS_PATH)
 _level_projection: dict[str, Any] | None = None
+_presentation: dict[str, Any] = {}
 _revision = 1
 _run_id: str | None = None
 _history_sequence = 0
 _inputs = {
     "level": {"status": "unavailable", "error": "not read yet"},
     "board": {"status": "unavailable", "error": "not read yet"},
+    "presentation": {"status": "unavailable", "error": "not read yet"},
 }
 _storage = {
     "settings": {"status": "ready", "error": None},
@@ -169,6 +172,49 @@ def _simple_level(runtime):
     }
 
 
+def _set_presentation(value, error=None):
+    """Validate Level's optional descriptor, then forward it without resolving art."""
+    global _presentation
+    if not error:
+        if not isinstance(value, dict):
+            error = "Photon Level supplied no presentation assets"
+        elif value.get("contract") != "photon.level.assets" or type(value.get("version")) is not int or value["version"] != 1:
+            error = "Photon Level presentation contract mismatch"
+        elif value.get("status") not in ("ready", "unavailable"):
+            error = "Photon Level presentation status is invalid"
+        else:
+            base, assets = value.get("base"), value.get("assets")
+            def safe_path(path, *, absolute=False):
+                if not isinstance(path, str) or not path:
+                    return False
+                try:
+                    parsed = urlsplit(path)
+                except ValueError:
+                    return False
+                decoded = unquote(parsed.path)
+                return (
+                    not parsed.scheme and not parsed.netloc and not parsed.fragment
+                    and "\\" not in decoded and ".." not in decoded.split("/")
+                    and decoded.startswith("/") == absolute
+                    and not decoded.startswith("//")
+                )
+            if (
+                not isinstance(value.get("revision"), str) or not value["revision"]
+                or not safe_path(base, absolute=True) or "?" in base
+                or not isinstance(assets, dict)
+                or any(not isinstance(key, str) or not safe_path(path) for key, path in assets.items())
+            ):
+                error = "Photon Level presentation payload is invalid"
+    output = (
+        {"contract": "photon.level.assets", "version": 1, "status": "unavailable",
+         "error": error, "revision": "unavailable", "base": "", "assets": {}}
+        if error else _copy(value)
+    )
+    with _lock:
+        _presentation = output
+        _set_input("presentation", status=output["status"], error=output.get("error"), revision=output["revision"])
+
+
 def _install_level(bundle):
     global _engine, _level_projection, _revision, _history_sequence
     revision = bundle["revision"]
@@ -176,6 +222,7 @@ def _install_level(bundle):
         with _lock:
             engine = _engine
         if engine is not None and engine.level.layout_revision == revision:
+            _set_presentation(bundle.get("presentation"))
             _set_input("level", status="ready", revision=revision)
             return True
         if engine is not None:
@@ -188,6 +235,7 @@ def _install_level(bundle):
                 )
                 return True
 
+        _set_presentation(bundle.get("presentation"))
         next_level = ContractLevelModel(bundle["runtime"])
         projection = _simple_level(bundle["runtime"])
         start_engine = False
@@ -214,15 +262,69 @@ def _sync_level():
     bundle, error = _level_bundle()
     if error:
         _set_input("level", status="unavailable", error=error)
+        _set_presentation(None, error)
         return False
     try:
         return _install_level(bundle)
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         _set_input("level", status="unavailable", error=f"Photon Level output rejected: {exc}")
+        _set_presentation(None, f"Photon Level output rejected: {exc}")
         return False
 
 
-def _board_observation():
+def _board_input_report(value):
+    """Bounded diagnostics from the existing Board read, never physical evidence."""
+    def stamp(item):
+        try:
+            return item if type(item) in (int, float) and math.isfinite(item) else None
+        except OverflowError:
+            return None
+
+    def message(item):
+        return item[:500] if isinstance(item, str) else None
+
+    def reports(items):
+        if not isinstance(items, dict):
+            return {}
+        result = {}
+        for name, item in list(items.items())[:32]:
+            if not isinstance(name, str) or not isinstance(item, dict):
+                continue
+            result[name[:64]] = {
+                "status": item.get("status") if item.get("status") in ("ready", "unavailable", "simulated") else "unavailable",
+                "error": message(item.get("error")), "contract": message(item.get("contract")),
+                "version": item.get("version") if type(item.get("version")) is int else None,
+            }
+        return result
+
+    tracking = value.get("tracking")
+    if not isinstance(tracking, dict) or tracking.get("contract") != "photon.board.tracking" or type(tracking.get("version")) is not int or tracking["version"] != 1:
+        tracking = {}
+    placement = value.get("placement")
+    if not isinstance(placement, dict) or placement.get("contract") != "photon.board.placement" or type(placement.get("version")) is not int or placement["version"] != 1:
+        placement = {}
+    return {
+        "reported_at": time.time(), "observed_at": stamp(value.get("observed_at")),
+        "frame_at": stamp(value.get("frame_at")), "source": message(value.get("source")),
+        "inputs": reports(value.get("inputs")),
+        "tracking": {"status": message(tracking.get("status")),
+                     "sampled_at": stamp(tracking.get("sampled_at")),
+                     "inputs": reports(tracking.get("inputs"))},
+        "placement": {"status": message(placement.get("status")),
+                      "sampled_at": stamp(placement.get("sampled_at")),
+                      "error": message(placement.get("error"))},
+    }
+
+
+def _unavailable_placement(error):
+    return {
+        "contract": "photon.board.placement", "version": 1,
+        "status": "unavailable", "error": str(error)[:500],
+        "relations": [],
+    }
+
+
+def _board_observation(diagnostics=None):
     module = _module("photon-board")
     if module is None or not callable(getattr(module, "runtime_observation", None)):
         return None, "Photon Board is unavailable or disabled"
@@ -233,9 +335,11 @@ def _board_observation():
     if (
         not isinstance(value, dict)
         or value.get("contract") != BOARD_CONTRACT
-        or value.get("version") != BOARD_VERSION
+        or type(value.get("version")) is not int or value.get("version") != BOARD_VERSION
     ):
         return None, f"Photon Board contract mismatch (expected {BOARD_CONTRACT} v{BOARD_VERSION})"
+    if diagnostics is not None:
+        diagnostics.update(_board_input_report(value))
     if value.get("status") != "ready":
         errors = value.get("errors")
         detail = "; ".join(str(item) for item in errors) if isinstance(errors, list) else ""
@@ -248,48 +352,105 @@ def _board_observation():
     age = time.time() - observed_at
     if revision < 0 or not math.isfinite(observed_at) or age < -1.0 or age > 2.0:
         return None, "Photon Board observation is stale or invalid"
-    if not isinstance(value.get("tags"), list) or not isinstance(value.get("arms"), dict):
-        return None, "Photon Board observation payload is invalid"
-    if len(value["tags"]) > 128:
-        return None, "Photon Board observation contains too many tags"
+    placement = value.get("placement")
+    if (
+        not isinstance(placement, dict)
+        or placement.get("contract") != "photon.board.placement"
+        or type(placement.get("version")) is not int
+        or placement.get("version") != 1
+    ):
+        return None, "Photon Board placement contract mismatch (expected photon.board.placement v1)"
+    if placement.get("status") != "ready":
+        return None, str(placement.get("error") or "Photon Board placement evidence is unavailable")
     try:
-        seen = set()
-        for tag in value["tags"]:
-            if not isinstance(tag, dict):
+        sampled_at = float(placement["sampled_at"])
+        source_epoch = placement["source_epoch"]
+        placement_revision = placement["revision"]
+        relations = placement["relations"]
+        if (
+            not math.isfinite(sampled_at)
+            or time.time() - sampled_at < -1.0
+            or time.time() - sampled_at > 2.0
+            or not isinstance(source_epoch, str)
+            or not 1 <= len(source_epoch) <= 160
+            or type(placement_revision) is not int
+            or placement_revision < 0
+            or not isinstance(relations, list)
+            or len(relations) > 512
+        ):
+            raise ValueError
+        clean_relations = []
+        identities = set()
+        ranks = set()
+        targets = set()
+        for relation in relations:
+            if not isinstance(relation, dict):
                 raise ValueError
-            tag_id = int(tag["id"])
-            nx, ny = float(tag["nx"]), float(tag["ny"])
-            missing = float(tag.get("missing", 0))
+            relation_id = relation["relation_id"]
+            movable_id = relation["movable_id"]
+            marker_id = relation["marker_id"]
+            arm = relation["arm"]
+            rank = relation["rank"]
+            stable = relation["stable"]
+            distance = float(relation["distance"])
+            observed_since = float(relation["observed_since"])
+            stable_at = float(relation["stable_at"])
+            marker_seen_at = float(relation["marker_seen_at"])
             if (
-                tag_id in seen
-                or not 0 <= tag_id <= 999
-                or not all(math.isfinite(item) for item in (nx, ny, missing))
-                or not 0 <= nx <= 1
-                or not 0 <= ny <= 1
-                or missing < 0
+                not isinstance(relation_id, str) or not 1 <= len(relation_id) <= 240
+                or type(movable_id) is not int or not 100 <= movable_id <= 999
+                or type(marker_id) is not int or not 0 <= marker_id < 100
+                or arm not in {"green", "purple"}
+                or type(rank) is not int or not 0 <= rank < 100
+                or type(stable) is not bool
+                or not all(math.isfinite(item) for item in (
+                    distance, observed_since, stable_at, marker_seen_at,
+                ))
+                or not 0 <= distance <= 1
+                or observed_since > stable_at
+                or marker_seen_at > sampled_at + 1.0
+                or stable and stable_at > sampled_at + 0.01
+                or relation_id in identities
+                or (arm, movable_id, rank) in ranks
+                or (arm, movable_id, marker_id) in targets
             ):
                 raise ValueError
-            seen.add(tag_id)
-        for side, arm in value["arms"].items():
-            if side not in {"green", "purple"} or not isinstance(arm, dict):
-                raise ValueError
-            if str(arm.get("pump_mode") or "off") not in {"suck", "blow", "off", "conflict"}:
-                raise ValueError
+            identities.add(relation_id)
+            ranks.add((arm, movable_id, rank))
+            targets.add((arm, movable_id, marker_id))
+            clean_relations.append({
+                "relation_id": relation_id, "movable_id": movable_id,
+                "marker_id": marker_id, "arm": arm, "rank": rank,
+                "distance": distance, "observed_since": observed_since,
+                "stable_at": stable_at, "stable": stable,
+                "marker_seen_at": marker_seen_at,
+            })
     except (KeyError, TypeError, ValueError, OverflowError):
-        return None, "Photon Board observation payload is invalid"
-    return value, None
+        return None, "Photon Board placement payload is invalid"
+    return {
+        "contract": "photon.board.placement", "version": 1,
+        "status": "ready", "error": None,
+        "revision": placement_revision,
+        "board_revision": revision,
+        "source": str(value.get("source") or "unknown")[:80],
+        "source_epoch": source_epoch, "sampled_at": sampled_at,
+        "relations": clean_relations,
+    }, None
 
 
 def _physical_observation():
-    observation, error = _board_observation()
+    upstream = {}
+    observation, error = _board_observation(upstream)
     if error:
-        _set_input("board", status="unavailable", error=error)
-        return [], {}
+        _set_input("board", status="unavailable", error=error, upstream=upstream)
+        return _unavailable_placement(error)
     _set_input(
-        "board", status="ready", revision=int(observation["revision"]),
+        "board", status="ready", revision=int(observation["board_revision"]),
         source=str(observation.get("source") or "unknown"),
+        placement_revision=int(observation["revision"]),
+        upstream=upstream,
     )
-    return _copy(observation["tags"]), _copy(observation["arms"])
+    return _copy(observation)
 
 
 def _append_history(kind, detail=None):
@@ -346,9 +507,12 @@ def _configuration_snapshot(engine):
     output.update({
         "contract": "photon.game.settings",
         "version": 1,
-        "status": "ready",
         "authored_wave_enemy_counts": [],
     })
+    with _lock:
+        _storage["settings"] = {
+            "status": output["status"], "error": output.get("error"),
+        }
     if engine is not None:
         with engine.lock:
             output["authored_wave_enemy_counts"] = [
@@ -362,12 +526,14 @@ def _public_snapshot(*, compact_enemies=False):
     _sync_level()
     with _lock:
         engine = _engine
+    configuration = _configuration_snapshot(engine)
+    with _lock:
         inputs = _copy(_inputs)
         storage = _copy(_storage)
         level = _copy(_level_projection)
+        presentation = _copy(_presentation)
         revision = _revision
         run_id = _run_id
-    configuration = _configuration_snapshot(engine)
     if engine is None:
         return {
             "contract": CONTRACT,
@@ -380,6 +546,7 @@ def _public_snapshot(*, compact_enemies=False):
             "paused": False,
             "virtual_play": False,
             "level": None,
+            "presentation": presentation,
             "enemies": [],
             "towers": [],
             "inputs": inputs,
@@ -396,6 +563,7 @@ def _public_snapshot(*, compact_enemies=False):
         "revision": revision,
         "run_id": run_id,
         "level": level,
+        "presentation": presentation,
         "inputs": inputs,
         "storage": storage,
         "configuration": configuration,
@@ -525,6 +693,13 @@ def apply_command(data):
         if isinstance(exc, GameError):
             raise
         raise GameError(str(exc)) from exc
+    except OSError as exc:
+        with _lock:
+            _storage["settings"] = {
+                "status": "unavailable", "error": str(_settings.error or exc),
+            }
+            _revision += 1
+        raise GameError(f"settings were not saved: {exc}") from exc
     if action not in {"configure", "reset_settings"}:
         _append_history("operator_command", {"action": action})
     return game_snapshot()
@@ -533,6 +708,11 @@ def apply_command(data):
 def hub_init(ctx):
     global _hub_ctx
     _hub_ctx = ctx
+    with _lock:
+        _storage["settings"] = {
+            "status": "unavailable" if _settings.error else "ready",
+            "error": _settings.error,
+        }
     _sync_level()
     with _lock:
         engine = _engine
@@ -543,7 +723,7 @@ def hub_init(ctx):
 
 
 def hub_stop():
-    global _hub_ctx, _engine, _level_projection
+    global _hub_ctx, _engine, _level_projection, _presentation
     with _lock:
         engine = _engine
     if engine is not None:
@@ -552,9 +732,11 @@ def hub_stop():
     with _lock:
         _engine = None
         _level_projection = None
+        _presentation = {}
         _hub_ctx = None
         _inputs["level"] = {"status": "unavailable", "error": "not read yet"}
         _inputs["board"] = {"status": "unavailable", "error": "not read yet"}
+        _inputs["presentation"] = {"status": "unavailable", "error": "not read yet"}
 
 
 def _operator_only():
@@ -564,6 +746,7 @@ def _operator_only():
 
 
 @bp.route("/")
+@bp.route("/settings")
 def index():
     return send_from_directory(HERE, "index.html")
 
@@ -586,4 +769,4 @@ def command_api():
     try:
         return jsonify({"ok": True, "output": apply_command(request.get_json(silent=True))})
     except GameError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": False, "error": str(exc), "errors": exc.fields}), 400

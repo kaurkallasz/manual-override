@@ -99,35 +99,56 @@ class SettingsStore:
         self.revision = 1
         self.draft = dict(DEFAULTS)
         self.preset = "balanced"
+        self.error: str | None = None
         self._load()
 
     def _load(self) -> None:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            clean, errors = validate_settings(data.get("settings") or {})
+            if not isinstance(data, dict):
+                raise ValueError("settings document must be an object")
+            if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+                raise ValueError("expected settings schema version 1")
+            incoming = data.get("settings")
+            if not isinstance(incoming, dict) or set(incoming) != set(RULES):
+                raise ValueError("settings document must contain every known setting and no unknown settings")
+            clean, errors = validate_settings(incoming)
             if errors:
-                return
+                raise ValueError("persisted settings failed validation")
+            revision = data.get("revision", 1)
+            preset = data.get("preset", "custom")
+            if type(revision) is not int or revision < 1 or not isinstance(preset, str):
+                raise ValueError("settings revision or preset is invalid")
             self.draft = clean
-            self.preset = str(data.get("preset") or "custom")[:40]
-            self.revision = max(1, int(data.get("revision", 1)))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            pass
+            self.preset = (preset or "custom")[:40]
+            self.revision = revision
+            self.error = None
+        except FileNotFoundError:
+            self.error = None
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.error = f"Could not load settings; defaults remain active: {exc}"
 
-    def _save_locked(self) -> None:
+    def _save_locked(self, draft, preset, revision) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(self.path.suffix + ".tmp")
         payload = {
             "schema_version": 1,
-            "revision": self.revision,
-            "preset": self.preset,
-            "settings": self.draft,
+            "revision": revision,
+            "preset": preset,
+            "settings": draft,
         }
-        with temp.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp, self.path)
+        try:
+            with temp.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, self.path)
+        finally:
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                pass
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
@@ -137,6 +158,8 @@ class SettingsStore:
         with self.lock:
             return {
                 "ok": True,
+                "status": "unavailable" if self.error else "ready",
+                "error": self.error,
                 "revision": self.revision,
                 "preset": self.preset,
                 "settings": dict(self.draft),
@@ -154,10 +177,17 @@ class SettingsStore:
         if errors:
             return None, errors
         with self.lock:
+            next_preset = str(preset or "custom")[:40]
+            next_revision = self.revision + 1
+            try:
+                self._save_locked(clean, next_preset, next_revision)
+            except OSError as exc:
+                self.error = f"Could not save settings; previous values remain active: {exc}"
+                raise
             self.draft = clean
-            self.preset = str(preset or "custom")[:40]
-            self.revision += 1
-            self._save_locked()
+            self.preset = next_preset
+            self.revision = next_revision
+            self.error = None
             return self.response(), {}
 
     def reset_defaults(self) -> dict[str, Any]:

@@ -98,6 +98,8 @@ def _tileset_catalog(
             item: dict[str, Any] = {
                 "asset_id": asset_id,
                 "alignment": alignment,
+                # Private authoring metadata; never included in visual-scene output.
+                "image_path": (tileset_path.parent / (tile.get("image") or sheet_image or "")).resolve(),
             }
             if tile.get("image"):
                 item["source"] = None

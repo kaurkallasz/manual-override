@@ -3,7 +3,7 @@
 import json
 import os
 
-from flask import Blueprint, Response, jsonify, request, send_from_directory
+from flask import Blueprint, Response, jsonify, redirect, request, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GAME_CONTRACT = "photon.game"
@@ -16,7 +16,7 @@ MANIFEST = {
     "default_page": "game",
     "pages": [
         {"path": "game", "label": "Game master"},
-        {"path": "settings", "label": "Game settings"},
+        {"path": "settings", "label": "Photon Game settings"},
         {"path": "screen", "label": "External screen", "newtab": True},
     ],
 }
@@ -83,12 +83,26 @@ def screen():
 
 @bp.route("/settings")
 def settings():
-    return send_from_directory(HERE, "settings.html")
+    # Compatibility shortcut only: Game owns the form as well as its settings.
+    game, error = _game()
+    if game is None:
+        return jsonify(_unavailable(error)), 503
+    return redirect(request.script_root + "/p/photon-game/settings")
 
 
 @bp.route("/tower-defence-view.js")
 def renderer():
     return send_from_directory(HERE, "tower-defence-view.js")
+
+
+@bp.route("/data-flow.js")
+def data_flow_script():
+    return send_from_directory(HERE, "data-flow.js")
+
+
+@bp.route("/data-flow.css")
+def data_flow_style():
+    return send_from_directory(HERE, "data-flow.css")
 
 
 @bp.route("/api/state")
@@ -130,15 +144,13 @@ def command_api():
 
 @bp.route("/api/art")
 def art_api():
-    art = _module("photon-art")
-    if art is None or not callable(getattr(art, "art_snapshot", None)):
-        return jsonify({"status": "unavailable", "error": "Photon Art unavailable"}), 503
-    try:
-        output = art.art_snapshot()
-    except Exception as exc:
-        return jsonify({"status": "unavailable", "error": f"Photon Art failed: {exc}"}), 503
-    if not isinstance(output, dict) or output.get("contract") != "photon.art" or output.get("version") != 2:
-        return jsonify({"status": "unavailable", "error": "Photon Art contract mismatch"}), 503
+    # Compatibility URL only. Both current pages use the Game snapshot/SSE.
+    game, error = _game()
+    if game is None:
+        return jsonify(_unavailable(error)), 503
+    output = game.game_snapshot().get("presentation")
+    if not isinstance(output, dict):
+        return jsonify(_unavailable("Game presentation assets unavailable")), 503
     output = dict(output)
-    output["base"] = request.script_root + "/p/photon-art/assets"
-    return jsonify(output)
+    output["base"] = request.script_root + output.get("base", "")
+    return jsonify(output), 200 if output.get("status") == "ready" else 503

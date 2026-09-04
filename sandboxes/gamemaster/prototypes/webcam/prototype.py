@@ -825,6 +825,12 @@ class CameraManager:
             out.sort(key=lambda t: t["id"])
             return out, sorted(self._overlay_detections)
 
+    def detection_frame_at(self):
+        """Wall-clock time of the last processed frame, including empty frames."""
+        with self._lock:
+            stamp = self._last_detection_ts
+        return time.time() - max(0.0, time.monotonic() - stamp) if stamp else 0.0
+
     def detections(self, now):
         """Immediate reads from the same detections used to draw the MJPEG overlay."""
         return self.detection_snapshot(now)[0]
@@ -873,6 +879,7 @@ def tag_snapshot():
     return {
         "contract": TAG_CONTRACT,
         "version": TAG_VERSION,
+        "frame_at": _mgr.detection_frame_at(),
         "status": "ready" if ready else "unavailable",
         "error": None if ready else str(status.get("error") or "camera is not open"),
         "observed_at": time.time(),

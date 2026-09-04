@@ -8,8 +8,9 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +55,6 @@ class PhotonContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.level = load("photon-level")
         cls.board = load("photon-board")
-        cls.art = load("photon-art")
         cls.game = load("photon-game")
         cls.presentation = load("laser-tag-y")
         cls.log_folder = tempfile.TemporaryDirectory()
@@ -74,7 +74,6 @@ class PhotonContractTests(unittest.TestCase):
             "photon-level": cls.level,
             "photon-board": cls.board,
             "photon-game": cls.game,
-            "photon-art": cls.art,
         }
         cls.modules = modules
         cls.game.hub_init(FakeContext(modules))
@@ -90,7 +89,7 @@ class PhotonContractTests(unittest.TestCase):
     def test_each_output_has_one_named_integer_version_contract(self):
         outputs = [
             self.level.level_snapshot(), self.board.board_snapshot(),
-            self.game.game_snapshot(), self.art.art_snapshot(),
+            self.game.game_snapshot(), self.level.presentation_assets(),
         ]
         for output in outputs:
             self.assertIsInstance(output["contract"], str)
@@ -135,7 +134,8 @@ class PhotonContractTests(unittest.TestCase):
                 "photon.game.settings",
             )
             art = client.get("/p/laser-tag-y/api/art")
-            self.assertEqual(art.get_json()["contract"], "photon.art")
+            self.assertEqual(art.get_json()["contract"], "photon.level.assets")
+            self.assertEqual(response.get_json()["presentation"], self.level.presentation_assets())
 
     def test_changed_sibling_contract_fails_locally_not_system_wide(self):
         class ChangedGame:
@@ -144,7 +144,7 @@ class PhotonContractTests(unittest.TestCase):
                 return {"contract": "photon.game", "version": 3, "status": "ready"}
 
         self.presentation.hub_init(FakeContext({
-            "photon-game": ChangedGame(), "photon-art": self.art,
+            "photon-game": ChangedGame(),
         }))
         try:
             app = Flask("photon-contract-mismatch-test")
@@ -154,16 +154,20 @@ class PhotonContractTests(unittest.TestCase):
                 art = client.get("/p/laser-tag-y/api/art")
             self.assertEqual(state.status_code, 503)
             self.assertIn("contract mismatch", state.get_json()["error"])
-            self.assertEqual(art.status_code, 200)
+            self.assertEqual(art.status_code, 503)
         finally:
             self.presentation.hub_init(FakeContext(self.modules))
 
     def test_y_serves_separate_gamemaster_and_external_presentations(self):
         app = Flask("laser-tag-y-pages-test")
         app.register_blueprint(self.presentation.bp, url_prefix="/p/laser-tag-y")
+        app.register_blueprint(self.game.bp, url_prefix="/p/photon-game")
         with app.test_client() as client:
             game = client.get("/p/laser-tag-y/game")
-            settings = client.get("/p/laser-tag-y/settings")
+            shortcut = client.get("/p/laser-tag-y/settings")
+            self.assertEqual(shortcut.status_code, 302)
+            self.assertEqual(shortcut.headers["Location"], "/p/photon-game/settings")
+            settings = client.get(shortcut.headers["Location"])
             screen = client.get("/p/laser-tag-y/screen")
             renderer = client.get("/p/laser-tag-y/tower-defence-view.js")
         self.assertEqual(
@@ -173,6 +177,7 @@ class PhotonContractTests(unittest.TestCase):
         self.assertIn(b"Tower Defense settings", game.data)
         self.assertIn(b"owned and validated by Photon Game", settings.data)
         self.assertIn(b"photon.game.settings", settings.data)
+        self.assertFalse((PROTOTYPES / "laser-tag-y/settings.html").exists())
         self.assertIn(b"Virtual Atom controls", game.data)
         self.assertNotIn(b"Virtual Atom controls", screen.data)
         self.assertIn(b"TowerDefenceView", renderer.data)
@@ -180,6 +185,29 @@ class PhotonContractTests(unittest.TestCase):
         settings.close()
         screen.close()
         renderer.close()
+
+    def test_y_settings_shortcut_checks_game_and_keeps_sandbox_prefix(self):
+        app = Flask("settings-shortcut-test")
+        app.register_blueprint(self.presentation.bp, url_prefix="/p/laser-tag-y")
+        with app.test_client() as client:
+            result = client.get("/p/laser-tag-y/settings", environ_overrides={"SCRIPT_NAME": "/s/gamemaster"})
+        self.assertEqual(result.headers["Location"], "/s/gamemaster/p/photon-game/settings")
+
+        class IncompatibleGame:
+            @staticmethod
+            def game_snapshot():
+                return {"contract": "photon.game", "version": 999}
+
+        try:
+            for modules in ({}, {"photon-game": IncompatibleGame()}):
+                self.presentation.hub_init(FakeContext(modules))
+                with app.test_client() as client:
+                    result = client.get("/p/laser-tag-y/settings")
+                self.assertEqual(result.status_code, 503)
+                self.assertEqual(result.get_json()["status"], "unavailable")
+                self.assertNotIn("Location", result.headers)
+        finally:
+            self.presentation.hub_init(FakeContext(self.modules))
 
     def test_y_forwards_operator_intent_without_implementing_commands(self):
         class RecordingGame:
@@ -230,6 +258,10 @@ class LaserTagYExtractionTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, runtime_source)
         self.assertNotIn("fetch(", (module_dir / "tower-defence-view.js").read_text(encoding="utf-8"))
+        # The diagram may NAME upstream modules/files, but must never read them.
+        diagram = (module_dir / "data-flow.js").read_text(encoding="utf-8")
+        for forbidden in ("fetch(", "new EventSource", "XMLHttpRequest", "get_prototype", "import("):
+            self.assertNotIn(forbidden, diagram)
 
     def test_y_keeps_z_combat_presentation_and_canvas_fallbacks(self):
         renderer = (PROTOTYPES / "laser-tag-y/tower-defence-view.js").read_text(
@@ -273,33 +305,46 @@ class LaserTagYExtractionTests(unittest.TestCase):
         node = shutil.which("node")
         if node is None:
             self.skipTest("Node.js is required for renderer geometry verification")
+        game_module = load("photon-game")
+        bundle = load("photon-level").runtime_bundle()
+        engine = game_module.DefenseEngine(bundle["runtime"], bundle["waves"])
+        controls = {
+            tower_type: engine._tower_targeting({
+                "tower_type": tower_type, "x": 100, "y": 100,
+                "aim_angle": 0, "aim_spread": .5, "aruco_id": 40,
+            })["control"]
+            for tower_type in (
+                "machine_gun", "flamethrower", "mortar", "tesla_coil"
+            )
+        }
         renderer_path = json.dumps(str(
             PROTOTYPES / "laser-tag-y/tower-defence-view.js"
         ))
         script = f"""
 require({renderer_path});
 const geometry = globalThis.TowerDefenceView.geometry;
+const controls = {json.dumps(controls)};
 const close = (actual, expected, label) => {{
   if (Math.abs(actual - expected) > 1e-6) {{
     throw new Error(`${{label}}: expected ${{expected}}, got ${{actual}}`);
   }}
 }};
-const narrow = geometry.towerAimFromPoint('machine_gun', 100, 100, 460, 100);
+const narrow = geometry.towerAimFromPoint(controls.machine_gun, 100, 100, 460, 100);
 close(narrow.angle, 0, 'machine-gun direction');
 close(narrow.spread, 0, 'machine-gun narrow spread');
 close(narrow.distance, 360, 'machine-gun far distance');
-const wide = geometry.towerAimFromPoint('machine_gun', 100, 100, 100, 290);
+const wide = geometry.towerAimFromPoint(controls.machine_gun, 100, 100, 100, 290);
 close(wide.angle, 90, 'machine-gun direction after drag');
 close(wide.spread, 1, 'machine-gun wide spread');
 close(wide.distance, 190, 'machine-gun near distance');
-const mortar = geometry.towerAimFromPoint('mortar', 100, 100, 600, 100);
+const mortar = geometry.towerAimFromPoint(controls.mortar, 100, 100, 600, 100);
 close(mortar.spread, 1, 'mortar far spread');
 close(mortar.distance, 500, 'mortar far distance');
-const tesla = geometry.towerAimFromPoint('tesla_coil', 100, 100, 100, 292.5, 33);
+const tesla = geometry.towerAimFromPoint(controls.tesla_coil, 100, 100, 100, 292.5, 33);
 close(tesla.angle, 33, 'tesla retains its irrelevant direction');
 close(tesla.spread, 0.5, 'tesla reach');
 close(tesla.distance, 192.5, 'tesla distance');
-const upward = geometry.towerAimFromPoint('flamethrower', 100, 100, 100, -135);
+const upward = geometry.towerAimFromPoint(controls.flamethrower, 100, 100, 100, -135);
 close(upward.angle, 270, 'normalized upward direction');
 const aligned = geometry.targetingHandlePoint(
   {{x: 10, y: 20}},
@@ -313,23 +358,41 @@ close(aligned.y, 70, 'handle uses displayed turret y');
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_photon_art_owns_the_copied_immutable_runtime_pack(self):
-        art = load("photon-art")
-        manifest = art.art_snapshot()
-        self.assertEqual((manifest["contract"], manifest["version"]), ("photon.art", 2))
-        self.assertEqual(manifest["sprites"]["enemy"], "enemy.svg")
-        pack = PROTOTYPES / "photon-art/assets" / manifest["packs"]["laser_tag_z_runtime"]["root"]
+    def test_y_has_no_weapon_rule_table_and_freezes_visual_age_without_feed(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is required for renderer timing verification")
+        renderer = PROTOTYPES / "laser-tag-y/tower-defence-view.js"
+        source = renderer.read_text(encoding="utf-8")
+        self.assertNotIn("AIM_GEOMETRY", source)
+        self.assertNotIn("0.9 + (linkedTurretCount - 1) * 0.1", source)
+        script = f"""
+require({json.dumps(str(renderer))});
+const age = globalThis.TowerDefenceView.geometry.boundedVisualAge;
+if (age(1000, 9000, true, 0) !== 0.5) throw Error('live interpolation must be bounded');
+if (age(1000, 9000, false, 0.23) !== 0.23) throw Error('disconnected visuals must freeze');
+"""
+        result = subprocess.run(
+            [node, "-e", script], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_photon_level_owns_the_copied_runtime_pack(self):
+        manifest = load("photon-level").presentation_assets()
+        self.assertEqual((manifest["contract"], manifest["version"]), ("photon.level.assets", 1))
+        self.assertTrue(manifest["assets"]["fallback/enemy"].startswith("enemy.svg?v="))
+        pack = PROTOTYPES / "photon-level/assets/game-art"
         self.assertTrue((pack / "sprites/enemies-light-orcs-v2/grunt-walk-01.png").is_file())
         self.assertTrue((pack / "z-pixel-v2/normalized/structures/runtime/mortar-base-v1.png").is_file())
         self.assertTrue((pack / "z-pixel-v2/normalized/effects/combat/core-purge-wave-v1.png").is_file())
         self.assertGreaterEqual(len(list(pack.rglob("*.png"))), 60)
 
-    def test_every_scene_and_marker_asset_resolves_inside_photon_art(self):
+    def test_every_scene_and_marker_asset_resolves_inside_photon_level(self):
         import cv2
 
-        art = load("photon-art").art_snapshot()
+        art = load("photon-level").presentation_assets()
         level = load("photon-level").runtime_bundle()["runtime"]
-        art_root = PROTOTYPES / "photon-art/assets"
+        art_root = PROTOTYPES / "photon-level/assets"
         scene_keys = {
             f"map/{item['asset_id']}"
             for layer in level["visual_scene"]["layers"]
@@ -338,10 +401,10 @@ close(aligned.y, 70, 'handle uses displayed turret y');
         }
         self.assertFalse(scene_keys - set(art["assets"]))
         for key in scene_keys:
-            self.assertTrue((art_root / art["assets"][key]).is_file())
+            self.assertTrue((art_root / unquote(urlsplit(art["assets"][key]).path)).is_file())
         for marker_id in (38, *range(40, 56)):
             marker = cv2.imread(
-                str(art_root / art["assets"][f"marker/{marker_id}"]),
+                str(art_root / urlsplit(art["assets"][f"marker/{marker_id}"]).path),
                 cv2.IMREAD_GRAYSCALE,
             )
             dictionary = cv2.aruco.getPredefinedDictionary(
@@ -818,11 +881,160 @@ class PhotonGameExtractionTests(unittest.TestCase):
         def comparable(engine):
             value = engine.snapshot()
             value.pop("server_time", None)
+            value.pop("physical_input_error", None)
+            for tower in value["towers"]:
+                tower.get("targeting", {}).pop("control", None)
             for event in value["events"]:
                 event.pop("sequence", None)
             return value
 
         self.assertEqual(comparable(extracted), comparable(legacy))
+
+    def test_board_relationship_path_matches_z_physical_placement_policy(self):
+        bundle = self.level.runtime_bundle()
+        legacy = self.legacy_runtime.DefenseEngine(
+            ROOT / "assets/tiled/levels/z-pixel-first-map.tmj",
+            ROOT / "assets/tiled/levels/z-pixel-first-map.waves.json",
+        )
+        legacy.reload_level(
+            self.legacy_runtime.ContractLevelModel(bundle["runtime"]),
+            bundle["waves"],
+        )
+        extracted = load("photon-game").DefenseEngine(
+            bundle["runtime"], bundle["waves"]
+        )
+        board = load("photon-board")
+        tracker = board.PhysicalPlacementTracker()
+        for engine in (legacy, extracted):
+            engine.set_virtual_play(False)
+            engine.start()
+        extracted.run_started_at = 100.0
+
+        tags = [
+            {"id": 48, "nx": .2, "ny": .3, "missing": 0},
+            {"id": 100, "nx": .2, "ny": .3, "missing": 0},
+        ]
+        arm_state = {
+            "green": {"connected": True, "enabled": True, "pump_mode": "suck"},
+        }
+
+        def new_sample(at):
+            arms = json.loads(json.dumps(arm_state))
+            for arm in arms.values():
+                arm["feedback_at"] = at
+            runtime = {
+                "status": "ready", "source": "camera", "frame_at": at,
+                "tags": json.loads(json.dumps(tags)), "arms": arms,
+            }
+            extracted.ingest_physical(tracker.update(runtime, at))
+
+        for legacy_at, wall_at in ((1.0, 100.0), (1.6, 100.6)):
+            legacy.ingest_physical(tags, arm_state, now=legacy_at)
+            new_sample(wall_at)
+        self.assertEqual(legacy.snapshot()["towers"], extracted.snapshot()["towers"])
+
+        arm_state["green"]["pump_mode"] = "off"
+        for legacy_at, wall_at in ((2.0, 101.0), (2.6, 101.6)):
+            legacy.ingest_physical(tags, arm_state, now=legacy_at)
+            new_sample(wall_at)
+        self.assertEqual(
+            [(tower["atom_tag_id"], tower["aruco_id"]) for tower in legacy.snapshot()["towers"]],
+            [(tower["atom_tag_id"], tower["aruco_id"]) for tower in extracted.snapshot()["towers"]],
+        )
+
+        tags[:] = [
+            {"id": 48, "nx": .2, "ny": .3, "missing": 0},
+            {"id": 49, "nx": .4, "ny": .3, "missing": 0},
+            {"id": 100, "nx": .4, "ny": .3, "missing": 0},
+        ]
+        for legacy_at, wall_at in ((3.0, 102.0), (3.6, 102.6)):
+            legacy.ingest_physical(tags, arm_state, now=legacy_at)
+            new_sample(wall_at)
+        self.assertEqual(
+            [(tower["atom_tag_id"], tower["aruco_id"]) for tower in legacy.snapshot()["towers"]],
+            [(tower["atom_tag_id"], tower["aruco_id"]) for tower in extracted.snapshot()["towers"]],
+        )
+
+    def test_settings_corruption_is_explicit_and_defaults_remain_repairable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            path.write_text("[]", encoding="utf-8")
+            store = load("photon-game").SettingsStore(path)
+            response = store.response()
+            self.assertEqual(response["status"], "unavailable")
+            self.assertIn("must be an object", response["error"])
+            self.assertEqual(response["settings"], response["defaults"])
+            repaired, errors = store.update(response["defaults"], "balanced")
+            self.assertEqual(errors, {})
+            self.assertEqual(repaired["status"], "ready")
+
+    def test_failed_settings_save_never_changes_live_draft_or_revision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = load("photon-game").SettingsStore(
+                Path(folder) / "settings.json"
+            )
+            before = store.response()
+            changed = dict(before["settings"], wave_count=2)
+            with mock.patch.object(
+                store, "_save_locked", side_effect=OSError("disk full")
+            ):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    store.update(changed)
+            after = store.response()
+            self.assertEqual(after["settings"], before["settings"])
+            self.assertEqual(after["revision"], before["revision"])
+            self.assertEqual(after["status"], "unavailable")
+            self.assertIn("previous values remain active", after["error"])
+
+    def test_settings_api_surfaces_write_failure_and_preserves_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = self._game(folder)
+            before = game._settings.response()
+            changed = dict(before["settings"], wave_count=2)
+            try:
+                with mock.patch.object(
+                    game._settings, "_save_locked", side_effect=OSError("disk full")
+                ):
+                    with self.assertRaisesRegex(game.GameError, "not saved"):
+                        game.apply_command({"action": "configure", "settings": changed})
+                snapshot = game.game_snapshot()
+                self.assertEqual(snapshot["configuration"]["settings"], before["settings"])
+                self.assertEqual(snapshot["configuration"]["revision"], before["revision"])
+                self.assertEqual(snapshot["configuration"]["status"], "unavailable")
+                self.assertEqual(snapshot["storage"]["settings"]["status"], "unavailable")
+            finally:
+                game.hub_stop()
+
+    def test_core_placement_waits_for_board_declared_post_gate_window(self):
+        game_module = load("photon-game")
+        bundle = self.level.runtime_bundle()
+        engine = game_module.DefenseEngine(bundle["runtime"], bundle["waves"])
+        engine.set_virtual_play(False)
+        engine.start()
+        engine.run_started_at = 90.0
+        engine.ring_completed_at = 0.0
+        engine.ring_completed_wall_at = 100.0
+        engine.core_stage = "ring_ready"
+
+        def descriptor(sampled_at):
+            return {
+                "contract": "photon.board.placement", "version": 1,
+                "status": "ready", "sampled_at": sampled_at,
+                "relations": [
+                    {
+                        "relation_id": f"core:{atom}", "movable_id": atom,
+                        "marker_id": 38, "arm": side, "distance": 0,
+                        "observed_since": 90.0, "stable_at": 90.55,
+                        "stable": True,
+                    }
+                    for atom, side in ((100, "green"), (102, "purple"))
+                ],
+            }
+
+        engine.ingest_physical(descriptor(100.54))
+        self.assertEqual(engine.core_stage, "ring_ready")
+        engine.ingest_physical(descriptor(100.56))
+        self.assertEqual(engine.core_stage, "detonating")
 
     def test_runtime_has_no_file_level_camera_render_or_asset_dependency(self):
         module_dir = PROTOTYPES / "photon-game"
@@ -910,6 +1122,106 @@ class PhotonGameExtractionTests(unittest.TestCase):
                 self.assertTrue(all(count > 0 for count in counts))
             finally:
                 game.hub_stop()
+
+    def test_game_settings_page_and_http_validation_work_without_siblings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            game = load("photon-game")
+            game.LOG_PATH = str(Path(folder) / "runs.jsonl")
+            game._settings = game.SettingsStore(Path(folder) / "settings.json")
+            game.hub_init(FakeContext({}))
+            try:
+                app = Flask("game-owned-settings-test")
+                app.register_blueprint(game.bp, url_prefix="/p/photon-game")
+                operator = {"hhh.roles": {"gamemaster"}}
+                before = game._settings.snapshot()
+                with app.test_client() as client:
+                    with client.get("/p/photon-game/") as page, client.get("/p/photon-game/settings") as alias:
+                        self.assertEqual(page.status_code, 200)
+                        self.assertEqual(page.data, alias.data)
+                        self.assertIn(b"owned and validated by Photon Game", page.data)
+                        self.assertIn(b"Input and storage diagnostics", page.data)
+                        self.assertNotIn(b"laser-tag-y", page.data)
+                        for key in game._settings.response()["limits"]:
+                            self.assertIn(f'data-key="{key}"'.encode(), page.data)
+                    denied = client.post("/p/photon-game/api/command", json={"action": "configure", "preset": "training"})
+                    self.assertEqual(denied.status_code, 403)
+                    invalid = client.post("/p/photon-game/api/command", json={"action": "configure", "settings": {"wave_count": 99}}, environ_overrides=operator)
+                    self.assertEqual(invalid.status_code, 400)
+                    self.assertIn("wave_count", invalid.get_json()["errors"])
+                    self.assertEqual(game._settings.snapshot(), before)
+                    accepted = client.post("/p/photon-game/api/command", json={"action": "configure", "preset": "training"}, environ_overrides=operator)
+                    self.assertEqual(accepted.status_code, 200)
+                    state = accepted.get_json()["output"]
+                    self.assertEqual(state["status"], "unavailable")
+                    self.assertEqual(state["configuration"]["preset"], "training")
+                    self.assertEqual(game.SettingsStore(Path(folder) / "settings.json").snapshot(), state["configuration"]["settings"])
+                    reset = client.post("/p/photon-game/api/command", json={"action": "reset_settings"}, environ_overrides=operator)
+                    self.assertEqual(reset.status_code, 200)
+                    self.assertEqual(game._settings.snapshot(), before)
+            finally:
+                game.hub_stop()
+
+    def test_game_settings_form_keeps_unsaved_edits_during_sse_updates(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node required for settings form smoke test")
+        with tempfile.TemporaryDirectory() as folder:
+            game = load("photon-game")
+            game._settings = game.SettingsStore(Path(folder) / "settings.json")
+            state = game.game_snapshot()
+        script = r"""
+const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+const html = fs.readFileSync(process.argv[1], 'utf8'), initial = JSON.parse(process.argv[2]);
+const elements = new Map(), requests = [], streams = [];
+function element(id = '') {
+  return {id, value:'', textContent:'', dataset:{}, handlers:{}, disabled:false, open:false,
+    addEventListener(name, callback) {this.handlers[name] = callback;},
+    replaceChildren(...children) {this.children = children; this.value = children[0]?.value || '';},
+    prepend(child) {this.children.unshift(child);},
+    closest() {return {querySelector: () => this.error};},
+  };
+}
+for (const match of html.matchAll(/id="([^"]+)"/g)) elements.set(match[1], element(match[1]));
+const fields = [...html.matchAll(/<input[^>]+data-key="([^"]+)"[^>]*>/g)].map(match => {
+  const input = elements.get(match[1]); input.dataset.key = match[1]; input.error = element(); return input;
+});
+const context = vm.createContext({
+  document: {getElementById: id => elements.get(id), createElement: () => element(),
+    querySelectorAll: () => fields,
+    querySelector: selector => elements.get(selector.match(/data-key="([^"]+)"/)[1])},
+  location: {pathname:'/s/gamemaster/p/photon-game/settings'}, window:{addEventListener(){}},
+  fetch: async (url, options = {}) => {
+    requests.push({url, options});
+    const post = options.method === 'POST';
+    const body = post ? {error:'settings validation failed', errors:{wave_count:'must be between 1 and 12'}} : initial;
+    return {ok:!post, status:post?400:200, text:async()=>JSON.stringify(body)};
+  },
+  EventSource: function(url) {this.url=url; this.close=()=>{}; streams.push(this);},
+});
+vm.runInContext(html.split('<script>')[1].split('</script>')[0], context);
+(async () => {
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements.get('save').disabled, false, 'settings work without a ready Level');
+  assert.equal(elements.get('wave_count').value, initial.configuration.settings.wave_count);
+  elements.get('wave_count').value = '7';
+  const update = structuredClone(initial);
+  update.phase = 'running'; update.paused = true; update.settings = initial.configuration.settings;
+  update.configuration.settings.wave_count = 2;
+  streams[0].onmessage({data:JSON.stringify(update)});
+  assert.equal(elements.get('wave_count').value, '7', 'SSE must not replace the unsaved draft');
+  assert.match(elements.get('activeNotice').textContent, /paused run.*next Start/);
+  assert.equal(streams.length, 1);
+  assert.equal(streams[0].url, '/s/gamemaster/p/photon-game/api/events');
+  await elements.get('save').handlers.click();
+  assert.equal(elements.get('wave_count').error.textContent, 'must be between 1 and 12');
+  assert.equal(elements.get('wave_count').value, '7', 'validation preserves draft');
+  assert.equal(elements.get('save').disabled, false);
+  assert.equal(JSON.parse(requests.at(-1).options.body).settings.wave_count, '7');
+  assert.ok(requests.every(request => request.url.startsWith('/s/gamemaster/p/photon-game/api/')));
+})().catch(error => {console.error(error); process.exitCode=1;});
+"""
+        result = subprocess.run([node, "-e", script, str(PROTOTYPES / "photon-game/index.html"), json.dumps(state)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_game_exposes_one_snapshot_and_one_sse_stream(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1021,8 +1333,9 @@ class PhotonGameExtractionTests(unittest.TestCase):
                 "photon-level": self.level, "photon-board": ChangedBoard(),
             })
             try:
-                tags, arms = game._physical_observation()
-                self.assertEqual((tags, arms), ([], {}))
+                placement = game._physical_observation()
+                self.assertEqual(placement["status"], "unavailable")
+                self.assertEqual(placement["relations"], [])
                 self.assertEqual(game.game_snapshot()["status"], "ready")
                 self.assertIn(
                     "contract mismatch", game.game_snapshot()["inputs"]["board"]["error"]

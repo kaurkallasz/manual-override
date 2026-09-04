@@ -26,6 +26,7 @@ import zipfile
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 
 import live
+from tracking_output import CalibrationProjection, IntentStore
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RELAY_DIR = os.path.join(os.path.dirname(HERE), "dobot-mg400-relay")
@@ -258,6 +259,25 @@ def _default_calibration2():
 
 
 _calibration2 = _default_calibration2()
+_tracking_intents = IntentStore()
+_tracking_projection_lock = threading.Lock()
+_tracking_projection_cache = (None, None)
+
+
+def tracking_projection(tags, arms):
+    """hhh.cal2.projection v1: read-only, unrotated corrected-camera/mm mapping."""
+    global _tracking_projection_cache
+    calibration = _calibration2_public()
+    key = json.dumps(calibration, sort_keys=True)
+    with _tracking_projection_lock:
+        if _tracking_projection_cache[0] != key:
+            _tracking_projection_cache = (key, CalibrationProjection(calibration))
+        return _tracking_projection_cache[1].project(tags, arms)
+
+
+def tracking_intent_snapshot():
+    """hhh.controller.intent v1: last player report, NOT observed board truth."""
+    return _tracking_intents.snapshot()
 
 
 def _roles():
@@ -295,6 +315,9 @@ def api_laser_tag_x_intent():
     kind = str(data.get("kind") or "")[:80]
     detail = dict(data.get("detail")) if isinstance(data.get("detail"), dict) else {}
     detail["team"] = side
+    # Keep read-only intent available even without an active legacy X run.
+    # The existing logging response and robot command path remain unchanged.
+    _tracking_intents.record(side, kind, detail)
     laser = _hub_ctx.get_prototype("laser-tag-x") if _hub_ctx is not None else None
     if laser is None or not hasattr(laser, "append_external_event"):
         return jsonify({"ok": False, "error": "Laser Tag X logging unavailable"}), 503

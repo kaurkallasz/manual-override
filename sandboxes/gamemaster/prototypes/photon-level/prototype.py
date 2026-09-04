@@ -1,4 +1,4 @@
-"""Photon Level: owner of authored playfield geometry and wave definitions."""
+"""Photon Level: owner of authored geometry, waves, and static artwork."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import json
 import math
 import os
 import threading
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_from_directory, url_for
 
 import live
-from level_contract import parse_tiled_level, simple_level
+from level_contract import _tileset_catalog, parse_tiled_level, properties, simple_level
 from level_layout import SocketLayoutError, update_socket_layout_file
+from level_assets import asset_snapshot
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET_ROOT = os.path.join(HERE, "assets")
@@ -29,11 +31,11 @@ MANIFEST = {
     "name": "Photon Level",
     "description": (
         "Input: one validated socket layout. Output: versioned TMJ geometry, "
-        "routes, waves, and a generic level projection."
+        "routes, waves, static artwork, and a generic level projection."
     ),
     "group": "Photon Engine",
     "default_page": "",
-    "pages": [{"path": "", "label": "Level"}],
+    "pages": [{"path": "", "label": "Level"}, {"path": "art", "label": "Artwork"}],
 }
 bp = Blueprint("photon_level", __name__)
 _lock = threading.RLock()
@@ -41,6 +43,7 @@ _live = live.LiveState()
 _raw_map: dict = {}
 _runtime: dict = {}
 _waves: dict = {}
+_map_asset_paths: dict = {}
 _load_error: str | None = None
 
 
@@ -98,14 +101,40 @@ def _load_source():
     return raw_map, runtime, waves
 
 
+def _scene_asset_paths(raw_map, runtime):
+    """Resolve authored scene IDs once, inside their owning package."""
+    _, catalog = _tileset_catalog(Path(MAP_PATH), raw_map)
+    used = {
+        item["asset_id"] for layer in runtime["visual_scene"]["layers"]
+        for item in layer["items"] if item["kind"] == "sprite"
+    }
+    root = Path(ASSET_ROOT).resolve()
+    assets = {}
+    for item in catalog.values():
+        if item["asset_id"] not in used:
+            continue
+        path = item["image_path"]
+        if not path.is_relative_to(root):
+            raise LevelError(f"preview asset unavailable (outside content package): {item['asset_id']}")
+        relative = path.relative_to(root).as_posix()
+        previous = assets.setdefault(item["asset_id"], relative)
+        if previous != relative:
+            raise LevelError(f"ambiguous preview asset: {item['asset_id']}")
+    if used - assets.keys():
+        raise LevelError("preview scene contains unresolved artwork")
+    return assets
+
+
 def _reload_source():
-    global _raw_map, _runtime, _waves, _load_error
+    global _raw_map, _runtime, _waves, _load_error, _map_asset_paths
     try:
         raw_map, runtime, waves = _load_source()
+        map_assets = _scene_asset_paths(raw_map, runtime)
     except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError) as exc:
         _load_error = str(exc)
         return False
     _raw_map, _runtime, _waves = raw_map, runtime, waves
+    _map_asset_paths = map_assets
     _load_error = None
     return True
 
@@ -146,6 +175,54 @@ def runtime_bundle():
             "error": _load_error,
             "runtime": copy.deepcopy(_runtime) if ready else None,
             "waves": copy.deepcopy(_waves.get("waves")) if ready else None,
+            "presentation": presentation_assets(),
+        }
+
+
+def presentation_assets():
+    """Static content descriptor embedded in the runtime bundle."""
+    with _lock:
+        output = asset_snapshot(ASSET_ROOT, _map_asset_paths)
+        if _load_error:
+            output.update(status="unavailable", error=_load_error)
+        return output
+
+
+def editor_snapshot():
+    """One-revision authoring view using only this module's local assets."""
+    with _lock:
+        if _load_error is not None:
+            raise LevelError(_load_error)
+        level = simple_level(_runtime)
+        asset_root = Path(ASSET_ROOT).resolve()
+        assets = _scene_asset_paths(_raw_map, _runtime)
+        for asset_id, relative in assets.items():
+            if not (asset_root / relative).is_file():
+                raise LevelError(f"preview asset unavailable: {asset_id}")
+
+        # Publish an affine display transform, not a second copy of the rules.
+        # Resizing changes only the marker's optical offset, not its footprint.
+        sockets = {socket["socket_id"]: socket for socket in level["sockets"]}
+        for layer in _raw_map["layers"]:
+            for obj in layer.get("objects", []):
+                props = properties(obj)
+                socket = sockets.get(props.get("socket_id"))
+                if socket is None:
+                    continue
+                slope = float(props["aruco_optical_center_v"]) - 0.5
+                angle = math.radians(float(obj.get("rotation", 0)))
+                socket["marker_resize_x"] = -slope * math.sin(angle)
+                socket["marker_resize_y"] = slope * math.cos(angle)
+
+        for marker_id in (38, *range(40, 56)):
+            relative = f"aruco/{marker_id}.png"
+            if not (asset_root / relative).is_file():
+                raise LevelError(f"preview marker unavailable: {marker_id}")
+            assets[f"marker/{marker_id}"] = relative
+        return {
+            "contract": "photon.level.editor", "version": 1,
+            "status": "ready", "revision": _runtime["layout_revision"],
+            "level": level, "assets": assets,
         }
 
 
@@ -209,11 +286,47 @@ def index():
     return send_from_directory(HERE, "index.html")
 
 
+@bp.route("/level-editor.js")
+def editor_script():
+    return send_from_directory(HERE, "level-editor.js")
+
+
+@bp.route("/api/editor")
+def editor_api():
+    try:
+        output = editor_snapshot()
+        output["assets"] = {
+            key: url_for(".level_asset", filename=filename)
+            for key, filename in output["assets"].items()
+        }
+        response = jsonify(output)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        response = jsonify({
+            "contract": "photon.level.editor", "version": 1,
+            "status": "unavailable", "error": str(exc),
+        })
+        response.status_code = 503
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @bp.route("/assets/<path:filename>")
 def level_asset(filename):
     response = send_from_directory(ASSET_ROOT, filename)
     response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+@bp.route("/api/assets")
+def assets_api():
+    response = jsonify(presentation_assets())
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.route("/art")
+def art_page():
+    return send_from_directory(HERE, "art.html")
 
 
 @bp.route("/api/level")
