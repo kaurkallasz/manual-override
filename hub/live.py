@@ -53,6 +53,7 @@ On the page, replace `setInterval(poll, …)` with:
 
 import json
 import threading
+import time
 
 from flask import Response
 
@@ -64,6 +65,8 @@ class LiveState:
     def __init__(self):
         self._cond = threading.Condition()
         self._ver = 0
+        self._shared_lock = threading.Lock()
+        self._shared = None
 
     def bump(self):
         """Wake every connected stream — call after mutating state."""
@@ -71,7 +74,7 @@ class LiveState:
             self._ver += 1
             self._cond.notify_all()
 
-    def stream(self, snapshot, interval=15.0):
+    def stream(self, snapshot, interval=15.0, *, shared=False, static_fields=()):
         """Return a Flask SSE `Response` that pushes `snapshot()` on every change.
 
         `snapshot` is a no-arg callable returning a JSON-serialisable dict. It is
@@ -79,23 +82,61 @@ class LiveState:
         lock freely (the two locks never nest, so they can't deadlock).
 
         `interval` is the longest gap between re-checks: short for sampled state
-        that changes without a bump, long (keep-alive) for bump-driven state."""
+        that changes without a bump, long (keep-alive) for bump-driven state.
+
+        Opt-in `shared` prepares/encodes once per version or timeout for all
+        subscribers using the same callable. `static_fields` opts into named
+        `update` events omitting those fields while unchanged. First delivery,
+        reconnect and changes to static fields always receive a full message.
+        Default streams retain their original full-snapshot behavior.
+        """
         cond = self._cond
         state = self
+        fields = tuple(static_fields)
+
+        def prepare():
+            value = snapshot()
+            if not fields:
+                payload = json.dumps(value, default=str)
+                return payload, payload, None
+            static = {key: value[key] for key in fields if key in value}
+            dynamic = {key: item for key, item in value.items() if key not in fields}
+            compact = {"default": str, "separators": (",", ":")}
+            return (
+                json.dumps(value, **compact),
+                json.dumps(dynamic, **compact),
+                json.dumps(static, sort_keys=True, **compact),
+            )
+
+        def prepared(version):
+            if not shared:
+                return prepare()
+            # Snapshot outside the condition lock: producers can bump while
+            # taking their own locks. Retain only one bounded cache entry.
+            with state._shared_lock:
+                cached = state._shared
+                key = (snapshot, fields, version)
+                if cached is None or cached[0] != key or time.monotonic() >= cached[1]:
+                    payloads = prepare()
+                    state._shared = (key, time.monotonic() + interval, payloads)
+                return state._shared[2]
 
         def gen():
             last_ver = -1
             last_sent = None
+            last_static = None
             while True:
                 with cond:
                     # wake on a bump, or re-check after `interval` seconds. We
                     # only hold the lock to read the version, never to snapshot.
                     cond.wait_for(lambda: state._ver != last_ver, timeout=interval)
                     last_ver = state._ver
-                payload = json.dumps(snapshot(), default=str)
+                payload, update, static = prepared(last_ver)
                 if payload != last_sent:
+                    patch = bool(fields) and last_sent is not None and static == last_static
                     last_sent = payload
-                    yield "data: " + payload + "\n\n"
+                    last_static = static
+                    yield ("event: update\ndata: " + update if patch else "data: " + payload) + "\n\n"
                 else:
                     yield ": ping\n\n"   # unchanged — keep-alive only
 

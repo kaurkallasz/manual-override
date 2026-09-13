@@ -121,7 +121,7 @@ def events_api():
             "data: " + json.dumps(_unavailable(error or "Photon Game SSE unavailable")) + "\n\n",
             status=503, mimetype="text/event-stream",
         )
-    return game.game_events()
+    return game.game_events(incremental=True)
 
 
 @bp.route("/api/command", methods=["POST"])
@@ -140,17 +140,3 @@ def command_api():
             "error": str(exc),
             "errors": getattr(exc, "fields", {}),
         }), 400
-
-
-@bp.route("/api/art")
-def art_api():
-    # Compatibility URL only. Both current pages use the Game snapshot/SSE.
-    game, error = _game()
-    if game is None:
-        return jsonify(_unavailable(error)), 503
-    output = game.game_snapshot().get("presentation")
-    if not isinstance(output, dict):
-        return jsonify(_unavailable("Game presentation assets unavailable")), 503
-    output = dict(output)
-    output["base"] = request.script_root + output.get("base", "")
-    return jsonify(output), 200 if output.get("status") == "ready" else 503

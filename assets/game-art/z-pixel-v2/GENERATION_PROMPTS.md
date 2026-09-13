@@ -69,7 +69,20 @@ separately rendered active square targets. Do not include endpoint towers,
 posts, sockets, roads, or scenery. Use coarse pixel scanlines, restrained
 sparks, and readable cracks instead of glossy modern bloom.
 
-## Runtime turret activation — four MP4 conversions
+## Turret elevator start and Kling prompts — v2, 2026-09-06
+
+The new shared first frame shows nearly closed, interlocking gunmetal floor
+panels with a narrow opaque black opening and a transparent exterior. The
+smaller-opening user screenshot is the primary reference. The built-in imagegen
+tool created the art and extracted exterior alpha; the keyframe builder exports
+aligned 1024px masters and black-matte Kling inputs. See
+[TURRET_ELEVATOR_START_V2.prompt.md](TURRET_ELEVATOR_START_V2.prompt.md) for the
+exact image prompts and [KLING_TURRET_INSTALL_PROMPTS.md](KLING_TURRET_INSTALL_PROMPTS.md)
+for all four revised three-second video prompts. The new direction uses sliding
+doors, a 55% to 100% elevator perspective rise, docking, and a boot rotation.
+This is a new still/prompt package; elevator video clips have not yet been made.
+
+## Existing runtime turret activation — four legacy MP4 conversions
 
 Four separate 1:1 Kling videos provide the twin-barrel machine gun,
 broad-nozzle flamethrower, heavy mortar, and faceted Tesla coil installations.

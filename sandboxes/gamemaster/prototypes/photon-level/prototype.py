@@ -7,6 +7,7 @@ import json
 import math
 import os
 import threading
+import time
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_from_directory, url_for
@@ -25,7 +26,7 @@ WAVE_PATH = os.path.join(
 CONTRACT = "photon.level"
 VERSION = 2
 RUNTIME_CONTRACT = "photon.level.runtime"
-RUNTIME_VERSION = 1
+RUNTIME_VERSION = 2
 
 MANIFEST = {
     "name": "Photon Level",
@@ -127,6 +128,8 @@ def _scene_asset_paths(raw_map, runtime):
 
 def _reload_source():
     global _raw_map, _runtime, _waves, _load_error, _map_asset_paths
+    global _runtime_asset_cache
+    _runtime_asset_cache = None
     try:
         raw_map, runtime, waves = _load_source()
         map_assets = _scene_asset_paths(raw_map, runtime)
@@ -176,6 +179,33 @@ def runtime_bundle():
             "runtime": copy.deepcopy(_runtime) if ready else None,
             "waves": copy.deepcopy(_waves.get("waves")) if ready else None,
             "presentation": presentation_assets(),
+        }
+
+
+_runtime_asset_cache = None
+_runtime_asset_checked_at = 0.0
+
+
+def runtime_status():
+    """Optional Level runtime v2 metadata read; no runtime/wave copies.
+
+    Module health and layout revision are immediate. Artwork is revalidated at
+    most every 250 ms; direct presentation_assets() reads remain uncached.
+    """
+    global _runtime_asset_cache, _runtime_asset_checked_at
+    with _lock:
+        now = time.monotonic()
+        if _runtime_asset_cache is None or now - _runtime_asset_checked_at >= 0.25:
+            _runtime_asset_cache = presentation_assets()
+            _runtime_asset_checked_at = now
+        presentation = copy.deepcopy(_runtime_asset_cache)
+        if _load_error:
+            presentation.update(status="unavailable", error=_load_error)
+        return {
+            "contract": RUNTIME_CONTRACT, "version": RUNTIME_VERSION,
+            "revision": _runtime.get("layout_revision", 0),
+            "status": "ready" if _load_error is None else "unavailable",
+            "error": _load_error, "presentation": presentation,
         }
 
 

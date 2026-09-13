@@ -1,0 +1,94 @@
+{
+  "scenario": "Headless Chrome replay, 1000 orcs, 16 towers, real Y pages/assets, synthetic SSE input",
+  "duration_s": 600,
+  "views": 2,
+  "results": [
+    {
+      "samples": 594,
+      "minFps": 44,
+      "medianFps": 60,
+      "maxFps": 60,
+      "belowTarget": 0,
+      "intervalP95": 17,
+      "intervalP99": 17.90000009536743,
+      "longTasks": 0,
+      "heapBytes": 15126862
+    },
+    {
+      "samples": 595,
+      "minFps": 42,
+      "medianFps": 60,
+      "maxFps": 61,
+      "belowTarget": 0,
+      "intervalP95": 17.90000009536743,
+      "intervalP99": 18.59999990463257,
+      "longTasks": 0,
+      "heapBytes": 15023226
+    }
+  ],
+  "asset_failures": [
+    0,
+    0
+  ],
+  "errors": [],
+  "final_renderer_checks": [
+    {
+      "scenario": "240 enemies, 16 towers, two displays",
+      "duration_s": 30,
+      "results": [
+        {
+          "samples": 29,
+          "minFps": 42,
+          "medianFps": 47,
+          "maxFps": 54,
+          "belowTarget": 0,
+          "intervalP95": 25.299999952316284,
+          "intervalP99": 33.40000009536743,
+          "longTasks": 0,
+          "heapBytes": 6096850
+        },
+        {
+          "samples": 29,
+          "minFps": 44,
+          "medianFps": 47,
+          "maxFps": 49,
+          "belowTarget": 0,
+          "intervalP95": 25.200000047683716,
+          "intervalP99": 33.799999952316284,
+          "longTasks": 0,
+          "heapBytes": 8403682
+        }
+      ],
+      "errors": []
+    },
+    {
+      "scenario": "1000 burning enemies, mortar explosions and core purge, two displays",
+      "duration_s": 30,
+      "results": [
+        {
+          "samples": 29,
+          "minFps": 45,
+          "medianFps": 60,
+          "maxFps": 60,
+          "belowTarget": 0,
+          "intervalP95": 17,
+          "intervalP99": 33.200000047683716,
+          "longTasks": 0,
+          "heapBytes": 8669025
+        },
+        {
+          "samples": 29,
+          "minFps": 44,
+          "medianFps": 60,
+          "maxFps": 60,
+          "belowTarget": 0,
+          "intervalP95": 18.90000009536743,
+          "intervalP99": 33.299999952316284,
+          "longTasks": 0,
+          "heapBytes": 8472976
+        }
+      ],
+      "errors": []
+    }
+  ]
+}

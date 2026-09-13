@@ -1,18 +1,100 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "motion": "sliding_floor_doors_then_perspective_elevator_rise_then_boot_rotation",
   "aspect_ratio": "1:1",
   "duration_s": 3.0,
   "canvas_size": [
     1024,
     1024
   ],
+  "runtime_target": {
+    "fps": 24,
+    "frame_count": 72,
+    "hold_final_frames": 6
+  },
+  "alpha": {
+    "master": "RGBA PNG",
+    "exterior": "transparent",
+    "shaft_and_mechanisms": "opaque",
+    "upload": "RGB PNG with black exterior matte",
+    "video_delivery": "native alpha is not assumed; matte only the exterior"
+  },
+  "perspective": {
+    "camera": "fixed direct-overhead perspective",
+    "ground_footprint_scale": 1.0,
+    "rising_assembly_start_scale": 0.55,
+    "rising_assembly_end_scale": 1.0,
+    "fixed_pivot": [
+      0.5,
+      0.5
+    ]
+  },
+  "timeline": [
+    {
+      "frames": [
+        0,
+        14
+      ],
+      "time_s": [
+        0,
+        0.625
+      ],
+      "stage": "sliding_doors_open"
+    },
+    {
+      "frames": [
+        15,
+        41
+      ],
+      "time_s": [
+        0.625,
+        1.75
+      ],
+      "stage": "perspective_elevator_rise"
+    },
+    {
+      "frames": [
+        42,
+        50
+      ],
+      "time_s": [
+        1.75,
+        2.125
+      ],
+      "stage": "platform_dock"
+    },
+    {
+      "frames": [
+        51,
+        65
+      ],
+      "time_s": [
+        2.125,
+        2.75
+      ],
+      "stage": "boot_rotation"
+    },
+    {
+      "frames": [
+        66,
+        71
+      ],
+      "time_s": [
+        2.75,
+        3
+      ],
+      "stage": "active_hold"
+    }
+  ],
   "prompt_file": "assets/game-art/z-pixel-v2/KLING_TURRET_INSTALL_PROMPTS.md",
   "assets": [
     {
       "tower_type": "machine_gun",
-      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/machine-gun-install-first-source-v1.png",
-      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/machine-gun-install-first-v1.png",
+      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/turret-elevator-install-first-source-v2.png",
+      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/turret-elevator-install-first-v2.png",
+      "first_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/turret-elevator-install-first-v2-black.png",
       "last_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/machine-gun-install-last-v1.png",
+      "last_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/machine-gun-install-last-v2-black.png",
       "canvas_size": [
         1024,
         1024
@@ -26,9 +108,11 @@
     },
     {
       "tower_type": "flamethrower",
-      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/flamethrower-install-first-source-v1.png",
-      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/flamethrower-install-first-v1.png",
+      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/turret-elevator-install-first-source-v2.png",
+      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/turret-elevator-install-first-v2.png",
+      "first_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/turret-elevator-install-first-v2-black.png",
       "last_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/flamethrower-install-last-v1.png",
+      "last_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/flamethrower-install-last-v2-black.png",
       "canvas_size": [
         1024,
         1024
@@ -42,9 +126,11 @@
     },
     {
       "tower_type": "mortar",
-      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/mortar-install-first-source-v1.png",
-      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/mortar-install-first-v1.png",
+      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/turret-elevator-install-first-source-v2.png",
+      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/turret-elevator-install-first-v2.png",
+      "first_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/turret-elevator-install-first-v2-black.png",
       "last_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/mortar-install-last-v1.png",
+      "last_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/mortar-install-last-v2-black.png",
       "canvas_size": [
         1024,
         1024
@@ -58,9 +144,11 @@
     },
     {
       "tower_type": "tesla_coil",
-      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/tesla-coil-install-first-source-v1.png",
-      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/tesla-coil-install-first-v1.png",
+      "first_source": "assets/game-art/z-pixel-v2/source-sheets/kling-keyframes/turret-elevator-install-first-source-v2.png",
+      "first_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/turret-elevator-install-first-v2.png",
+      "first_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/turret-elevator-install-first-v2-black.png",
       "last_frame": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/tesla-coil-install-last-v1.png",
+      "last_upload": "assets/game-art/z-pixel-v2/normalized/structures/runtime/kling-keyframes/kling-upload-v2/tesla-coil-install-last-v2-black.png",
       "canvas_size": [
         1024,
         1024

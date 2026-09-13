@@ -519,18 +519,33 @@ def tracking_snapshot():
     """photon.board.tracking v1. Reading never advances transport state."""
     with _lock:
         output = json.loads(json.dumps(_tracking))
+        game_placement = json.loads(json.dumps(_placement))
         configuration = settings_snapshot()
     stale_s = configuration["settings"]["stale_s"]
     if not output or not fresh(output.get("sampled_at"), time.time()):
         return {"contract": "photon.board.tracking", "version": 1, "status": "unavailable",
                 "source": "unknown", "arms": {}, "tags": [], "errors": ["Board sampler stopped or stale"],
-                "limits": dict(configuration["settings"]), "configuration": configuration}
+                "limits": dict(configuration["settings"]), "configuration": configuration,
+                "game_placement": _placement_tracker.unavailable(
+                    "Board sampler stopped or stale",
+                    revision=int(game_placement.get("revision", 0)) if isinstance(game_placement, dict) else 0,
+                    source=str(game_placement.get("source") or "unknown") if isinstance(game_placement, dict) else "unknown",
+                    source_epoch=str(game_placement.get("source_epoch") or "unknown") if isinstance(game_placement, dict) else "unknown",
+                )}
     output["configuration"] = configuration
     if not fresh(output.get("frame_at"), time.time(), stale_s):
         output.update(status="unavailable", arms={})
         for tag in output["tags"]:
             tag.update(visible=False, stage="unknown", arm=None, target_id=None,
                        confidence="unknown", evidence="Camera frame stale")
+        game_placement = _placement_tracker.unavailable(
+            "Camera frame stale",
+            revision=int(game_placement.get("revision", 0)) if isinstance(game_placement, dict) else 0,
+            source=str(output.get("source") or "unknown"),
+            source_epoch=str(game_placement.get("source_epoch") or "unknown") if isinstance(game_placement, dict) else "unknown",
+            sampled_at=game_placement.get("sampled_at") if isinstance(game_placement, dict) else None,
+        )
+    output["game_placement"] = game_placement
     return output
 
 

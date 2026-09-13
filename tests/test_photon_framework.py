@@ -37,6 +37,16 @@ def load(slug):
     return module
 
 
+def legacy_level_bundle():
+    """Real four-entry v1 authoring fixture for legacy compatibility checks."""
+    level = load("photon-level")
+    bundle = level.runtime_bundle()
+    runtime = level.parse_tiled_level(ROOT / "assets/tiled/levels/z-pixel-first-map.tmj")
+    bundle.update(version=1, runtime=runtime, revision=runtime["layout_revision"],
+                  waves=json.loads((ROOT / "assets/tiled/levels/z-pixel-first-map.waves.json").read_text())["waves"])
+    return bundle
+
+
 class FakeContext:
     sandbox = "gamemaster"
 
@@ -122,7 +132,7 @@ class PhotonContractTests(unittest.TestCase):
         self.assertEqual(snapshot["towers"][0]["atom_tag_id"], 100)
         self.assertEqual(snapshot["level"]["name"], "z_pixel_first_map_01")
 
-    def test_presentation_returns_game_output_and_art_manifest(self):
+    def test_presentation_returns_game_output_with_art_manifest(self):
         app = Flask("photon-presentation-test")
         app.register_blueprint(self.presentation.bp, url_prefix="/p/laser-tag-y")
         with app.test_client() as client:
@@ -133,8 +143,6 @@ class PhotonContractTests(unittest.TestCase):
                 response.get_json()["configuration"]["contract"],
                 "photon.game.settings",
             )
-            art = client.get("/p/laser-tag-y/api/art")
-            self.assertEqual(art.get_json()["contract"], "photon.level.assets")
             self.assertEqual(response.get_json()["presentation"], self.level.presentation_assets())
 
     def test_changed_sibling_contract_fails_locally_not_system_wide(self):
@@ -151,10 +159,8 @@ class PhotonContractTests(unittest.TestCase):
             app.register_blueprint(self.presentation.bp, url_prefix="/p/laser-tag-y")
             with app.test_client() as client:
                 state = client.get("/p/laser-tag-y/api/state")
-                art = client.get("/p/laser-tag-y/api/art")
             self.assertEqual(state.status_code, 503)
             self.assertIn("contract mismatch", state.get_json()["error"])
-            self.assertEqual(art.status_code, 503)
         finally:
             self.presentation.hub_init(FakeContext(self.modules))
 
@@ -452,10 +458,10 @@ class PhotonLevelExtractionTests(unittest.TestCase):
                 self.assertTrue(image.is_file())
 
     def test_runtime_contract_matches_legacy_z_parser(self):
-        bundle = self.level.runtime_bundle()
+        bundle = legacy_level_bundle()
         self.assertEqual(bundle["contract"], "photon.level.runtime")
         self.assertEqual(bundle["version"], 1)
-        legacy = self.LevelModel(self.level.MAP_PATH)
+        legacy = self.LevelModel(self.legacy_map)
         adapted = self.ContractLevelModel(bundle["runtime"])
         self.assertEqual(adapted.layout_revision, legacy.layout_revision)
         self.assertEqual((adapted.width, adapted.height), (legacy.width, legacy.height))
@@ -500,7 +506,7 @@ class PhotonLevelExtractionTests(unittest.TestCase):
         self.assertEqual(core["marker_size"], 116.0)
 
     def test_z_engine_runs_from_contract_without_level_file_knowledge(self):
-        bundle = self.level.runtime_bundle()
+        bundle = legacy_level_bundle()
         engine = self.DefenseEngine(self.legacy_map, self.legacy_waves)
         contract_level = self.ContractLevelModel(bundle["runtime"])
         engine.reload_level(contract_level, bundle["waves"])
@@ -533,7 +539,7 @@ class PhotonLevelExtractionTests(unittest.TestCase):
         self.assertEqual(tileset.status_code, 200)
         self.assertEqual(image.status_code, 200)
 
-    def test_laser_tag_z_adopts_level_output_and_proxies_owned_assets(self):
+    def test_legacy_z_keeps_rollback_for_new_v2_level(self):
         z = load("laser-tag-z")
         z.hub_init(FakeContext({"photon-level": self.level}))
         try:
@@ -550,12 +556,12 @@ class PhotonLevelExtractionTests(unittest.TestCase):
                 state = client.get("/p/laser-tag-z/api/defence/state")
                 level = client.get("/p/laser-tag-z/api/defence/level")
                 waves = client.get("/p/laser-tag-z/api/defence/waves")
-            self.assertEqual(state.get_json()["level_source"], "photon-level")
-            self.assertEqual(state.get_json()["level_input_error"], None)
-            self.assertEqual(level.headers["X-Level-Source"], "photon-level")
-            self.assertIn("/p/photon-level/assets/", level.get_json()["tilesets"][0]["source"])
-            self.assertEqual(waves.headers["X-Level-Source"], "photon-level")
-            self.assertEqual(len(waves.get_json()["waves"]), 12)
+            self.assertEqual(state.get_json()["level_source"], "legacy-fallback")
+            self.assertIn("contract mismatch", state.get_json()["level_input_error"])
+            # The generic level/art API remains compatible; Z's simulation
+            # independently rejects the newer rich runtime contract.
+            self.assertEqual(level.status_code, 200)
+            self.assertEqual(waves.status_code, 200)
         finally:
             z.hub_stop()
 
@@ -857,7 +863,7 @@ class PhotonGameExtractionTests(unittest.TestCase):
         return game
 
     def test_proven_simulation_matches_z_for_the_same_contract_input(self):
-        bundle = self.level.runtime_bundle()
+        bundle = legacy_level_bundle()
         legacy = self.legacy_runtime.DefenseEngine(
             ROOT / "assets/tiled/levels/z-pixel-first-map.tmj",
             ROOT / "assets/tiled/levels/z-pixel-first-map.waves.json",
@@ -881,9 +887,21 @@ class PhotonGameExtractionTests(unittest.TestCase):
         def comparable(engine):
             value = engine.snapshot()
             value.pop("server_time", None)
+            # Older levels have no companion geometry; the additive fields
+            # must not change their primary combat or topology behavior.
+            self.assertEqual(value.pop('companions', []), [])
+            value.pop('companion_policy', None)
+            for key in ("row_barrier_geometry", "row_barriers", "row_topology_revision", "released_orcs", "contract_control_tier", "player_progression", "virtual_test_loadout"):
+                value.pop(key, None)
             value.pop("physical_input_error", None)
+            # Brute tuning is additive in Game; this parity fixture runs Grunts.
+            for key in ("brute_first_wave", "brute_size_multiplier", "brute_health", "brute_damage_per_s", "control_orc_multiplier_joint", "control_orc_multiplier_xyz", "control_orc_multiplier_image", "control_orc_multiplier_cue"):
+                value["settings"].pop(key, None)
             for tower in value["towers"]:
                 tower.get("targeting", {}).pop("control", None)
+                if "upgrade_multiplier" in tower:
+                    self.assertEqual(tower.pop("upgrade_multiplier"), 1)
+                    self.assertEqual(tower.pop("upgrade_level"), 1)
             for event in value["events"]:
                 event.pop("sequence", None)
             return value
@@ -891,7 +909,7 @@ class PhotonGameExtractionTests(unittest.TestCase):
         self.assertEqual(comparable(extracted), comparable(legacy))
 
     def test_board_relationship_path_matches_z_physical_placement_policy(self):
-        bundle = self.level.runtime_bundle()
+        bundle = legacy_level_bundle()
         legacy = self.legacy_runtime.DefenseEngine(
             ROOT / "assets/tiled/levels/z-pixel-first-map.tmj",
             ROOT / "assets/tiled/levels/z-pixel-first-map.waves.json",
@@ -1183,9 +1201,10 @@ function element(id = '') {
 }
 for (const match of html.matchAll(/id="([^"]+)"/g)) elements.set(match[1], element(match[1]));
 const fields = [...html.matchAll(/<input[^>]+data-key="([^"]+)"[^>]*>/g)].map(match => {
-  const input = elements.get(match[1]); input.dataset.key = match[1]; input.error = element(); return input;
+  const input = elements.get(match[1]); input.dataset.key = match[1]; if(match[0].includes('data-percent='))input.dataset.percent = "true"; input.error = element(); return input;
 });
 const context = vm.createContext({
+  clearTimeout(){}, setTimeout(){return 1;},
   document: {getElementById: id => elements.get(id), createElement: () => element(),
     querySelectorAll: () => fields,
     querySelector: selector => elements.get(selector.match(/data-key="([^"]+)"/)[1])},
@@ -1307,7 +1326,7 @@ vm.runInContext(html.split('<script>')[1].split('</script>')[0], context);
             @staticmethod
             def runtime_bundle():
                 return {
-                    "contract": "photon.level.runtime", "version": 2,
+                    "contract": "photon.level.runtime", "version": 3,
                     "status": "ready",
                 }
 

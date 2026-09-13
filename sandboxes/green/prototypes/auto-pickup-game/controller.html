@@ -812,6 +812,29 @@ function laserIntent(kind, detail = {}, category = "intent") {
   return true;
 }
 
+const LTZ = LTX && new URLSearchParams(location.search).has('ltz');
+let ltzTier = 0;
+function applyLtzProgress(data) {
+  if (!LTZ) return;
+  const player = data.status === 'ready' ? data.player : null;
+  const run = data.active_attempts?.find(a => a.participants.some(p => p.side === TEAM));
+  const participant = run?.participants.find(p => p.side === TEAM);
+  ltzTier = Number(participant?.control_tier || player?.selected_control || 0);
+  applyLtxConfig({game_mode:'game_'+ltzTier,video_click_move:ltzTier>=3,visibility:{
+    joint_angles:ltzTier>=1,tcp_pose:ltzTier>=2,auto_pick_place:ltzTier>=3,auto_pp_x:ltzTier>=4}});
+  const title = document.querySelector('header h1');
+  if (title) title.textContent = `LTZ — ${player?.name || 'Select a player in LTZ Score'} · Level ${ltzTier}`;
+  if (ltzTier < 4 && autoPpxRunning) autoPpxAbort = true;
+}
+let ltzProgressEvents = null;
+function connectLtzProgress() {
+  if (ltzProgressEvents) return;
+  applyLtzProgress({status:'unavailable'});
+  ltzProgressEvents = new EventSource(`/s/gamemaster/p/photon-progress/api/events?side=${TEAM}`);
+  ltzProgressEvents.onmessage = event => {try {applyLtzProgress(JSON.parse(event.data));} catch (_) {applyLtzProgress({status:'unavailable'});}};
+  ltzProgressEvents.onerror = () => applyLtzProgress({status:'unavailable'});
+  window.addEventListener('pagehide', () => ltzProgressEvents.close());
+}
 let ltxConfigPollBusy = false;
 let ltxVideoClickEnabled = !LTX;
 let ltxGameMode = null;
@@ -858,6 +881,7 @@ function applyLtxConfig(config = {}) {
     : "Video click-to-move is disabled for this game.";
 }
 async function pollLtxConfig() {
+  if (LTZ) {connectLtzProgress(); return;}
   if (!LTX || ltxConfigPollBusy) return;
   ltxConfigPollBusy = true;
   try {
@@ -3082,6 +3106,11 @@ function log(msg, cls="log-info") {
 }
 
 async function api(path, body, method, timeoutMs = 12000) {
+  if (LTZ && (path === '/api/move' || path === '/api/joint-move')) {
+    const action = path === '/api/joint-move' ? 'joint' : autoPpxRunning ? 'cue' : (autoPpxClickOverride || body?.ltz_action === 'image') ? 'image' : 'xyz';
+    if (ltzTier < ({joint:1,xyz:2,image:3,cue:4}[action])) return {ok:false,error:'This LTZ control is locked'};
+    body = {...body, ltz_action:action};
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const opts = { method: method || (body ? "POST" : "GET"), signal:ctrl.signal };
@@ -3631,7 +3660,7 @@ async function moveToPoseAttempt(pose, label, wait = true, options = {}) {
   if(!res){
     throwIfMotionInterrupted(interruptWhen);
     syncTargetSliders(target, ["x", "y", "z"]);
-    res=await api("/api/move", target);
+    res=await api("/api/move", {...target, ...(LTZ ? {ltz_action:label==="video target"?"image":autoPpxRunning?"cue":"xyz"}: {})});
     throwIfMotionInterrupted(interruptWhen);
     if (!res.ok) throw new Error(res.error || `${label} move failed`);
     showZFloor(res.z_floor);

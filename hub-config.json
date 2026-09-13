@@ -35,10 +35,18 @@
           "green",
           "purple"
         ],
-      "camera-calibration": [
-        "green",
-        "purple"
-      ]
+        "camera-calibration": [
+          "green",
+          "purple"
+        ],
+        "photon-progress": [
+          "green",
+          "purple"
+        ],
+        "photon-game": [
+          "green",
+          "purple"
+        ]
       },
       "password": "2d555ed8"
     },

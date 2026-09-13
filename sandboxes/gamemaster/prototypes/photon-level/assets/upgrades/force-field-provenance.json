@@ -1,0 +1,4 @@
+{
+  "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-48f2d87a-1c98-4dec-a3f8-81892f87b30e.png",
+  "prompt": "Create a pixel art game sprite atlas of THREE horizontal energy force-field ribbons, stacked vertically in three equal rows. Canvas wide landscape 3:2. Each ribbon extends seamlessly from left edge to right edge with no end caps, no generators, no objects or labels, no text. The top ribbon is upgrade level 2: green emerald thin zigzag electric energy. Middle ribbon level 3: cyan blue thicker doubled electric energy. Bottom ribbon level 4: amber gold triple electric energy with white center. Ribbons centered vertically in each row, occupying 35 percent of each row height, crisp hard pixel clusters. Background MUST be perfectly flat pure black #000000 everywhere outside the luminous ribbons so the engine can use additive compositing. Do not use checkerboard or gradients behind the ribbons, no border, no perspective."
+}

@@ -13,10 +13,8 @@
           "count": 118,
           "duration_s": 37,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -29,10 +27,8 @@
           "count": 166,
           "duration_s": 36,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -45,10 +41,8 @@
           "count": 214,
           "duration_s": 35,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -61,10 +55,8 @@
           "count": 262,
           "duration_s": 34,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -77,10 +69,8 @@
           "count": 310,
           "duration_s": 33,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -93,10 +83,8 @@
           "count": 358,
           "duration_s": 32,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -109,10 +97,8 @@
           "count": 406,
           "duration_s": 31,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -125,10 +111,8 @@
           "count": 454,
           "duration_s": 30,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -141,10 +125,8 @@
           "count": 502,
           "duration_s": 29,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -157,10 +139,8 @@
           "count": 550,
           "duration_s": 28,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -173,10 +153,8 @@
           "count": 598,
           "duration_s": 27,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]
@@ -189,10 +167,8 @@
           "count": 646,
           "duration_s": 26,
           "lane_weights": {
-            "top_outer": 1,
-            "top_inner": 1,
-            "bottom_inner": 1,
-            "bottom_outer": 1
+            "top_outer": 2,
+            "bottom_outer": 2
           }
         }
       ]

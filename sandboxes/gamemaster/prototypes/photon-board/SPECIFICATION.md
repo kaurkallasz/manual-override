@@ -73,6 +73,10 @@ its explicitly simulated coordinates; unavailable calibration is still explicit.
   `photon.board.tracking` v1. `tracking_snapshot()` and `GET /api/diagnostics`
   expose the exact same cached diagnostic value. Existing `/api/events` pushes
   it inside the Board snapshot; no second event-stream implementation.
+  The diagnostic value includes the already-cached game-facing relationship as
+  `game_placement`, so the operator table can distinguish calibrated transport
+  inference from the normalized evidence Photon Game actually consumes. This
+  is a copied view of the same Board-owned value, not another calculation.
 
 Every output is a JSON-compatible value. Consumers receive no implementation
 objects or sibling file paths. A breaking semantic change requires a new integer
@@ -147,12 +151,13 @@ The existing hardware convention is IDs >=100 for raised movable tags, IDs
 below 100 for flat observed markers. This assigns no team, tower, socket, score
 or valid game destination. Fixed-marker display can be toggled in the table.
 
-Physical stages: `visible`, `near_arm`, `pickup_suspected`, `likely_carried`,
+Diagnostic transport stages: `visible`, `near_arm`, `pickup_suspected`, `likely_carried`,
 `release_observed`, `placement_stable`, `unknown`. Disappearance after uniquely
 being near an arm plus suction gives a suspected pickup; sustained occlusion
 gives a likely carry, never a guaranteed grip. Reappearance during suction,
 unknown pump state, stale inputs or ambiguous association cancel the inference.
-Pump release is only a release signal. The diagnostic `placement_stable` stage requires sustained,
+Pump release is only a release signal. The diagnostic `placement_stable` stage is labeled
+**calibrated overlap stable** in the tab and requires sustained,
 uniquely nearby corrected-camera overlap (18 mm, 0.55 s, >=3 distinct frames);
 this does not activate a turret. Marker memory expires after 5 s; carry/tag
 memory after 15 s.
@@ -184,4 +189,5 @@ instruction or robot controls appear. After disconnect, stale meters and arm
 associations disappear; raw JSON and independent input health explain why.
 
 Smoke tests: `.venv/bin/python -m unittest discover -s tests -p 'test_photon_board*py'`.
+Repository-boundary smoke test: `.venv/bin/python -m unittest discover -s tests -p test_photon_module_isolation.py`.
 Hardware/projector verification is separate; fixtures must never connect robots.

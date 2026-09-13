@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import threading
 import time
 import uuid
 from typing import Any
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
 import live
 from photon_game_runtime import ContractLevelModel, DefenseEngine, SettingsStore
+from photon_game_runtime.engine import orc_schedule
+from photon_game_runtime.settings import validate_settings
+from progress_link import ProgressLink
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(HERE, "data")
@@ -23,7 +28,8 @@ LOG_PATH = os.path.join(DATA_DIR, "runs.jsonl")
 CONTRACT = "photon.game"
 VERSION = 2
 LEVEL_CONTRACT = "photon.level.runtime"
-LEVEL_VERSION = 1
+LEVEL_VERSION = 2
+LEVEL_VERSIONS = (1, 2)
 BOARD_CONTRACT = "photon.board.runtime"
 BOARD_VERSION = 1
 
@@ -40,6 +46,7 @@ MANIFEST = {
 
 bp = Blueprint("photon_game", __name__)
 _lock = threading.RLock()
+_command_lock = threading.RLock()
 _history_lock = threading.RLock()
 _level_install_lock = threading.Lock()
 _live = live.LiveState()
@@ -80,6 +87,9 @@ def _module(slug):
     return _hub_ctx.get_prototype(slug)
 
 
+_progress = ProgressLink(_module, lambda: _engine, _live.bump, Path(DATA_DIR) / 'pending-result.json')
+
+
 def _set_input(name, *, status, error=None, **detail):
     global _revision
     value = {"status": status, "error": error, **detail}
@@ -94,13 +104,38 @@ def _level_bundle():
     if module is None or not callable(getattr(module, "runtime_bundle", None)):
         return None, "Photon Level is unavailable or disabled"
     try:
+        # The versioned fast read keeps health/art current without copying
+        # the entire immutable runtime for every display frame of state.
+        status_reader = getattr(module, "runtime_status", None)
+        with _lock:
+            engine = _engine
+        if engine is not None and callable(status_reader):
+            status = status_reader()
+            if (
+                not isinstance(status, dict)
+                or status.get("contract") != LEVEL_CONTRACT
+                or type(status.get("version")) is not int
+                or status["version"] not in LEVEL_VERSIONS
+                or type(status.get("revision")) is not int
+                or status["revision"] < 1
+                or status.get("status") not in ("ready", "unavailable")
+            ):
+                return None, "Photon Level runtime status is invalid"
+            if status["status"] != "ready":
+                return None, str(status.get("error") or "Photon Level is not ready")
+            with engine.lock:
+                unchanged = (engine.level.layout_revision == status["revision"]
+                             and engine.level.runtime_version == status['version'])
+                frozen = engine.phase != "setup"
+            if unchanged or frozen:
+                return status, None
         value = module.runtime_bundle()
     except Exception as exc:
         return None, f"Photon Level failed: {exc}"
     if (
         not isinstance(value, dict)
         or value.get("contract") != LEVEL_CONTRACT
-        or value.get("version") != LEVEL_VERSION
+        or type(value.get("version")) is not int or value.get("version") not in LEVEL_VERSIONS
     ):
         return None, f"Photon Level contract mismatch (expected {LEVEL_CONTRACT} v{LEVEL_VERSION})"
     if value.get("status") != "ready":
@@ -115,6 +150,8 @@ def _level_bundle():
         or not value["waves"]
     ):
         return None, "Photon Level runtime payload is invalid"
+    if value['runtime'].get('runtime_version', 1) != value['version']:
+        return None, 'Photon Level runtime version does not match its envelope'
     return value, None
 
 
@@ -142,6 +179,7 @@ def _simple_level(runtime):
             "marker_x": float(raw.get("marker_x", x)),
             "marker_y": float(raw.get("marker_y", y)),
             "marker_size": marker_size,
+            **({'companion': _copy(raw['companion'])} if 'companion' in raw else {}),
         })
     sockets.sort(key=lambda item: item["aruco_id"])
     properties = runtime.get("map_properties") or {}
@@ -221,7 +259,8 @@ def _install_level(bundle):
     with _level_install_lock:
         with _lock:
             engine = _engine
-        if engine is not None and engine.level.layout_revision == revision:
+        if (engine is not None and engine.level.layout_revision == revision
+                and engine.level.runtime_version == bundle['version']):
             _set_presentation(bundle.get("presentation"))
             _set_input("level", status="ready", revision=revision)
             return True
@@ -519,6 +558,7 @@ def _configuration_snapshot(engine):
                 sum(max(0, int(group.get("count", 0))) for group in wave.get("groups", []))
                 for wave in engine.wave_source
             ]
+            output['orc_previews'] = [orc_schedule(output['settings'], engine.wave_source, tier) for tier in range(1, 5)]
     return output
 
 
@@ -552,6 +592,7 @@ def _public_snapshot(*, compact_enemies=False):
             "inputs": inputs,
             "storage": storage,
             "configuration": configuration,
+            "progress": _progress.snapshot(),
             "server_time": time.time(),
         }
     simulation = engine.snapshot(compact_enemies=compact_enemies)
@@ -567,6 +608,7 @@ def _public_snapshot(*, compact_enemies=False):
         "inputs": inputs,
         "storage": storage,
         "configuration": configuration,
+        "progress": _progress.snapshot(),
         **simulation,
     }
 
@@ -576,9 +618,19 @@ def game_snapshot():
     return _public_snapshot()
 
 
-def game_events():
+def _event_snapshot():
+    return _public_snapshot(compact_enemies=True)
+
+
+def game_events(*, incremental=False):
     """The sole Photon Game SSE output, carrying compact game snapshots."""
-    return _live.stream(lambda: _public_snapshot(compact_enemies=True), interval=0.25)
+    return _live.stream(
+        _event_snapshot, interval=0.25, shared=True,
+        static_fields=(
+            "level", "presentation", "configuration", "settings", "loadout",
+            "force_field_blockers", "row_barrier_geometry",
+        ) if incremental else (),
+    )
 
 
 def _require_engine():
@@ -592,6 +644,11 @@ def _require_engine():
 
 
 def apply_command(data):
+    with _command_lock:
+        return _apply_command(data)
+
+
+def _apply_command(data):
     """Apply one validated operator input and return the authoritative snapshot."""
     global _run_id, _history_sequence, _revision
     if not isinstance(data, dict):
@@ -602,7 +659,11 @@ def apply_command(data):
     if action not in {"configure", "reset_settings"}:
         engine, level_ready = _require_engine()
     try:
+        if action in ('place', 'activate_core', 'loadout', 'aim', 'virtual_test_loadout') and engine is not None and engine.phase == 'running' and _progress.snapshot().get('reward_enabled'):
+            raise GameError('end the scored attempt before operator placement or loadout intervention')
         if action == "start":
+            if engine.phase != 'setup':
+                raise GameError('reset the finished game before starting another attempt')
             if not level_ready:
                 raise GameError(_inputs["level"].get("error") or "Photon Level is unavailable")
             virtual_play = (
@@ -617,11 +678,53 @@ def apply_command(data):
                     board_ready = _inputs["board"].get("status") == "ready"
                 if not board_ready:
                     raise GameError(board_error or "Photon Board is unavailable")
+            reward_enabled = data.get('reward_enabled', False)
+            if type(reward_enabled) is not bool:
+                raise GameError('reward_enabled must be true or false')
+            if reward_enabled and virtual_play:
+                raise GameError('virtual play is practice and cannot award progress')
+            if reward_enabled and _inputs['board'].get('upstream', {}).get('source') == 'simulation':
+                raise GameError('simulated board input is practice and cannot award progress')
+            if reward_enabled and any(t.get('source') == 'virtual' for t in engine.placements.values()):
+                raise GameError('reset virtual placements before starting a scored physical game')
+            settings = _settings.snapshot()
+            roster = None
+            try:
+                roster = _progress.roster()
+            except ValueError:
+                if reward_enabled:
+                    raise
+            participants = [dict(player_id=p['id'], name=p['name'], side=side,
+                                 control_tier=p['selected_control'], levels=p['levels'])
+                            for side, p in sorted((roster or {}).get('roster', {}).items())]
+            tier = max((p['control_tier'] for p in participants), default=1)
+            previews = [orc_schedule(settings, engine.wave_source, i) for i in range(1, 5)]
+            if reward_enabled and any(b['total'] <= a['total'] for a, b in zip(previews, previews[1:])):
+                raise GameError('increase control-method percentages so each tier schedules more orcs')
+            if reward_enabled and _settings.response()['preset'] == 'training':
+                raise GameError('the Training preset is practice; select a scored game preset')
+            run_id = uuid.uuid4().hex
+            if roster is not None:
+                metadata = {'campaign_id': 'ltz', 'level_id': (_level_projection or {}).get('name', 'photon-level'),
+                            'level_revision': engine.level.layout_revision,
+                            'settings_revision': _settings.revision,
+                            'settings_hash': hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest(),
+                            'settings': settings, 'contract_control_tier': tier,
+                            'orc_schedule': previews[tier - 1], 'scoring_version': 1,
+                            'companion_policy': engine.snapshot()['companion_policy']}
+                if virtual_play:
+                    metadata['virtual_test_loadout'] = engine.snapshot()['virtual_test_loadout']
+                _progress.begin({'run_id': run_id, 'reward_enabled': reward_enabled,
+                                 'metadata': metadata, 'expected_roster': participants})
             engine.set_virtual_play(virtual_play)
             with _lock:
-                _run_id = uuid.uuid4().hex
+                _run_id = run_id
                 _history_sequence = 0
-            engine.start(_settings.snapshot())
+            try:
+                engine.start(settings, progression={p['side']: p for p in participants})
+            except Exception:
+                _progress.flush(outcome='aborted')
+                raise
         elif action == "pause":
             if engine.snapshot()["phase"] != "running":
                 raise GameError("game is not running")
@@ -631,6 +734,7 @@ def apply_command(data):
                 raise GameError("game is not running")
             engine.pause(False)
         elif action == "reset":
+            _progress.flush(outcome='aborted')
             engine.reset()
             if "virtual_play" in data:
                 engine.set_virtual_play(bool(data["virtual_play"]))
@@ -640,7 +744,13 @@ def apply_command(data):
                 _revision += 1
             _sync_level()
             _live.bump()
+        elif action == 'virtual_test_loadout':
+            if 'levels' not in data:
+                raise GameError('levels is required; use null to restore saved-player upgrades')
+            engine.set_virtual_test_loadout(data['levels'])
         elif action == "set_virtual":
+            if engine.phase == 'running':
+                raise GameError('finish the attempt before switching physical/virtual play')
             engine.set_virtual_play(bool(data.get("virtual_play")))
         elif action == "place":
             socket_id = data.get("socket_id")
@@ -713,6 +823,7 @@ def hub_init(ctx):
             "status": "unavailable" if _settings.error else "ready",
             "error": _settings.error,
         }
+    _progress.start()
     _sync_level()
     with _lock:
         engine = _engine
@@ -729,6 +840,12 @@ def hub_stop():
     if engine is not None:
         engine.stop_background()
         engine.set_physical_source(None)
+        try:
+            _progress.flush(outcome='interrupted')
+        except ValueError:
+            # The durable outbox is replayed before recovery on the next start.
+            pass
+    _progress.stop()
     with _lock:
         _engine = None
         _level_projection = None
@@ -758,6 +875,8 @@ def state_api():
 
 @bp.route("/api/events")
 def events_api():
+    if request.args.get('view') == 'configuration':
+        return _orc_events()
     return game_events()
 
 
@@ -770,3 +889,31 @@ def command_api():
         return jsonify({"ok": True, "output": apply_command(request.get_json(silent=True))})
     except GameError as exc:
         return jsonify({"ok": False, "error": str(exc), "errors": exc.fields}), 400
+
+
+@bp.route('/api/orc-preview', methods=['POST'])
+def orc_preview_api():
+    # Read-only draft calculations; no settings are saved by this endpoint.
+    if not (set(request.environ.get('hhh.roles') or ()) & {'green', 'purple', 'gamemaster'}):
+        return jsonify({'ok': False, 'error': 'authentication required'}), 403
+    incoming = request.get_json(silent=True) or {}
+    if incoming.get('settings') is not None and 'gamemaster' not in (request.environ.get('hhh.roles') or ()):
+        return jsonify({'ok': False, 'error': 'Gamemaster required for draft settings'}), 403
+    settings, errors = validate_settings(incoming.get('settings') or _settings.snapshot())
+    if errors:
+        return jsonify({'ok': False, 'errors': errors, 'error': 'settings validation failed'}), 400
+    engine, ready = _require_engine()
+    with engine.lock:
+        previews = [orc_schedule(settings, engine.wave_source, tier) for tier in range(1, 5)]
+    return jsonify({'ok': True, 'previews': previews})
+
+
+def _orc_events():
+    def snapshot():
+        with _lock:
+            engine = _engine
+        if engine is None:
+            return {'ok': False, 'error': 'Photon Level unavailable', 'previews': []}
+        with engine.lock:
+            return {'ok': True, 'previews': [orc_schedule(_settings.snapshot(), engine.wave_source, tier) for tier in range(1, 5)]}
+    return _live.stream(snapshot, interval=15)

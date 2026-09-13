@@ -45,6 +45,14 @@ dormant, active level 1, upgraded level 5, and damaged.
 
 ## Runtime weapon animation pack
 
+The new sliding-floor elevator installation brief and start frame are in
+[KLING_TURRET_INSTALL_PROMPTS.md](KLING_TURRET_INSTALL_PROMPTS.md).
+It includes a shared RGBA start master, black-matte start/end upload pairs for
+all four turrets, a three-second perspective rise and boot rotation, and the
+per-region alpha workflow. Rebuild stills with
+`tools/build_turret_kling_keyframes.py`. New elevator videos are pending;
+existing activation sheets retain their original trapdoor animation.
+
 The game-facing layered turrets and combat effects live outside the original
 60-sprite modular pass so existing map references remain stable. The runtime
 pack adds independently rotated bases and weapon heads for machine gun,

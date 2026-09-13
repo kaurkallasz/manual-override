@@ -10,7 +10,7 @@
   const settingKeys = ["near_xy_mm", "near_z_mm", "unique_margin_mm", "stale_s"];
   const targetsOpen = {green:true,purple:true};
   const stageNames = {visible:"Visible", unknown:"Unknown", near_arm:"Near arm", pickup_suspected:"Pickup suspected",
-    likely_carried:"Likely carried", release_observed:"Release signal", placement_stable:"Placement stable"};
+    likely_carried:"Likely carried", release_observed:"Release signal", placement_stable:"Calibrated overlap stable"};
   function showSettings(value, force = false) {
     if(value?.contract!=="photon.board.settings" || value.version!==1) return;
     settings = value;
@@ -131,13 +131,17 @@
   }
   function renderTable(data) {
     const rows=[];
+    const gamePlacement=data.game_placement||{}, gameRelations=Array.isArray(gamePlacement.relations)?gamePlacement.relations:[];
     for(const tag of data.tags || []) {
       if(tag.kind!=="movable"&&!$("markers").checked) continue;
       const row=element("tr"); row.append(element("td",`#${tag.id}`),element("td",tag.visible?"Visible":Number.isFinite(tag.age_s)?`Last seen ${tag.age_s}s ago`:"Last known / stale"));
       const stage=element("td");stage.append(element("span",stageNames[tag.stage]||tag.stage,"stage"+(tag.stage==="placement_stable"?" good":tag.stage==="unknown"?" bad":"")));
-      row.append(stage,element("td",tag.arm||"—"),element("td",tag.target_id!=null?`#${tag.target_id}`:"—"),element("td",`${tag.confidence} · ${tag.evidence}`)); rows.push(row);
+      const relations=gameRelations.filter(relation=>Number(relation.movable_id)===Number(tag.id));
+      const stable=relations.find(relation=>relation.stable), nearest=stable||relations.find(relation=>Number(relation.rank)===0)||relations[0];
+      const gameEvidence=gamePlacement.status!=="ready"?`Unavailable · ${gamePlacement.error||"no fresh evidence"}`:nearest?`${nearest.stable?"Stable":"Dwelling"} near #${nearest.marker_id} via ${nearest.arm}`:"No relationship";
+      row.append(stage,element("td",tag.arm||"—"),element("td",tag.target_id!=null?`#${tag.target_id}`:"—"),element("td",gameEvidence,stable?"good":gamePlacement.status!=="ready"?"bad":""),element("td",`${tag.confidence} · ${tag.evidence}`)); rows.push(row);
     }
-    if(!rows.length){const row=element("tr"),td=element("td","No movable tags observed. IDs 100+ identify raised hardware tags; enable fixed markers to see other detections.");td.colSpan=6;row.append(td);rows.push(row);}
+    if(!rows.length){const row=element("tr"),td=element("td","No movable tags observed. IDs 100+ identify raised hardware tags; enable fixed markers to see other detections.");td.colSpan=7;row.append(td);rows.push(row);}
     $("tagRows").replaceChildren(...rows);
   }
   function renderPreview(data) {

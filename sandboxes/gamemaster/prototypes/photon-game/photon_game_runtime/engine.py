@@ -9,11 +9,16 @@ import random
 import threading
 import time
 from collections import defaultdict
+from functools import lru_cache
 from itertools import combinations
 from typing import Any, Callable
 
+from .row_barriers import RowBarrierRuntime, validate_rows, validate_wave_routes
+from . import companions
+
 
 MAX_ACTIVE_ENEMIES = 1000
+REGULAR_ORCS_PER_BRUTE = 40
 COLLISION_PADDING = 0.05
 COLLISION_CELL_SIZE = 12.0
 FLOW_SPAWN_OFFSETS = (
@@ -61,7 +66,7 @@ ENEMY_STATS = {
     "grunt": {"hp": 70.0, "speed": 62.0, "core_dps": 6.0, "collision_radius": 2.2},
     "runner": {"hp": 46.0, "speed": 104.0, "core_dps": 4.0, "collision_radius": 2.2},
     "breaker": {"hp": 130.0, "speed": 50.0, "core_dps": 10.0, "collision_radius": 2.2},
-    "brute": {"hp": 240.0, "speed": 34.0, "core_dps": 16.0, "collision_radius": 2.8},
+    "brute": {"hp": 960.0, "speed": 34.0, "core_dps": 64.0, "collision_radius": 2.8},
 }
 TOWER_STATS = {
     "machine_gun": {"near_range": 190.0, "far_range": 360.0, "wide_half_angle": 55.0, "narrow_half_angle": 12.0, "rate": 6.0},
@@ -104,6 +109,14 @@ DEFAULT_SETTINGS = {
     "enemy_core_damage_multiplier": 1.0,
     "enemy_tower_damage_multiplier": 1.0,
     "enemy_count_multiplier": 1.0,
+    "control_orc_multiplier_joint": 1.0,
+    "control_orc_multiplier_xyz": 1.15,
+    "control_orc_multiplier_image": 1.30,
+    "control_orc_multiplier_cue": 1.50,
+    "brute_first_wave": 4,
+    "brute_size_multiplier": 2.0,
+    "brute_health": ENEMY_STATS["brute"]["hp"],
+    "brute_damage_per_s": ENEMY_STATS["brute"]["core_dps"],
     "release_rate_multiplier": 1.0,
     "force_field_damage_per_s": 8.0,
     "force_field_slow": 0.55,
@@ -269,6 +282,12 @@ def _segment_intersects_polygon(
         _segments_intersect(ax, ay, bx, by, cx, cy, dx, dy)
         for (cx, cy), (dx, dy) in zip(points, (*points[1:], points[0]))
     )
+
+
+@lru_cache(maxsize=4096)
+def _road_segment_geometry(ax, ay, bx, by):
+    dx,dy = bx-ax,by-ay
+    return (ax,ay,dx,dy,dx*dx+dy*dy,min(ax,bx),max(ax,bx),min(ay,by),max(ay,by))
 
 
 def _closest_point_on_segment(
@@ -616,6 +635,9 @@ class ContractLevelModel(LevelRuntime):
     """Adapt Photon Level's validated JSON graph to the game runtime interface."""
 
     def __init__(self, runtime: dict[str, Any]) -> None:
+        self.runtime_version = runtime.get('runtime_version', 1)
+        if type(self.runtime_version) is not int or self.runtime_version not in (1, 2):
+            raise ValueError('unsupported level runtime version')
         if not isinstance(runtime, dict):
             raise ValueError("Photon Level runtime must be an object")
         try:
@@ -671,8 +693,14 @@ class ContractLevelModel(LevelRuntime):
             for node in self.nodes.values()
             if node.get("node_kind") == "spawn"
         }
-        if len(self.spawns) != 4:
-            raise ValueError("Photon Level runtime must contain four spawn groups")
+        if (len(self.spawns) != (2 if self.runtime_version == 2 else 4)
+                or sum(n.get('node_kind') == 'spawn' for n in self.nodes.values()) != len(self.spawns)):
+            raise ValueError('Photon Level spawn count does not match its version')
+        enabled = runtime.get('enabled_spawn_groups', None if self.runtime_version == 2 else list(self.spawns))
+        if (not isinstance(enabled, list) or any(not isinstance(s, str) for s in enabled)
+                or len(enabled) != len(self.spawns) or set(enabled) != set(self.spawns)):
+            raise ValueError('Photon Level enabled spawn groups are invalid')
+        self.enabled_spawn_groups = tuple(enabled)
 
         self.edges = {}
         self.edge_by_id = {}
@@ -691,6 +719,12 @@ class ContractLevelModel(LevelRuntime):
                 ]
                 edge["path_length"] = float(edge["path_length"])
                 edge["edge_id"] = str(edge["edge_id"])
+                if (edge['from'] not in self.nodes or edge['to'] not in self.nodes
+                        or edge['from'] != int(from_node)
+                        or not math.isfinite(edge['cost']) or edge['cost'] <= 0
+                        or len(edge['points']) < 2
+                        or not all(math.isfinite(v) for p in edge['points'] for v in p)):
+                    raise ValueError('Photon Level edge geometry is invalid')
                 if edge["edge_id"] in self.edge_by_id:
                     raise ValueError("Photon Level runtime has duplicate edge IDs")
                 self.edge_by_id[edge["edge_id"]] = edge
@@ -705,6 +739,8 @@ class ContractLevelModel(LevelRuntime):
             str(group): [tuple(map(float, point)) for point in points]
             for group, points in runtime["paths"].items()
         }
+        if set(self.paths) != set(self.spawns) or set(self.route_edge_ids) != set(self.spawns):
+            raise ValueError('Photon Level routes must match enabled spawn groups')
         self.junctions = {
             tuple(map(float, point)) for point in runtime.get("junctions", [])
         }
@@ -716,6 +752,7 @@ class ContractLevelModel(LevelRuntime):
             int(marker): str(socket_id)
             for marker, socket_id in runtime["socket_by_marker"].items()
         }
+        companions.validate_geometry(self.sockets, self.width, self.height, runtime.get('core_visual'))
         if sorted(self.socket_by_marker) != list(range(40, 56)):
             raise ValueError("Photon Level runtime must contain ArUco IDs 40-55")
         self.ring_adjacency = {
@@ -738,14 +775,30 @@ class ContractLevelModel(LevelRuntime):
             }
             for blocker in runtime.get("force_field_blockers", [])
         )
+        self.row_barriers = validate_rows(runtime, self)
 
 
-class DefenseEngine:
+CONTROL_ORC_KEYS = ('control_orc_multiplier_joint', 'control_orc_multiplier_xyz',
+                    'control_orc_multiplier_image', 'control_orc_multiplier_cue')
+UPGRADE_TRACKS = {'machine_gun': 'damage-machine-gun', 'flamethrower': 'damage-flamethrower',
+                  'mortar': 'damage-mortar', 'tesla_coil': 'damage-tesla-coil'}
+
+
+def orc_schedule(settings, waves, tier=1):
+    scale = float(settings['enemy_count_multiplier']) * float(settings.get(CONTROL_ORC_KEYS[tier - 1], (1, 1.15, 1.3, 1.5)[tier - 1]))
+    groups = [[max(1, round(int(g.get('count', 0)) * scale)) for g in wave.get('groups', [])]
+              for wave in waves[:int(settings['wave_count'])]]
+    return {'tier': tier, 'multiplier': scale, 'groups': groups,
+            'waves': [sum(g) for g in groups], 'total': sum(sum(g) for g in groups)}
+
+
+class DefenseEngine(RowBarrierRuntime):
     def __init__(self, runtime: dict[str, Any], waves: list[dict[str, Any]]) -> None:
         """Create the simulation exclusively from Photon Level contract values."""
         self.level = ContractLevelModel(runtime)
         if not isinstance(waves, list) or not waves:
             raise ValueError("waves must be a non-empty list")
+        validate_wave_routes(waves, self.level)
         self.wave_source = json.loads(json.dumps(waves))
         self.lock = threading.RLock()
         self._wake: Callable[[], None] | None = None
@@ -761,6 +814,8 @@ class DefenseEngine:
             self.phase = "setup"
             self.paused = False
             self.virtual_play = False
+            # Retain the operator's test selection across virtual resets.
+            self.virtual_test_loadout = getattr(self, 'virtual_test_loadout', None)
             self.sim_time = 0.0
             self.runtime_time = 0.0
             self.run_started_at = None
@@ -779,6 +834,8 @@ class DefenseEngine:
             self.mortar_impacts: list[dict[str, Any]] = []
             self.next_projectile_id = 1
             self.kills = 0
+            self.player_progression = {}
+            self.contract_control_tier = 1
             self.breaches = 0
             self.placements: dict[str, dict[str, Any]] = {}
             self.activation_order: list[str] = []
@@ -808,6 +865,8 @@ class DefenseEngine:
             self.core_purge_ignited_ids: set[int] = set()
             self.events: list[dict[str, Any]] = []
             self._next_event_sequence = 1
+            self._reset_rows()
+            self._road_tracking_tick = 0
 
     def set_wake(self, callback: Callable[[], None]) -> None:
         self._wake = callback
@@ -829,6 +888,7 @@ class DefenseEngine:
             if waves is not None:
                 if not isinstance(waves, list) or not waves:
                     raise ValueError("waves must be a non-empty list")
+                validate_wave_routes(waves, next_level)
                 self.wave_source = json.loads(json.dumps(waves))
             virtual_play = self.virtual_play
             loadout = dict(self.loadout)
@@ -855,7 +915,8 @@ class DefenseEngine:
 
     def _run(self) -> None:
         last = time.monotonic()
-        while not self._stop.wait(0.05):
+        deadline = last + 0.05
+        while not self._stop.wait(max(0.0, deadline-time.monotonic())):
             now = time.monotonic()
             dt = min(0.1, now - last)
             last = now
@@ -870,8 +931,11 @@ class DefenseEngine:
                         "error": f"Physical input failed: {exc}",
                     })
             self.step(dt)
+            # Maintain the existing 20 Hz simulation budget without adding
+            # a second 50 ms delay after the work. Never burst to catch up.
+            deadline = max(deadline+0.05, time.monotonic())
 
-    def start(self, settings: dict[str, Any] | None = None) -> None:
+    def start(self, settings: dict[str, Any] | None = None, *, progression=None) -> None:
         with self.lock:
             virtual_play = self.virtual_play
             runtime_time = self.runtime_time
@@ -903,6 +967,8 @@ class DefenseEngine:
             ]
             self.reset()
             self.virtual_play = virtual_play
+            self.player_progression = json.loads(json.dumps(progression or {}))
+            self.contract_control_tier = max((p['control_tier'] for p in self.player_progression.values()), default=1)
             self.runtime_time = runtime_time
             self.loadout = loadout
             self.placements = placements
@@ -912,11 +978,13 @@ class DefenseEngine:
                 self.settings.update(settings)
             self.settings["max_active_enemies"] = min(MAX_ACTIVE_ENEMIES, int(self.settings["max_active_enemies"]))
             self.core_max_hp = self.core_hp = float(self.settings["core_hp"])
-            tower_base_max_hp = self._tower_max_hp()
-            tower_max_hp = (
-                tower_base_max_hp * self._link_multiplier_for_count(1)
-            )
             for tower in self.placements.values():
+                tower.pop('companion', None)
+                if not (self.virtual_play and self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0):
+                    tower['upgrade_level'] = self._unit_level(tower['owner'], tower['tower_type'])
+                tower['upgrade_multiplier'] = 1 + .1 * (tower['upgrade_level'] - 1)
+                tower_base_max_hp = self._tower_max_hp() * tower['upgrade_multiplier']
+                tower_max_hp = tower_base_max_hp * self._link_multiplier_for_count(1)
                 tower["base_max_hp"] = tower_base_max_hp
                 tower["max_hp"] = tower_max_hp
                 tower["hp"] = tower_max_hp
@@ -931,6 +999,7 @@ class DefenseEngine:
                     tower.get("aim_angle", tower.get("facing_angle", 0.0))
                 )
             self.phase = "running"
+            self._sync_companions(create=True, installed=True)
             self.run_started_at = time.time()
             for topology in field_topology:
                 self._create_force_field(
@@ -956,8 +1025,43 @@ class DefenseEngine:
     def set_virtual_play(self, enabled: bool) -> None:
         with self.lock:
             self.virtual_play = bool(enabled)
+            self._refresh_upgrade_levels()
             self._event("input_mode", virtual_play=self.virtual_play)
         self._changed()
+
+    def set_virtual_test_loadout(self, levels) -> None:
+        """Practice-only overrides; no saved player or currency mutations."""
+        with self.lock:
+            if not self.virtual_play:
+                raise ValueError('enable Virtual play before changing test unlocks')
+            if self.phase not in ('setup', 'running'):
+                raise ValueError('reset the finished game before changing test unlocks')
+            if levels is not None:
+                tracks = {*UPGRADE_TRACKS.values(), 'forcefield'}
+                if not isinstance(levels, dict) or set(levels) != tracks:
+                    raise ValueError('provide all four turret levels and the force-field level')
+                for track, level in levels.items():
+                    minimum = 1 if track == 'forcefield' else 0
+                    if type(level) is not int or not minimum <= level <= 4:
+                        raise ValueError(f'{track} must be an integer from {minimum} to 4')
+            self.virtual_test_loadout = dict(levels) if levels is not None else None
+            self._refresh_upgrade_levels()
+            self._event('virtual_test_loadout', levels=self.virtual_test_loadout)
+        self._changed()
+
+    def _refresh_upgrade_levels(self) -> None:
+        for tower in self.placements.values():
+            # Unlocks govern placement. Locking a type does not remove its units.
+            if self.virtual_play and self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0:
+                continue
+            level = self._unit_level(tower['owner'], tower['tower_type'])
+            tower.update(upgrade_level=level, upgrade_multiplier=1 + .1 * (level - 1))
+        self._sync_tower_link_bonuses()
+        self._sync_companions(create=True)
+        for field in self.force_fields.values():
+            field.update(self._field_upgrade(self.placements[field['from_socket']], self.placements[field['to_socket']]))
+            if not field['broken'] and field['hits'] >= field['capacity']:
+                field.update(broken=True, broken_at=self.sim_time)
 
     def set_loadout(self, atom_tag_id: int, tower_type: str) -> None:
         atom_tag_id = int(atom_tag_id)
@@ -969,6 +1073,26 @@ class DefenseEngine:
             )
         with self.lock:
             self.loadout[atom_tag_id] = expected
+
+    def _sync_companion(self, tower, *, create=False, installed=False):
+        return companions.synchronize(tower, self.level.sockets[tower['socket_id']].get('companion'),
+                                      self.runtime_time, TOWER_ACTIVATION_DURATION_S,
+                                      1 / TOWER_STATS[tower['tower_type']]['rate'],
+                                      create=create, installed=installed)
+
+    def _sync_companions(self, *, create=False, installed=False):
+        return [unit for tower in self.placements.values()
+                if (unit := self._sync_companion(tower, create=create, installed=installed)) is not None]
+
+    def _unit_level(self, owner, kind):
+        if self.virtual_play and self.virtual_test_loadout is not None:
+            return max(1, self.virtual_test_loadout[UPGRADE_TRACKS.get(kind, kind)])
+        return int(self.player_progression.get(owner, {}).get('levels', {}).get(UPGRADE_TRACKS.get(kind, kind), 1))
+
+    def _field_upgrade(self, first, second):
+        level = min(self._unit_level(first.get('owner'), 'forcefield'), self._unit_level(second.get('owner'), 'forcefield'))
+        return {'upgrade_level': level, 'visual_width_px': 8 + 1.5 * (level - 1),
+                'capacity': round(int(self.settings['force_field_hit_capacity']) * (1 + .2 * (level - 1)))}
 
     def _tower_max_hp(self) -> float:
         """Return a turret's unlinked baseline health before link scaling."""
@@ -1047,8 +1171,8 @@ class DefenseEngine:
     def _sync_tower_link_bonuses(self) -> dict[str, dict[str, float | int]]:
         """Apply current link-scaled max health without changing health percent."""
         link_state = self._tower_link_state()
-        base_max_hp = self._tower_max_hp()
         for socket_id, tower in self.placements.items():
+            base_max_hp = self._tower_max_hp() * float(tower.get('upgrade_multiplier', 1))
             bonus = link_state[str(socket_id)]
             new_max_hp = base_max_hp * float(bonus["link_multiplier"])
             old_max_hp = max(1.0, float(tower.get("max_hp", new_max_hp)))
@@ -1092,11 +1216,15 @@ class DefenseEngine:
             float(self.level.core["y"]) - socket["y"],
             float(self.level.core["x"]) - socket["x"],
         )
-        base_max_hp = self._tower_max_hp()
+        upgrade_level = self._unit_level(owner, kind)
+        upgrade_multiplier = 1 + .1 * (upgrade_level - 1)
+        base_max_hp = self._tower_max_hp() * upgrade_multiplier
         link_multiplier = self._link_multiplier_for_count(1)
         max_hp = base_max_hp * link_multiplier
-        return {
+        tower = {
             "placement_id": socket_id,
+            "upgrade_level": upgrade_level,
+            "upgrade_multiplier": upgrade_multiplier,
             "atom_tag_id": atom_tag_id,
             "owner": owner,
             "socket_id": socket_id,
@@ -1126,6 +1254,8 @@ class DefenseEngine:
             "destroyed": False,
             "destroyed_at": None,
         }
+        self._sync_companion(tower, create=True, installed=True)
+        return tower
 
     def _replenish_tower(self, tower: dict[str, Any], activation_tag: int) -> None:
         if tower.get("destroyed"):
@@ -1137,6 +1267,9 @@ class DefenseEngine:
         self._reset_connected_fields(tower["socket_id"])
         self._sync_tower_link_bonuses()
         tower["hp"] = tower["max_hp"]
+        companion = self._sync_companion(tower)
+        if companion:
+            companion['cooldown'] = 0.0
         self._event(
             "tower_replenished",
             atom_tag_id=tower["atom_tag_id"],
@@ -1226,6 +1359,8 @@ class DefenseEngine:
             if socket_id not in self.level.sockets:
                 raise ValueError("unknown socket")
             kind = DEFAULT_LOADOUT[atom_tag_id]
+            if source == 'virtual' and self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[kind]] == 0:
+                raise ValueError(f'{kind.replace("_", " ")} is locked in the virtual test loadout')
             if tower_type not in (None, "", kind):
                 raise ValueError(
                     f"Atom {atom_tag_id} always activates {kind.replace('_', ' ')}"
@@ -1391,26 +1526,49 @@ class DefenseEngine:
         if number < 1 or number > limit:
             return
         config = self.wave_source[number - 1]
+        first_brute_wave = int(self.settings["brute_first_wave"])
         groups = []
+        spawn_offset = 0
         for source_group in config.get("groups", []):
-            count = max(1, int(round(
-                int(source_group.get("count", 0)) *
-                float(self.settings["enemy_count_multiplier"]))))
-            groups.append({**source_group, "count": count, "spawned": 0})
+            count = max(1, round(int(source_group.get("count", 0)) *
+                float(self.settings["enemy_count_multiplier"]) *
+                float(self.settings[CONTROL_ORC_KEYS[self.contract_control_tier - 1]])))
+            group = {
+                **source_group, "count": count, "spawned": 0,
+                "spawn_offset": spawn_offset,
+                "brute_interval": (
+                    REGULAR_ORCS_PER_BRUTE + 1 if number >= first_brute_wave else 0
+                ),
+            }
+            if group["enemy"] == "brute":
+                group["enemy"] = "grunt"
+            groups.append(group)
+            spawn_offset += count
         self.launched_waves.append({"wave": number, "started_at": self.sim_time, "groups": groups})
         self.current_wave = number
         self.next_wave_at = self.sim_time + float(self.settings["wave_interval_s"])
         self._event("wave_started", wave=number)
+
+    @staticmethod
+    def _wave_enemy_type(group: dict[str, Any], spawn_index: int) -> str:
+        interval = int(group.get("brute_interval", 0))
+        ordinal = int(group.get("spawn_offset", 0)) + spawn_index + 1
+        if interval > 0 and ordinal % interval == 0:
+            return "brute"
+        return str(group["enemy"])
 
     def _spawn_due(self) -> None:
         active_limit = int(self.settings["max_active_enemies"])
         spawn_grid = _CollisionGrid(list(self.enemies.values()))
         while self.pressure_queue and len(self.enemies) < active_limit:
             pending = self.pressure_queue[0]
+            spawn_index = int(pending.get("spawn_index", 0))
             if not self._spawn_enemy(
-                pending["enemy"], pending["lane_weights"], spawn_grid
+                self._wave_enemy_type(pending, spawn_index),
+                pending["lane_weights"], spawn_grid,
             ):
                 break
+            pending["spawn_index"] = spawn_index + 1
             pending["count"] -= 1
             self.pressure_bank -= 1
             if pending["count"] <= 0:
@@ -1422,20 +1580,9 @@ class DefenseEngine:
                 count = int(group["count"])
                 target = min(count, max(1 if count else 0, int(count * min(1.0, elapsed / duration))))
                 while group["spawned"] < target:
-                    if len(self.enemies) >= active_limit:
-                        deferred = target - group["spawned"]
-                        accepted = min(deferred, 2000 - self.pressure_bank)
-                        if accepted > 0:
-                            self.pressure_queue.append({
-                                "enemy": str(group["enemy"]),
-                                "lane_weights": dict(group.get("lane_weights") or {}),
-                                "count": accepted,
-                            })
-                            self.pressure_bank += accepted
-                        group["spawned"] = target
-                        break
-                    if self._spawn_enemy(
-                        str(group["enemy"]), group.get("lane_weights") or {}, spawn_grid
+                    if len(self.enemies) < active_limit and self._spawn_enemy(
+                        self._wave_enemy_type(group, group["spawned"]),
+                        group.get("lane_weights") or {}, spawn_grid,
                     ):
                         group["spawned"] += 1
                         continue
@@ -1446,9 +1593,13 @@ class DefenseEngine:
                             "enemy": str(group["enemy"]),
                             "lane_weights": dict(group.get("lane_weights") or {}),
                             "count": accepted,
+                            "spawn_index": group["spawned"],
+                            "spawn_offset": group.get("spawn_offset", 0),
+                            "brute_interval": group.get("brute_interval", 0),
                         })
                         self.pressure_bank += accepted
-                    group["spawned"] = target
+                    # Keep overflow in this source group for the next tick.
+                    group["spawned"] += accepted
                     break
         if self.current_wave < min(int(self.settings["wave_count"]), len(self.wave_source)) and self.sim_time >= self.next_wave_at:
             self._launch_wave(self.current_wave + 1)
@@ -1459,17 +1610,33 @@ class DefenseEngine:
         weights: dict[str, Any],
         collision_grid: _CollisionGrid | None = None,
     ) -> bool:
-        lanes = [lane for lane in self.level.paths if float(weights.get(lane, 0.0)) > 0]
+        self._refresh_row_barriers()
+        valid_weights = {}
+        for candidate in self.level.enabled_spawn_groups:
+            try:
+                weight = float(weights.get(candidate, 0))
+            except (ValueError, TypeError, AttributeError):
+                continue
+            if math.isfinite(weight) and weight > 0:
+                valid_weights[candidate] = weight
+        lanes = list(valid_weights)
         if not lanes:
-            lanes = list(self.level.paths)
+            lanes = list(self.level.enabled_spawn_groups)
+            valid_weights = {lane: 1.0 for lane in lanes}
         stats = ENEMY_STATS.get(enemy_type, ENEMY_STATS["grunt"])
+        if enemy_type == "brute":
+            stats = {
+                **stats,
+                "hp": float(self.settings["brute_health"]),
+                "core_dps": float(self.settings["brute_damage_per_s"]),
+            }
         radius = float(stats["collision_radius"])
         remaining_lanes = list(lanes)
         lane = None
         flow_offset = 0.0
         spawn_x = spawn_y = 0.0
         while remaining_lanes:
-            values = [float(weights.get(candidate, 1.0)) for candidate in remaining_lanes]
+            values = [valid_weights[candidate] for candidate in remaining_lanes]
             candidate = self._rng.choices(remaining_lanes, weights=values, k=1)[0]
             first_offset = self.track_cursor[candidate] % len(FLOW_SPAWN_OFFSETS)
             for offset_attempt in range(len(FLOW_SPAWN_OFFSETS)):
@@ -1501,7 +1668,16 @@ class DefenseEngine:
         hp = stats["hp"] * float(self.settings["enemy_health_multiplier"])
         enemy_id = self.next_enemy_id
         self.next_enemy_id += 1
-        path = self._path_to_core_basin(lane, flow_offset, radius)
+        route_ids = self.level.route_edge_ids[lane]
+        route_points = self.level.paths[lane]
+        if self.level.row_barriers:
+            result = self._cached_row_route(self.level._node_id(self.level.spawns[lane]))
+            if result is None:
+                return False
+            route, _ = result
+            route_ids = [e['edge_id'] for e in route]
+            route_points = self.level._points_for_edges(route)
+        path = self._path_to_core_basin(lane, flow_offset, radius, points=route_points)
         initial_dx, initial_dy = path[1][0] - spawn_x, path[1][1] - spawn_y
         initial_length = math.hypot(initial_dx, initial_dy)
         speed = (
@@ -1543,10 +1719,11 @@ class DefenseEngine:
             "segment": 0,
             "route_steps": [
                 {"edge_id": edge_id, "reverse": False}
-                for edge_id in self.level.route_edge_ids[lane]
+                for edge_id in route_ids
             ],
             "current_route_step": 0,
-            "current_edge_id": self.level.route_edge_ids[lane][0],
+            "current_edge_id": route_ids[0],
+            "row_route_revision": self.row_topology_revision,
             "current_edge_progress": 0.0,
             "attacking": False,
             "progress": 0.0,
@@ -1561,15 +1738,17 @@ class DefenseEngine:
         return True
 
     def _path_to_core_basin(
-        self, lane: str, flow_offset: float, radius: float
+        self, lane: str, flow_offset: float, radius: float, *, points=None
     ) -> list[tuple[float, float]]:
         core_x = float(self.level.core["x"])
-        arrival_y = float(self.level.paths[lane][-2][1])
-        road_centerline = [tuple(point) for point in self.level.paths[lane][:-2]]
+        points = points if points is not None else self.level.paths[lane]
+        arrival_y = float(points[-2][1])
+        road_centerline = [tuple(point) for point in points[:-2]]
         # Carry each particle's lateral offset through the visible road/plaza
         # seam. The endpoint sits just inside the basin boundary, so admission
         # changes behavior without changing screen position.
-        entry_x = core_x - CORE_BASIN_HALF_SIZE + radius + 0.5
+        from_right = bool(self.level.row_barriers and road_centerline and road_centerline[-1][0] > core_x)
+        entry_x = core_x + (1 if from_right else -1) * (CORE_BASIN_HALF_SIZE - radius - 0.5)
         entry_y = arrival_y + flow_offset
         road_centerline.append((entry_x, entry_y))
         return _rounded_polyline(road_centerline)
@@ -1626,15 +1805,26 @@ class DefenseEngine:
     ) -> tuple[float, float, int, float, float]:
         path = enemy["path"]
         segment = int(enemy["segment"])
-        best = (path[segment][0], path[segment][1], segment, 0.0, math.inf)
-        for index in range(max(0, segment - 3), min(len(path) - 1, segment + 8)):
-            point_x, point_y, ratio = _closest_point_on_segment(
-                x, y, path[index][0], path[index][1],
-                path[index + 1][0], path[index + 1][1],
-            )
-            distance = math.hypot(x - point_x, y - point_y)
-            if distance < best[4]:
-                best = point_x, point_y, index, ratio, distance
+        cached = enemy.get('_road_geometry')
+        if cached is None or cached[0] is not path:
+            geometry = tuple(_road_segment_geometry(a[0],a[1],b[0],b[1])
+                             for a,b in zip(path,path[1:]))
+            cached = (path,geometry)
+            enemy['_road_geometry'] = cached
+        geometry = cached[1]
+        best = (path[segment][0],path[segment][1],segment,0.0,math.inf)
+        distance = math.inf
+        for index in range(max(0,segment-3),min(len(path)-1,segment+8)):
+            ax,ay,dx,dy,length_sq,left,right,top,bottom = geometry[index]
+            if x < left-distance or x > right+distance or y < top-distance or y > bottom+distance:
+                continue
+            ratio = ((x-ax)*dx+(y-ay)*dy)/length_sq if length_sq > 1e-12 else 0.0
+            ratio = 0.0 if ratio < 0 else 1.0 if ratio > 1 else ratio
+            px,py = ax+dx*ratio,ay+dy*ratio
+            candidate = math.hypot(x-px,y-py)
+            if candidate < distance:
+                distance = candidate
+                best = (px,py,index,ratio,distance)
         return best
 
     def _constrain_road_particle(self, enemy: dict[str, Any]) -> None:
@@ -1784,6 +1974,9 @@ class DefenseEngine:
         for enemy in living:
             if enemy["attacking"]:
                 continue
+            if (self.level.row_barriers
+                    and enemy.get('row_route_revision') != self.row_topology_revision):
+                continue
             self._update_road_progress(enemy)
             path = enemy["path"]
             if enemy["segment"] < len(path) - 1:
@@ -1862,6 +2055,7 @@ class DefenseEngine:
     ) -> None:
         grid = _CollisionGrid(living)
         origins = {enemy["id"]: (enemy["x"], enemy["y"]) for enemy in living}
+        origin_segments = {enemy['id']: enemy['segment'] for enemy in living} if self._active_rows else {}
         for enemy in living:
             if enemy["attacking"]:
                 self._basin_particle_velocity(enemy, grid, dt)
@@ -1878,10 +2072,20 @@ class DefenseEngine:
             enemy["x"] += enemy["vx"] * dt
             enemy["y"] += enemy["vy"] * dt
             self._constrain_particle(enemy)
+            if self._active_rows:
+                proposed = (enemy['x'],enemy['y'])
+                self._clip_row_motion(enemy, origins[enemy['id']])
+                if proposed != (enemy['x'],enemy['y']):
+                    enemy['segment'] = origin_segments[enemy['id']]
 
         self._resolve_particle_contacts(living)
         for enemy in living:
             origin_x, origin_y = origins[enemy["id"]]
+            if self._active_rows:
+                proposed = (enemy['x'],enemy['y'])
+                self._clip_row_motion(enemy, (origin_x, origin_y))
+                if proposed != (enemy['x'],enemy['y']):
+                    enemy['segment'] = origin_segments[enemy['id']]
             actual_x = (enemy["x"] - origin_x) / dt
             actual_y = (enemy["y"] - origin_y) / dt
             limit = (
@@ -2241,7 +2445,7 @@ class DefenseEngine:
             "ring_boundary": False,
             "established_at": self.sim_time if established_at is None else established_at,
             "hits": 0,
-            "capacity": int(self.settings["force_field_hit_capacity"]),
+            **self._field_upgrade(first, second),
             "broken": False,
             "last_hit_at": None,
             "last_hit_x": None,
@@ -2937,7 +3141,7 @@ class DefenseEngine:
         for field in ring_fields:
             assert field is not None
             field["hits"] = 0
-            field["capacity"] = int(self.settings["force_field_hit_capacity"])
+            # Ring replenishment retains the frozen upgrade capacity.
             field["broken"] = False
             field["last_hit_at"] = None
             field["last_hit_x"] = None
@@ -3035,6 +3239,8 @@ class DefenseEngine:
         return dict(penalties)
 
     def _reroute_enemy(self, enemy: dict[str, Any]) -> bool:
+        if self.level.row_barriers:
+            return self._reroute_row_enemy(enemy, force_field_contact=True)
         edge_penalties = self._field_edge_penalties()
         tracking = self._sync_enemy_road_edge(enemy, search_all=True)
         if tracking is None:
@@ -3129,7 +3335,13 @@ class DefenseEngine:
         for field in self.force_fields.values():
             if not self._field_operational(field):
                 continue
+            left,right = min(field['ax'],field['bx']),max(field['ax'],field['bx'])
+            top,bottom = min(field['ay'],field['by']),max(field['ay'],field['by'])
             for enemy in enemies:
+                radius = FIELD_CONTACT_DISTANCE + enemy['collision_radius']
+                x,y = enemy['x'],enemy['y']
+                if x < left-radius or x > right+radius or y < top-radius or y > bottom+radius:
+                    continue
                 if enemy["id"] in handled:
                     continue
                 contacts = enemy.setdefault("field_contact_until", {})
@@ -3176,36 +3388,38 @@ class DefenseEngine:
         previous_positions: dict[int, tuple[float, float]] | None = None,
     ) -> None:
         topology_changed = False
+        samples = []
+        for enemy in enemies:
+            x,y = float(enemy['x']),float(enemy['y'])
+            previous = (previous_positions.get(int(enemy['id']))
+                        if previous_positions is not None and enemy.get('id') is not None else None)
+            px,py = previous or (x,y)
+            radius = TOWER_ATTACK_RADIUS + max(0.0,float(enemy.get('collision_radius',0)))
+            dps = float(enemy.get('tower_dps',enemy.get('core_dps',0)))
+            samples.append((x,y,px,py,radius,dps))
         for tower in self.placements.values():
             if tower.get("destroyed"):
                 continue
             damage = 0.0
-            for enemy in enemies:
-                current_x, current_y = float(enemy["x"]), float(enemy["y"])
-                previous = (
-                    previous_positions.get(int(enemy["id"]))
-                    if previous_positions is not None and enemy.get("id") is not None
-                    else None
-                )
-                previous_x, previous_y = previous or (current_x, current_y)
-                attack_radius = (
-                    TOWER_ATTACK_RADIUS
-                    + max(0.0, float(enemy.get("collision_radius", 0.0)))
-                )
-                overlap = _segment_circle_overlap_fraction(
-                    previous_x,
-                    previous_y,
-                    current_x,
-                    current_y,
-                    float(tower["x"]),
-                    float(tower["y"]),
-                    attack_radius,
-                )
-                damage += (
-                    float(enemy.get("tower_dps", enemy.get("core_dps", 0.0)))
-                    * dt
-                    * overlap
-                )
+            tx,ty = float(tower['x']),float(tower['y'])
+            companion = tower.get('companion')
+            cx,cy = (companion['x'], companion['y']) if companion else (tx,ty)
+            left,right,top,bottom = min(tx,cx),max(tx,cx),min(ty,cy),max(ty,cy)
+            for x,y,px,py,radius,dps in samples:
+                # Reject distant movement segments before solving circle unions.
+                # The parent's larger radius conservatively covers both pods.
+                if ((x < left-radius and px < left-radius) or (x > right+radius and px > right+radius)
+                        or (y < top-radius and py < top-radius) or (y > bottom+radius and py > bottom+radius)):
+                    continue
+                if companion:
+                    overlap = companions.contact_fraction(px, py, x, y, [
+                        (tx, ty, radius),
+                        (companion['x'], companion['y'], radius - TOWER_POD_RADIUS + companion['pod_size']/2),
+                    ])
+                    damage += dps * dt * overlap
+                    continue
+                overlap = _segment_circle_overlap_fraction(px,py,x,y,tx,ty,radius)
+                damage += dps * dt * overlap
             if damage <= 0.0:
                 continue
             previous_hp = max(0.0, float(tower["hp"]))
@@ -3222,6 +3436,7 @@ class DefenseEngine:
         if topology_changed:
             self._reconcile_connections(reason="tower_destroyed")
             self._evaluate_ring_topology()
+            self._refresh_row_barriers()
 
     def _connections_snapshot(
         self, ring_preview: dict[str, Any] | None = None
@@ -3399,7 +3614,7 @@ class DefenseEngine:
                     "ring_boundary": False,
                     "established_at": None,
                     "hits": 0,
-                    "capacity": int(self.settings["force_field_hit_capacity"]),
+                    **self._field_upgrade(first or {}, second or {}),
                     "broken": False,
                     "last_hit_at": None,
                     "last_hit_x": None,
@@ -3577,9 +3792,11 @@ class DefenseEngine:
         with self.lock:
             if dt > 0:
                 self.runtime_time += dt
+            self._refresh_row_barriers()
             if self.phase != "running" or self.paused or dt <= 0:
                 return
             self.sim_time += dt
+            self._reroute_rows_batch()
             self.force_field_impacts = [
                 impact for impact in self.force_field_impacts
                 if self.sim_time - float(impact["at"])
@@ -3622,8 +3839,12 @@ class DefenseEngine:
                 self._admit_ready_particles(living)
                 self._integrate_particles(living, sub_dt, slow_by_enemy)
             self._admit_ready_particles(living)
+            self._road_tracking_tick = (self._road_tracking_tick + 1) % 3
             for enemy in living:
-                if not enemy["attacking"]:
+                if (not enemy["attacking"] and (not self.level.row_barriers
+                        or enemy['id'] % 3 == self._road_tracking_tick)):
+                    # Routing contacts always project from the actual position;
+                    # amortize this diagnostic edge/progress bookkeeping.
                     self._sync_enemy_road_edge(enemy)
             if self.core_stage != "detonating":
                 self.core_hp -= sum(
@@ -3640,7 +3861,7 @@ class DefenseEngine:
                 self.core_hp = 0.0
                 self.phase = "overrun"
                 self._event("core_destroyed")
-            elif self.core_stage != "detonating" and self.current_wave >= min(int(self.settings["wave_count"]), len(self.wave_source)) and all(group["spawned"] >= int(group["count"]) for wave in self.launched_waves for group in wave["groups"]) and not self.enemies:
+            elif self.core_stage != "detonating" and self.current_wave >= min(int(self.settings["wave_count"]), len(self.wave_source)) and all(group["spawned"] >= int(group["count"]) for wave in self.launched_waves for group in wave["groups"]) and not self.enemies and not self.pressure_bank:
                 self.phase = "won"
                 self._event("run_won")
         self._changed(force=False)
@@ -3690,6 +3911,10 @@ class DefenseEngine:
             "impact_at": self.sim_time + MORTAR_FLIGHT_DURATION_S,
             "origin_x": tower["x"],
             "origin_y": tower["y"],
+            "origin_visual_offset_x": float(tower.get('visual_x', tower['x'])) - tower['x'],
+            "origin_visual_offset_y": float(tower.get('visual_y', self.level.sockets[tower['socket_id']].get('marker_y', tower['y']))) - tower['y'],
+            "origin_upgrade_level": tower['upgrade_level'],
+            "origin_pod_size": tower.get('pod_size', 112),
             "target_x": targeting["target_x"],
             "target_y": targeting["target_y"],
             "blast_radius": targeting["blast_radius"],
@@ -3749,7 +3974,7 @@ class DefenseEngine:
             if enemy["id"] not in dead and enemy["hp"] > 0
         ]
         link_state = self._tower_link_state()
-        for tower in self.placements.values():
+        for tower in [*self.placements.values(), *self._sync_companions()]:
             if tower.get("destroyed"):
                 continue
             activation_complete_at = float(
@@ -3762,6 +3987,7 @@ class DefenseEngine:
             link_multiplier = float(
                 link_state[str(tower["socket_id"])]["link_multiplier"]
             )
+            link_multiplier *= float(tower.get('upgrade_multiplier', 1))
             targeting = self._tower_targeting(tower)
             if kind == "flamethrower":
                 tower["facing_angle"] = targeting["sweep_angle"]
@@ -3833,7 +4059,16 @@ class DefenseEngine:
                     if kind == "flamethrower"
                     else None
                 )
+                if flame_path:
+                    flame_radius = float(targeting['hit_radius'])
+                    flame_bounds = (min(p[0] for p in flame_path)-flame_radius,
+                                    max(p[0] for p in flame_path)+flame_radius,
+                                    min(p[1] for p in flame_path)-flame_radius,
+                                    max(p[1] for p in flame_path)+flame_radius)
                 for enemy in living:
+                    if flame_path and not (flame_bounds[0] <= enemy['x'] <= flame_bounds[1]
+                                           and flame_bounds[2] <= enemy['y'] <= flame_bounds[3]):
+                        continue
                     if enemy["id"] in dead:
                         continue
                     dx, dy = enemy["x"] - tower["x"], enemy["y"] - tower["y"]
@@ -3919,9 +4154,12 @@ class DefenseEngine:
                 "max_hp", "destroyed", "destroyed_at", "facing_angle",
                 "last_fire_chain", "aim_revision", "last_damage_at",
                 "last_damage_amount", "activation_started_at",
-                "activation_complete_at", "replenished_at",
+                "activation_complete_at", "replenished_at", "upgrade_level", "upgrade_multiplier",
             )
         }
+        if tower.get('is_companion'):
+            public.update({key: tower[key] for key in (
+                'parent_placement_id', 'is_companion', 'visual_x', 'visual_y', 'pod_size')})
         fire_interval = 1.0 / float(TOWER_STATS[tower["tower_type"]]["rate"])
         cooldown = max(0.0, float(tower.get("cooldown", 0.0)))
         public["weapon_charge"] = round(
@@ -4166,6 +4404,7 @@ class DefenseEngine:
 
     def snapshot(self, *, compact_enemies: bool = False) -> dict[str, Any]:
         with self.lock:
+            self._refresh_row_barriers()
             if compact_enemies:
                 enemies = []
                 for enemy in self.enemies.values():
@@ -4251,15 +4490,24 @@ class DefenseEngine:
                 "core_hp": round(self.core_hp, 2),
                 "core_max_hp": round(self.core_max_hp, 2),
                 "kills": self.kills,
+                "released_orcs": self.next_enemy_id - 1,
+                "contract_control_tier": self.contract_control_tier,
+                "player_progression": self.player_progression,
+                "virtual_test_loadout": dict(self.virtual_test_loadout) if self.virtual_test_loadout is not None else None,
                 "breaches": self.breaches,
                 "enemies": enemies,
                 "towers": towers,
+                "companions": [self._public_tower(unit, link_state) for unit in self._sync_companions()],
+                "companion_policy": dict(companions.POLICY),
                 "projectiles": [dict(projectile) for projectile in self.pending_mortar_rounds],
                 "mortar_impacts": [dict(impact) for impact in self.mortar_impacts],
                 "force_field_impacts": [
                     dict(impact) for impact in self.force_field_impacts
                 ],
                 "connection_contract_version": 2,
+                "row_barrier_geometry": self.level.row_barriers,
+                "row_barriers": [dict(row) for row in self._row_states],
+                "row_topology_revision": self.row_topology_revision,
                 "connections": connections,
                 "gates": self._gates(connections),
                 "force_field_visuals": self._force_field_visuals(connections),

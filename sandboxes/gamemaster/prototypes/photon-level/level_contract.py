@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from level_layout import layout_revision
+from companion_layout import descriptor as companion_descriptor, validate_clearance
 
 RING_MIN_TURRETS = 8
 RING_MAX_TURRETS = 16
@@ -236,7 +237,7 @@ def _simple_polygon(points) -> bool:
     return True
 
 
-def _shortest_route(edges, start_id: int, core_id: int):
+def _shortest_route(edges, start_id: int, core_id: int, blocked=frozenset()):
     distances = {start_id: 0.0}
     previous = {}
     queue = [(0.0, start_id)]
@@ -247,6 +248,8 @@ def _shortest_route(edges, start_id: int, core_id: int):
         if node_id == core_id:
             break
         for edge in edges.get(node_id, []):
+            if edge['edge_id'] in blocked:
+                continue
             candidate = distance + edge["cost"]
             if candidate < distances.get(edge["to"], math.inf):
                 distances[edge["to"]] = candidate
@@ -301,6 +304,64 @@ def _ring_cycles(sockets, adjacency, core):
     return sorted(valid, key=lambda cycle: (len(cycle), cycle))
 
 
+def _parse_row_barriers(data, sockets, edges, nodes, spawns, core_id, width, height):
+    rows = []
+    used_sockets = set()
+    for layer in data['layers']:
+        for obj in layer.get('objects', []):
+            if obj.get('type') != 'RowBarrier':
+                continue
+            props = properties(obj)
+            if not isinstance(props.get('row_id'), str) or not props['row_id']:
+                raise ValueError('row barrier needs a nonempty string ID')
+            points = [(float(obj['x']) + p['x'], float(obj['y']) + p['y'])
+                      for p in obj.get('polyline', [])]
+            if len(points) != 2 or not all(math.isfinite(v) for p in points for v in p):
+                raise ValueError('row barrier needs two finite endpoints')
+            (ax, ay), (bx, by) = points
+            side = props.get('opening_side')
+            if (ay != by or not 0 < ay < height or not 0 <= ax < bx <= width
+                    or side not in ('left', 'right')
+                    or (side == 'left' and (ax < 128 or bx != width))
+                    or (side == 'right' and (ax != 0 or width - bx < 128))):
+                raise ValueError('row barrier must leave a clear end opening')
+            members = props.get('socket_ids', '').split(',')
+            if (len(members) != 3 or len(set(members)) != 3
+                    or set(members) - sockets.keys() or used_sockets.intersection(members)):
+                raise ValueError('row barrier requires three distinct, exclusive sockets')
+            for member in members:
+                socket = sockets[member]
+                if not ax <= socket['x'] <= bx or abs(socket['y'] - ay) > 56:
+                    raise ValueError(f'{member} must stay within its row barrier band')
+            used_sockets.update(members)
+            blocked = props.get('blocked_edges', '').split(',')
+            crossed = {edge['edge_id'] for group in edges.values() for edge in group
+                       if any(_segments_intersect(points[0], points[1], a, b)
+                              for a, b in zip(edge['points'], edge['points'][1:]))}
+            if set(blocked) != crossed or len(blocked) != len(set(blocked)):
+                raise ValueError('row barrier blocked edges must match its geometric crossings')
+            rows.append(dict(row_id=props.get('row_id'), socket_ids=members,
+                             opening_side=side, ax=ax, ay=ay, bx=bx, by=by,
+                             blocked_edges=blocked))
+    if len(rows) != 4 or len({row['row_id'] for row in rows if row['row_id']}) != 4:
+        raise ValueError('level requires four uniquely named row barriers')
+    rows.sort(key=lambda row: row['ay'])
+    if [r['opening_side'] for r in rows] != ['right', 'left', 'left', 'right']:
+        raise ValueError('row barrier openings must alternate toward the core')
+    for group, row in (('top_outer', rows[0]), ('bottom_outer', rows[-1])):
+        spawn = spawns.get(group)
+        if (spawn is None or spawn['x'] != 0
+                or (group == 'top_outer' and spawn['y'] >= row['ay'])
+                or (group == 'bottom_outer' and spawn['y'] <= row['ay'])):
+            raise ValueError('v2 entrances must be outside the rows on the left')
+    for mask in range(16):
+        blocked = {e for i, row in enumerate(rows) if mask & (1 << i)
+                   for e in row['blocked_edges']}
+        for spawn in spawns.values():
+            _shortest_route(edges, spawn['object_id'], core_id, blocked)
+    return rows
+
+
 def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
     """Return the complete runtime geometry without leaking Tiled parsing."""
     map_path = Path(map_path)
@@ -308,6 +369,9 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
     width = int(data["width"] * data["tilewidth"])
     height = int(data["height"] * data["tileheight"])
     map_properties = properties(data)
+    runtime_version = map_properties.get('runtime_contract_version', 1)
+    if type(runtime_version) is not int or runtime_version not in (1, 2):
+        raise ValueError('unsupported level runtime version')
     marker_size = _finite_positive(map_properties, "aruco_code_footprint_px")
     core_marker_size = _finite_positive(map_properties, "core_aruco_code_footprint_px")
     marker_clearance = _finite_positive(
@@ -333,8 +397,12 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
         str(node["spawn_group"]): {**node, "object_id": node_id}
         for node_id, node in nodes.items() if node.get("node_kind") == "spawn"
     }
-    if len(spawns) != 4:
-        raise ValueError("level must define exactly four spawn groups")
+    enabled_spawns = (map_properties.get('enabled_spawn_groups', '').split(',')
+                      if runtime_version == 2 else list(spawns))
+    if (len(spawns) != (2 if runtime_version == 2 else 4)
+            or sum(n.get('node_kind') == 'spawn' for n in nodes.values()) != len(spawns)
+            or set(enabled_spawns) != set(spawns) or len(enabled_spawns) != len(spawns)):
+        raise ValueError('level spawn groups do not match its runtime contract')
 
     edges = {}
     edge_by_id = {}
@@ -401,6 +469,9 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
             "marker_x": marker_x, "marker_y": marker_y,
             "marker_size": marker_size,
         }
+        companion = companion_descriptor(props, center_x, center_y, marker_offset_x, marker_offset_y, rotation)
+        if companion is not None:
+            sockets[socket_id]['companion'] = companion
         socket_by_marker[marker] = socket_id
         try:
             neighbor_markers[socket_id] = {
@@ -479,7 +550,14 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
             blocker_ids.add(blocker_id)
             blockers.append({"blocker_id": blocker_id, "points": points})
 
+    row_barriers = (_parse_row_barriers(data, sockets, edges, nodes, spawns, core_id, width, height)
+                    if runtime_version == 2 else [])
+    validate_clearance(sockets, width, height, float(map_properties['active_turret_visual_size_px']),
+                       {'marker_x': core_marker_x, 'marker_y': core_marker_y, 'marker_size': core_marker_size})
     return {
+        "runtime_version": runtime_version,
+        "enabled_spawn_groups": enabled_spawns,
+        "row_barriers": row_barriers,
         "layout_revision": layout_revision(data), "width": width, "height": height,
         "aruco_code_footprint_px": marker_size,
         "core_aruco_code_footprint_px": core_marker_size,
@@ -532,6 +610,7 @@ def simple_level(runtime: dict[str, Any]) -> dict[str, Any]:
                 "marker_x": socket["marker_x"],
                 "marker_y": socket["marker_y"],
                 "marker_size": socket["marker_size"],
+                **({'companion': dict(socket['companion'])} if 'companion' in socket else {}),
                 "radius": runtime["aruco_code_footprint_px"] / 2.0,
             }
             for socket in sorted(runtime["sockets"].values(), key=lambda item: item["aruco_id"])

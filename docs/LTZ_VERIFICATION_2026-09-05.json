@@ -1,0 +1,29 @@
+{
+  "date": "2026-09-05",
+  "scope": "LTZ progression implementation",
+  "python": {
+    "photon_suite": 156,
+    "ltz_integration": 8
+  },
+  "browser": [
+    "saved profile reload",
+    "selected control reload",
+    "new Purple profile remains saved",
+    "six history points and accessible detail",
+    "stats below upgrades",
+    "desktop and mobile layouts visually inspected",
+    "twelve weapon upgrades on operator and external map views",
+    "no asset-load failures or page errors"
+  ],
+  "controller": "Four visibility tiers and fail-closed unavailable state; real relay policy function rejects higher-tier and unregistered-side motion in isolated tests",
+  "fault_injection": [
+    "Progress offline after terminal result",
+    "transaction committed but acknowledgment lost",
+    "checkpoint replay",
+    "conflicting and inconsistent backups",
+    "legacy Tesla key import"
+  ],
+  "live_hardware_tested": false,
+  "live_player_data_changed": false,
+  "hub_restarted": false
+}

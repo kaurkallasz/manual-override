@@ -5253,7 +5253,7 @@
               "y": 0
             },
             {
-              "x": 400,
+              "x": 80,
               "y": 0
             }
           ],
@@ -5261,7 +5261,7 @@
             {
               "name": "base_cost",
               "type": "float",
-              "value": 400.0
+              "value": 80.0
             },
             {
               "name": "edge_id",
@@ -5286,12 +5286,12 @@
             {
               "name": "route_phase",
               "type": "string",
-              "value": "approach"
+              "value": "transit"
             },
             {
               "name": "to_node",
               "type": "object",
-              "value": 85
+              "value": 193
             }
           ]
         },
@@ -5659,7 +5659,7 @@
               "y": 0
             },
             {
-              "x": 400,
+              "x": 80,
               "y": 0
             }
           ],
@@ -5667,7 +5667,7 @@
             {
               "name": "base_cost",
               "type": "float",
-              "value": 400.0
+              "value": 80.0
             },
             {
               "name": "edge_id",
@@ -5692,12 +5692,12 @@
             {
               "name": "route_phase",
               "type": "string",
-              "value": "approach"
+              "value": "transit"
             },
             {
               "name": "to_node",
               "type": "object",
-              "value": 88
+              "value": 194
             }
           ]
         },
@@ -6467,7 +6467,7 @@
           "type": "PathEdge",
           "visible": true,
           "width": 0,
-          "x": 0,
+          "x": 80,
           "y": 240,
           "polyline": [
             {
@@ -6475,11 +6475,7 @@
               "y": 0
             },
             {
-              "x": 80,
-              "y": 0
-            },
-            {
-              "x": 80,
+              "x": 0,
               "y": 160
             }
           ],
@@ -6487,7 +6483,7 @@
             {
               "name": "base_cost",
               "type": "float",
-              "value": 240.0
+              "value": 160.0
             },
             {
               "name": "edge_id",
@@ -6502,7 +6498,7 @@
             {
               "name": "from_node",
               "type": "object",
-              "value": 81
+              "value": 193
             },
             {
               "name": "road_width",
@@ -6512,7 +6508,7 @@
             {
               "name": "route_phase",
               "type": "string",
-              "value": "direct_access"
+              "value": "transit"
             },
             {
               "name": "to_node",
@@ -6645,7 +6641,7 @@
           "type": "PathEdge",
           "visible": true,
           "width": 0,
-          "x": 0,
+          "x": 80,
           "y": 720,
           "polyline": [
             {
@@ -6653,11 +6649,7 @@
               "y": 0
             },
             {
-              "x": 80,
-              "y": 0
-            },
-            {
-              "x": 80,
+              "x": 0,
               "y": -160
             }
           ],
@@ -6665,7 +6657,7 @@
             {
               "name": "base_cost",
               "type": "float",
-              "value": 240.0
+              "value": 160.0
             },
             {
               "name": "edge_id",
@@ -6680,7 +6672,7 @@
             {
               "name": "from_node",
               "type": "object",
-              "value": 82
+              "value": 194
             },
             {
               "name": "road_width",
@@ -6690,7 +6682,7 @@
             {
               "name": "route_phase",
               "type": "string",
-              "value": "direct_access"
+              "value": "transit"
             },
             {
               "name": "to_node",
@@ -7394,6 +7386,470 @@
               "value": 99
             }
           ]
+        },
+        {
+          "height": 0,
+          "id": 195,
+          "name": "edge_top_left_east",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 80,
+          "y": 240,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 320,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 320.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_top_left_east"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 193
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 85
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 196,
+          "name": "edge_top_tail_west",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 1520,
+          "y": 240,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -480,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 480.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_top_tail_west"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 92
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 87
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 197,
+          "name": "edge_top_mid_west",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 1040,
+          "y": 240,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -640,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 640.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_top_mid_west"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 87
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 85
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 198,
+          "name": "edge_top_left_west",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 400,
+          "y": 240,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -320,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 320.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_top_left_west"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 85
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 193
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 199,
+          "name": "edge_bottom_left_east",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 80,
+          "y": 720,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 320,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 320.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_bottom_left_east"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 194
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 88
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 200,
+          "name": "edge_bottom_tail_west",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 1520,
+          "y": 720,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -480,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 480.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_bottom_tail_west"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 94
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 90
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 201,
+          "name": "edge_bottom_mid_west",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 1040,
+          "y": 720,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -640,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 640.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_bottom_mid_west"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 90
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 88
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 202,
+          "name": "edge_bottom_left_west",
+          "rotation": 0,
+          "type": "PathEdge",
+          "visible": true,
+          "width": 0,
+          "x": 400,
+          "y": 720,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": -320,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "base_cost",
+              "type": "float",
+              "value": 320.0
+            },
+            {
+              "name": "edge_id",
+              "type": "string",
+              "value": "edge_bottom_left_west"
+            },
+            {
+              "name": "enabled",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "from_node",
+              "type": "object",
+              "value": 88
+            },
+            {
+              "name": "road_width",
+              "type": "float",
+              "value": 72.0
+            },
+            {
+              "name": "route_phase",
+              "type": "string",
+              "value": "transit"
+            },
+            {
+              "name": "to_node",
+              "type": "object",
+              "value": 194
+            }
+          ]
         }
       ],
       "opacity": 1,
@@ -7440,7 +7896,7 @@
         {
           "height": 0,
           "id": 81,
-          "name": "spawn_top_inner",
+          "name": "transit_top_inner",
           "rotation": 0,
           "type": "PathNode",
           "visible": true,
@@ -7452,24 +7908,24 @@
             {
               "name": "node_id",
               "type": "string",
-              "value": "spawn_top_inner"
+              "value": "transit_top_inner"
             },
             {
               "name": "node_kind",
               "type": "string",
-              "value": "spawn"
+              "value": "junction"
             },
             {
               "name": "spawn_group",
               "type": "string",
-              "value": "top_inner"
+              "value": ""
             }
           ]
         },
         {
           "height": 0,
           "id": 82,
-          "name": "spawn_bottom_inner",
+          "name": "transit_bottom_inner",
           "rotation": 0,
           "type": "PathNode",
           "visible": true,
@@ -7481,17 +7937,17 @@
             {
               "name": "node_id",
               "type": "string",
-              "value": "spawn_bottom_inner"
+              "value": "transit_bottom_inner"
             },
             {
               "name": "node_kind",
               "type": "string",
-              "value": "spawn"
+              "value": "junction"
             },
             {
               "name": "spawn_group",
               "type": "string",
-              "value": "bottom_inner"
+              "value": ""
             }
           ]
         },
@@ -8074,6 +8530,64 @@
               "value": ""
             }
           ]
+        },
+        {
+          "height": 0,
+          "id": 193,
+          "name": "top_left_turn",
+          "rotation": 0,
+          "type": "PathNode",
+          "visible": true,
+          "width": 0,
+          "x": 80,
+          "y": 240,
+          "point": true,
+          "properties": [
+            {
+              "name": "node_id",
+              "type": "string",
+              "value": "top_left_turn"
+            },
+            {
+              "name": "node_kind",
+              "type": "string",
+              "value": "junction"
+            },
+            {
+              "name": "spawn_group",
+              "type": "string",
+              "value": ""
+            }
+          ]
+        },
+        {
+          "height": 0,
+          "id": 194,
+          "name": "bottom_left_turn",
+          "rotation": 0,
+          "type": "PathNode",
+          "visible": true,
+          "width": 0,
+          "x": 80,
+          "y": 720,
+          "point": true,
+          "properties": [
+            {
+              "name": "node_id",
+              "type": "string",
+              "value": "bottom_left_turn"
+            },
+            {
+              "name": "node_kind",
+              "type": "string",
+              "value": "junction"
+            },
+            {
+              "name": "spawn_group",
+              "type": "string",
+              "value": ""
+            }
+          ]
         }
       ],
       "opacity": 1,
@@ -8291,6 +8805,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -8395,6 +8914,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -8499,6 +9023,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -8603,6 +9132,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -8707,6 +9241,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -8811,6 +9350,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -8915,6 +9459,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "support"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -9019,6 +9568,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "support"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": false
             }
           ]
         },
@@ -9123,6 +9677,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": false
             }
           ]
         },
@@ -9227,6 +9786,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -9331,6 +9895,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": false
             }
           ]
         },
@@ -9435,6 +10004,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -9539,6 +10113,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -9643,6 +10222,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "standard"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         },
@@ -9747,6 +10331,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "support"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": false
             }
           ]
         },
@@ -9851,6 +10440,11 @@
               "name": "strategic_value",
               "type": "string",
               "value": "support"
+            },
+            {
+              "name": "l4_companion_enabled",
+              "type": "bool",
+              "value": true
             }
           ]
         }
@@ -11195,10 +11789,194 @@
       "x": 0,
       "y": 0,
       "color": "#ff9f43"
+    },
+    {
+      "id": 15,
+      "name": "15 Row Barriers (hidden)",
+      "type": "objectgroup",
+      "visible": false,
+      "opacity": 1,
+      "draworder": "topdown",
+      "x": 0,
+      "y": 0,
+      "objects": [
+        {
+          "id": 203,
+          "name": "outer_top",
+          "type": "RowBarrier",
+          "x": 0,
+          "y": 160,
+          "width": 0,
+          "height": 0,
+          "rotation": 0,
+          "visible": true,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 1440,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "row_id",
+              "type": "string",
+              "value": "outer_top"
+            },
+            {
+              "name": "socket_ids",
+              "type": "string",
+              "value": "socket_01,socket_03,socket_05"
+            },
+            {
+              "name": "opening_side",
+              "type": "string",
+              "value": "right"
+            },
+            {
+              "name": "blocked_edges",
+              "type": "string",
+              "value": "edge_switch_top_a_down,edge_switch_top_a_up,edge_switch_top_b_down,edge_switch_top_b_up"
+            }
+          ]
+        },
+        {
+          "id": 204,
+          "name": "inner_top",
+          "type": "RowBarrier",
+          "x": 160,
+          "y": 320,
+          "width": 0,
+          "height": 0,
+          "rotation": 0,
+          "visible": true,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 1536,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "row_id",
+              "type": "string",
+              "value": "inner_top"
+            },
+            {
+              "name": "socket_ids",
+              "type": "string",
+              "value": "socket_02,socket_04,socket_06"
+            },
+            {
+              "name": "opening_side",
+              "type": "string",
+              "value": "left"
+            },
+            {
+              "name": "blocked_edges",
+              "type": "string",
+              "value": "edge_mid_passthrough_top_down,edge_mid_passthrough_top_up,edge_top_turnaround"
+            }
+          ]
+        },
+        {
+          "id": 205,
+          "name": "inner_bottom",
+          "type": "RowBarrier",
+          "x": 160,
+          "y": 640,
+          "width": 0,
+          "height": 0,
+          "rotation": 0,
+          "visible": true,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 1536,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "row_id",
+              "type": "string",
+              "value": "inner_bottom"
+            },
+            {
+              "name": "socket_ids",
+              "type": "string",
+              "value": "socket_10,socket_12,socket_16"
+            },
+            {
+              "name": "opening_side",
+              "type": "string",
+              "value": "left"
+            },
+            {
+              "name": "blocked_edges",
+              "type": "string",
+              "value": "edge_mid_passthrough_bottom_up,edge_mid_passthrough_bottom_down,edge_bottom_turnaround"
+            }
+          ]
+        },
+        {
+          "id": 206,
+          "name": "outer_bottom",
+          "type": "RowBarrier",
+          "x": 0,
+          "y": 800,
+          "width": 0,
+          "height": 0,
+          "rotation": 0,
+          "visible": true,
+          "polyline": [
+            {
+              "x": 0,
+              "y": 0
+            },
+            {
+              "x": 1440,
+              "y": 0
+            }
+          ],
+          "properties": [
+            {
+              "name": "row_id",
+              "type": "string",
+              "value": "outer_bottom"
+            },
+            {
+              "name": "socket_ids",
+              "type": "string",
+              "value": "socket_14,socket_13,socket_07"
+            },
+            {
+              "name": "opening_side",
+              "type": "string",
+              "value": "right"
+            },
+            {
+              "name": "blocked_edges",
+              "type": "string",
+              "value": "edge_switch_bottom_a_up,edge_switch_bottom_a_down,edge_switch_bottom_b_up,edge_switch_bottom_b_down"
+            }
+          ]
+        }
+      ]
     }
   ],
-  "nextlayerid": 15,
-  "nextobjectid": 193,
+  "nextlayerid": 16,
+  "nextobjectid": 207,
   "orientation": "orthogonal",
   "properties": [
     {
@@ -11314,7 +12092,7 @@
     {
       "name": "layout_revision",
       "type": "int",
-      "value": 17
+      "value": 19
     },
     {
       "name": "left_crossover_x",
@@ -11339,12 +12117,12 @@
     {
       "name": "max_structures",
       "type": "int",
-      "value": 8
+      "value": 16
     },
     {
       "name": "route_direction",
       "type": "string",
-      "value": "four_long_left_to_right_180_returns_plus_two_direct_left_to_center"
+      "value": "two_left_outer_entries_with_alternating_row_barriers"
     },
     {
       "name": "runtime_socket_art_visibility",
@@ -11395,6 +12173,16 @@
       "name": "wave_file",
       "type": "file",
       "value": "z-pixel-first-map.waves.json"
+    },
+    {
+      "name": "runtime_contract_version",
+      "type": "int",
+      "value": 2
+    },
+    {
+      "name": "enabled_spawn_groups",
+      "type": "string",
+      "value": "top_outer,bottom_outer"
     }
   ],
   "renderorder": "right-down",

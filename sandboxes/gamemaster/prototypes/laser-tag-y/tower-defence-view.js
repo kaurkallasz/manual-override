@@ -5,6 +5,10 @@
   const HEIGHT = 960;
   const LIVE_POD_SIZE = 112;
   const TOWER_VISUAL_SIZE = 88;
+  const UPGRADED_HEAD_LIFT = 14;
+  const UPGRADED_HEAD_SCALE = 0.9;
+  const ENEMY_VISUAL_SCALE = 2;
+  const FRAME_INTERVAL_MS = 1000 / 60;
   const TOWER_HEALTH_BAR_WIDTH = 68;
   const TOWER_DAMAGE_FLASH_S = 0.45;
   const TOWER_ACTIVATION_FRAMES = 72;
@@ -31,7 +35,7 @@
   const EFFECT_QUALITY_PROFILES = Object.freeze({
     full: Object.freeze({
       name: "full",
-      targetFps: 30,
+      targetFps: 60,
       trailSamples: 7,
       burnFrameDivisor: 1,
       flameSegments: 18,
@@ -47,24 +51,24 @@
     }),
     reduced: Object.freeze({
       name: "reduced",
-      targetFps: 24,
+      targetFps: 60,
       trailSamples: 5,
       burnFrameDivisor: 1,
       flameSegments: 12,
       machineGunBullets: 3,
-      lightningLayers: 3,
+      lightningLayers: 2,
       lightningStepPx: 28,
       mortarImpactSprites: 6,
       towerSmokePuffs: 2,
       towerEmberScale: 0.7,
       destructionDebris: 6,
       teslaIdleArcScale: 0.75,
-      shadowScale: 0.72,
+      shadowScale: 0.35,
     }),
     dense: Object.freeze({
       name: "dense",
-      targetFps: 18,
-      trailSamples: 3,
+      targetFps: 60,
+      trailSamples: 2,
       burnFrameDivisor: 2,
       flameSegments: 9,
       machineGunBullets: 2,
@@ -75,7 +79,7 @@
       towerEmberScale: 0.45,
       destructionDebris: 4,
       teslaIdleArcScale: 0.5,
-      shadowScale: 0.42,
+      shadowScale: 0,
     }),
   });
 
@@ -84,6 +88,79 @@
     if (count >= 800) return EFFECT_QUALITY_PROFILES.dense;
     if (count >= 400) return EFFECT_QUALITY_PROFILES.reduced;
     return EFFECT_QUALITY_PROFILES.full;
+  }
+
+  // Pixel budgets bound memory even when the Gamemaster changes sprite sizes.
+  function rasterCache(maxPixels) {
+    const entries = new Map();
+    let pixels = 0;
+    return {
+      get: key => entries.get(key),
+      has: key => entries.has(key),
+      clear() { entries.clear(); pixels = 0; },
+      set(key, canvas) {
+        const cost = canvas.width * canvas.height;
+        if (cost > maxPixels) return;
+        while (entries.size && (pixels + cost > maxPixels || entries.size >= 512)) {
+          const oldest = entries.keys().next().value;
+          const removed = entries.get(oldest);
+          pixels -= removed.width * removed.height;
+          entries.delete(oldest);
+        }
+        entries.set(key, canvas);
+        pixels += cost;
+      },
+      get pixels() { return pixels; },
+    };
+  }
+
+  function towerTypeLabel(value) {
+    const words = String(value || "").replaceAll("_", " ").trim();
+    return words ? words[0].toUpperCase() + words.slice(1) : "Unknown";
+  }
+
+  function snapshotReceiver(apply) {
+    const fields = ["level", "presentation", "configuration", "settings", "loadout", "force_field_blockers", "row_barrier_geometry"];
+    let baseline = null;
+    return {
+      full(value) {
+        baseline = Object.fromEntries(fields.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+        apply(value);
+      },
+      update(value) {
+        if (!baseline) throw new Error("Game update arrived before a complete snapshot");
+        apply({...baseline, ...value});
+      },
+    };
+  }
+
+  function gameFacts(gameState) {
+    const sequence = gameState?.core_sequence || {};
+    const finiteInteger = (value) => {
+      if (!['number', 'string'].includes(typeof value) || String(value).trim() === "") {
+        return null;
+      }
+      const number = Number(value);
+      return Number.isSafeInteger(number) ? number : null;
+    };
+    const loadout = gameState?.loadout && typeof gameState.loadout === "object"
+      && !Array.isArray(gameState.loadout)
+      ? Object.entries(gameState.loadout).map(([atomTagId, towerType]) => ({
+        atom_tag_id: finiteInteger(atomTagId),
+        tower_type: typeof towerType === "string" ? towerType : "",
+        label: towerTypeLabel(towerType),
+      })).filter((entry) => entry.atom_tag_id != null && entry.tower_type)
+      : [];
+    loadout.sort((a, b) => a.atom_tag_id - b.atom_tag_id);
+    return {
+      loadout,
+      atom_ids: loadout.map((entry) => entry.atom_tag_id),
+      socket_count: Array.isArray(gameState?.level?.sockets)
+        ? gameState.level.sockets.length : 0,
+      core_marker_id: finiteInteger(sequence.marker_id),
+      ring_min_turrets: finiteInteger(sequence.ring_min_turrets),
+      ring_max_turrets: finiteInteger(sequence.ring_max_turrets),
+    };
   }
 
   function aimControl(value) {
@@ -163,21 +240,21 @@
     );
   }
 
-  function machineGunMuzzlePoints(x, y, angle) {
+  function machineGunMuzzlePoints(x, y, angle, scale = 1) {
     const forwardX = Math.cos(angle);
     const forwardY = Math.sin(angle);
     const normalX = -forwardY;
     const normalY = forwardX;
-    const centerX = Number(x) + forwardX * MACHINE_GUN_MUZZLE_FORWARD;
-    const centerY = Number(y) + forwardY * MACHINE_GUN_MUZZLE_FORWARD;
+    const centerX = Number(x) + forwardX * MACHINE_GUN_MUZZLE_FORWARD * scale;
+    const centerY = Number(y) + forwardY * MACHINE_GUN_MUZZLE_FORWARD * scale;
     return [-1, 1].map((side) => ({
-      x: centerX + normalX * MACHINE_GUN_MUZZLE_HALF_GAP * side,
-      y: centerY + normalY * MACHINE_GUN_MUZZLE_HALF_GAP * side,
+      x: centerX + normalX * MACHINE_GUN_MUZZLE_HALF_GAP * side * scale,
+      y: centerY + normalY * MACHINE_GUN_MUZZLE_HALF_GAP * side * scale,
     }));
   }
 
-  function machineGunFireLines(x, y, angle, targetX, targetY) {
-    return machineGunMuzzlePoints(x, y, angle).map((muzzle) => ({
+  function machineGunFireLines(x, y, angle, targetX, targetY, scale = 1) {
+    return machineGunMuzzlePoints(x, y, angle, scale).map((muzzle) => ({
       ax: muzzle.x,
       ay: muzzle.y,
       bx: Number(targetX),
@@ -185,10 +262,10 @@
     }));
   }
 
-  function flamethrowerNozzlePoint(x, y, angle) {
+  function flamethrowerNozzlePoint(x, y, angle, scale = 1) {
     return {
-      x: Number(x) + Math.cos(angle) * FLAMETHROWER_MUZZLE_OFFSET,
-      y: Number(y) + Math.sin(angle) * FLAMETHROWER_MUZZLE_OFFSET,
+      x: Number(x) + Math.cos(angle) * FLAMETHROWER_MUZZLE_OFFSET * scale,
+      y: Number(y) + Math.sin(angle) * FLAMETHROWER_MUZZLE_OFFSET * scale,
     };
   }
 
@@ -332,7 +409,16 @@
     const sceneImages = new Map();
     const markerImages = new Map();
     const tintedEffectCache = new Map();
-    const enemySpriteCache = new Map();
+    const enemySpriteCache = rasterCache(3 * 1024 * 1024);
+    const effectRasterCache = rasterCache(2 * 1024 * 1024);
+    const enemyGlowCache = rasterCache(4 * 1024 * 1024);
+    const scaledImageIds = new WeakMap();
+    let nextScaledImageId = 0;
+    let visualStateCache = null;
+    let enemiesByIdCache = null;
+    const fieldGeometryCache = new Map();
+    let geometrySignature = "";
+    let bruteScale = null;
     const enemyTrailHistory = new Map();
     const towerRenderAngles = new Map();
     let socketRecordCache = null;
@@ -344,7 +430,16 @@
     let stateReceivedAt = performance.now();
     let feedConnected = false;
     let frozenVisualAge = 0;
-    let lastGameRenderAt = 0;
+    let nextGameRenderAt = null;
+    let lastGameRenderAt = null;
+    let adaptiveQuality = 0;
+    let slowFrameTime = 0;
+    let healthyFrameTime = 0;
+    let renderStats = {fps: 0, drawMs: 0, frameMs: 0, quality: "full"};
+    let profilingFrames = 0;
+    let profilingTotals = {};
+    let fpsSampleStartedAt = performance.now();
+    let fpsRenderedFrames = 0;
     let animationFrame = 0;
     let destroyed = false;
     let selectedTowerId = null;
@@ -355,6 +450,19 @@
     mapCanvas.height = HEIGHT;
     gameCanvas.width = WIDTH;
     gameCanvas.height = HEIGHT;
+    function reportFps(fps) {
+      try { options.onFps?.(fps); }
+      catch (error) { console.warn("FPS monitor unavailable", error); }
+    }
+    function resetFpsSample() {
+      fpsSampleStartedAt = performance.now();
+      fpsRenderedFrames = 0;
+      nextGameRenderAt = null;
+      lastGameRenderAt = null;
+      slowFrameTime = healthyFrameTime = 0;
+      reportFps(null);
+    }
+    document.addEventListener?.("visibilitychange", resetFpsSample);
     function reportAssetLoads() {
       // Optional presentation diagnostics must never interrupt drawing.
       try { options.onAssetStatus?.({...assetLoads, base:assetRoot, revision:assetRevision}); }
@@ -399,7 +507,7 @@
       assetRoot = next.base ? sandboxRoot + String(next.base).replace(/\/$/, "") : "";
       assetPaths = next.assets || {};
       images.clear(); gameImages.clear(); sceneImages.clear(); markerImages.clear();
-      tintedEffectCache.clear(); enemySpriteCache.clear();
+      tintedEffectCache.clear(); enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear();
       gameImagesStarted = false;
       assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null};
       reportAssetLoads();
@@ -427,28 +535,105 @@
       if (gameImagesStarted || !assetRoot) return;
       gameImagesStarted = true;
       const pending = [];
-      for (const type of ["machine_gun", "flamethrower", "mortar", "tesla_coil"]) {
-        pending.push(loadImage(towerRuntimeImagePath(type, "base")).then((image) => gameImages.set(`tower:${type}:base`, image)));
-        pending.push(loadImage(towerRuntimeImagePath(type, "head")).then((image) => gameImages.set(`tower:${type}:head`, image)));
-        pending.push(loadImage(assetUrl(`tower/${type}/activation`)).then((image) => gameImages.set(`tower:${type}:activation`, image)));
-      }
-      pending.push(loadImage(assetUrl("tower/socket-cover")).then((image) => gameImages.set("tower:socket-cover", image)));
-      for (const type of ["grunt", "runner", "breaker", "brute"]) {
-        for (let frame = 1; frame <= 4; frame += 1) {
-          pending.push(loadImage(enemyImagePath(type, frame)).then((image) => {
+      for (const assetId of Object.keys(assetPaths)) {
+        const upgrade = assetId.match(/^tower\/([^/]+)\/upgrade\/([234])$/);
+        if (upgrade) {
+          pending.push(loadImage(assetUrl(assetId)).then((image) => {
+            if (!image) return;
+            // Decode the two-cell art once, removing its magenta matte and borders.
+            const cell = Math.floor(image.naturalWidth / 2);
+            for (const [index, layer] of ['base', 'head'].entries()) {
+              const raw = document.createElement('canvas');
+              raw.width = cell - 8; raw.height = image.naturalHeight - 8;
+              const ctx = raw.getContext('2d', {willReadFrequently: true});
+              ctx.drawImage(image, index * cell + 4, 4, raw.width, raw.height, 0, 0, raw.width, raw.height);
+              const pixels = ctx.getImageData(0, 0, raw.width, raw.height);
+              let left = raw.width, top = raw.height, right = -1, bottom = -1;
+              for (let p = 0; p < pixels.data.length; p += 4) {
+                const r = pixels.data[p], g = pixels.data[p + 1], b = pixels.data[p + 2];
+                if (r > g * 1.6 + 25 && b > g * 1.6 + 25) pixels.data[p + 3] = 0;
+                if (pixels.data[p + 3] && layer === 'base') {
+                  const x = (p / 4) % raw.width, y = Math.floor(p / 4 / raw.width);
+                  left = Math.min(left, x); right = Math.max(right, x);
+                  top = Math.min(top, y); bottom = Math.max(bottom, y);
+                }
+              }
+              ctx.putImageData(pixels, 0, 0);
+              const texture = document.createElement('canvas');
+              texture.width = texture.height = 256;
+              if (layer === 'base' && right >= left && bottom >= top) {
+                // Fill the existing 88 px sprite box with the pedestal, not atlas padding.
+                // Its front armor stays below the raised gun, exposing every tier color.
+                const width = right - left + 1, height = bottom - top + 1;
+                const scale = Math.min(84 / width, 72 / height);
+                const w = width * scale, h = height * scale;
+                const toTexture = 256 / TOWER_VISUAL_SIZE;
+                texture.getContext('2d').drawImage(raw, left, top, width, height,
+                  (TOWER_VISUAL_SIZE / 2 - w / 2) * toTexture,
+                  (TOWER_VISUAL_SIZE / 2 + 36 - h) * toTexture,
+                  w * toTexture, h * toTexture);
+              } else {
+                texture.getContext('2d').drawImage(raw, 0, 0, 256, 256);
+              }
+              raw.width = raw.height = 1;
+              gameImages.set(`tower:${upgrade[1]}:${layer}:${upgrade[2]}`, texture);
+            }
+          }));
+          continue;
+        }
+        if (assetId === 'field/upgrade-atlas') {
+          pending.push(loadImage(assetUrl(assetId)).then(image => {
+            if (!image) return;
+            for (let tier = 2; tier <= 4; tier++) {
+              const texture = document.createElement('canvas');
+              texture.width = 512; texture.height = 96;
+              texture.getContext('2d').drawImage(image, 0, (tier - 2) * image.naturalHeight / 3,
+                image.naturalWidth, image.naturalHeight / 3, 0, 0, 512, 96);
+              gameImages.set(`field:${tier}`, texture);
+            }
+          }));
+          continue;
+        }
+        let match = assetId.match(/^tower\/([^/]+)\/(base|head|activation)$/);
+        if (match) {
+          const [, type, layer] = match;
+          pending.push(loadImage(assetUrl(assetId)).then((image) => {
+            gameImages.set(`tower:${type}:${layer}`, image);
+          }));
+          continue;
+        }
+        if (assetId === "tower/socket-cover") {
+          pending.push(loadImage(assetUrl(assetId)).then((image) => {
+            gameImages.set("tower:socket-cover", image);
+          }));
+          continue;
+        }
+        match = assetId.match(/^enemy\/([^/]+)\/(\d+)$/);
+        if (match) {
+          const [, type, frame] = match;
+          pending.push(loadImage(assetUrl(assetId)).then((image) => {
             gameImages.set(`enemy:${type}:${frame}`, image);
+          }));
+          continue;
+        }
+        match = assetId.match(/^effect\/(.+)$/);
+        if (match) {
+          const effect = match[1];
+          pending.push(loadImage(assetUrl(assetId)).then((image) => {
+            gameImages.set(`effect:${effect}`, image);
+          }));
+          continue;
+        }
+        match = assetId.match(/^marker\/(\d+)$/);
+        if (match) {
+          const markerId = Number(match[1]);
+          pending.push(loadImage(assetUrl(assetId)).then((image) => {
+            markerImages.set(markerId, image);
           }));
         }
       }
-      for (const effect of ["machine-gun-impact", "machine-gun-bullet", "flame-burn", "flame-gasoline", "mortar-impact", "mortar-shell", "tesla-spark", "tower-smoke", "tower-fire", "tower-stress-cracks", "tower-destruction-blast", "tower-debris", "force-field-impact", "force-field-zap-skeleton", "core-ring-aura", "core-detonation-burst", "core-purge-wave"]) {
-        pending.push(loadImage(combatEffectPath(effect)).then((image) => gameImages.set(`effect:${effect}`, image)));
-      }
-      for (const markerId of [38, ...Array.from({ length: 16 }, (_, index) => index + 40)]) {
-        pending.push(loadImage(assetUrl(`marker/${markerId}`)).then((image) => {
-          markerImages.set(markerId, image);
-        }));
-      }
       await Promise.allSettled(pending);
+      visualStateCache = null;
     }
 
     async function loadSceneImages(scene) {
@@ -531,8 +716,10 @@
     function renderCoreMarkerOverlay(context, gameState) {
       const stage = String(gameState.core_sequence?.stage || "locked");
       if (!["first_tag", "ring_ready"].includes(stage)) return;
+      const markerId = gameFacts(gameState).core_marker_id;
+      if (markerId == null) return;
       const record = coreMarkerRecord();
-      drawMarker(context, record.x, record.y, record.size, 38);
+      drawMarker(context, record.x, record.y, record.size, markerId);
     }
 
     function drawSceneItem(context, item) {
@@ -638,7 +825,8 @@
         renderMapFallback(context);
       }
       const marker = coreMarkerRecord();
-      drawMarker(context, marker.x, marker.y, marker.size, 38);
+      const markerId = gameFacts(state).core_marker_id;
+      if (markerId != null) drawMarker(context, marker.x, marker.y, marker.size, markerId);
     }
 
     function visualSimulationTime(now, gameState) {
@@ -684,16 +872,26 @@
       context.restore();
     }
 
+    function enemyVisualScale(enemyType) {
+      if (enemyType !== "brute") return 1;
+      const scale = Number(state?.settings?.brute_size_multiplier);
+      return Number.isFinite(scale) && scale > 0 ? scale : 56 / 44;
+    }
+
+    function enemyVisualSize(enemyType) {
+      return 44 / 3 * ENEMY_VISUAL_SCALE * enemyVisualScale(enemyType);
+    }
+
     function cachedEnemySprite(enemyType, frame, facingX, facingY) {
       const directions = 16;
       const rotation = Math.atan2(facingY, facingX) - Math.PI / 2;
       const direction = ((Math.round(rotation / (Math.PI * 2) * directions) % directions) + directions) % directions;
-      const key = `${enemyType}:${frame}:${direction}`;
+      const drawSize = enemyVisualSize(enemyType);
+      const key = `${enemyType}:${frame}:${direction}:${drawSize}`;
       if (enemySpriteCache.has(key)) return enemySpriteCache.get(key);
       const source = gameImages.get(`enemy:${enemyType}:${frame}`);
       if (!source) return null;
-      const drawSize = (enemyType === "brute" ? 56 : 44) / 3;
-      const canvasSize = 28;
+      const canvasSize = Math.ceil(drawSize * Math.SQRT2) + 2;
       const sprite = document.createElement("canvas");
       sprite.width = canvasSize;
       sprite.height = canvasSize;
@@ -708,7 +906,7 @@
 
     function drawEnemy(context, enemy, visualTime, extrapolationAge, effectQuality) {
       const frame = 1 + (Math.floor(visualTime * 8 + Number(enemy.id || 0)) % 4);
-      const size = (enemy.enemy_type === "brute" ? 56 : 44) / 3;
+      const size = enemyVisualSize(enemy.enemy_type);
       const facingX = Number(enemy.facing_x ?? 0);
       const facingY = Number(enemy.facing_y ?? 1);
       const rawX = Number(enemy.x) + Number(enemy.vx || 0) * extrapolationAge;
@@ -722,7 +920,9 @@
       let history = [];
       if (electrified) {
         history = enemyTrailHistory.get(enemy.id) || [];
-        history.push({ x: rawX, y: rawY, at: visualTime });
+        if (!history.length || visualTime - history[history.length - 1].at >= 1 / 24) {
+          history.push({ x: rawX, y: rawY, at: visualTime });
+        }
         while (
           history.length > effectQuality.trailSamples
           || (history[0] && visualTime - history[0].at > 0.42)
@@ -740,20 +940,23 @@
             context.drawImage(sprite, trail.x - sprite.width / 2, trail.y - sprite.height / 2);
           }
           context.globalAlpha = 0.65 + intensity * 0.35;
-          context.shadowColor = "#a96cff";
-          context.shadowBlur = (9 + intensity * 15) * effectQuality.shadowScale;
-          context.drawImage(sprite, x - sprite.width / 2, y - sprite.height / 2);
+          // Applying a Canvas shadow for each enemy makes the browser rasterize
+          // hundreds of glows every frame. Bake it with the orientation sprite.
+          const glow = effectQuality.shadowScale > 0
+            ? electrifiedSprite(sprite, Math.round((9 + intensity * 15) * effectQuality.shadowScale / 4) * 4)
+            : sprite;
+          context.drawImage(glow, x - glow.width / 2, y - glow.height / 2);
           context.restore();
         } else {
           context.drawImage(sprite, x - sprite.width / 2, y - sprite.height / 2);
         }
         if (Number(enemy.burn_until || 0) > visualTime) {
-          const burnFrame = Math.floor(visualTime * 18) + Number(enemy.id || 0);
-          if (burnFrame % effectQuality.burnFrameDivisor === 0) {
-            const flicker = 0.7 + 0.3 * Math.sin(visualTime * 18 + Number(enemy.id));
-            const flame = gameImages.get("effect:flame-burn");
-            drawCombatEffect(context, flame, x, y - size * 0.45, size * 1.7, flicker);
-          }
+          // Lower detail slows the flicker animation; the burn cue stays
+          // visible on every frame, including at the 60 FPS dense setting.
+          const burnFrame = Math.floor(visualTime * 18 / effectQuality.burnFrameDivisor) * effectQuality.burnFrameDivisor;
+          const flicker = 0.7 + 0.3 * Math.sin(burnFrame + Number(enemy.id));
+          const flame = gameImages.get("effect:flame-burn");
+          drawCombatEffect(context, flame, x, y - size * 0.45, size * 1.7, flicker);
         }
         return;
       }
@@ -768,7 +971,7 @@
     }
 
     function towerTargeting(tower) {
-      const preview = towerAimPreview.get(towerPlacementId(tower));
+      const preview = towerAimPreview.get(String(tower.parent_placement_id || towerPlacementId(tower)));
       const targeting = tower.targeting || {};
       if (!preview) return targeting;
       const control = aimControl(targeting);
@@ -797,7 +1000,7 @@
     function drawTargetingOverlay(context, tower) {
       if (tower.destroyed) return;
       const targeting = towerTargeting(tower);
-      const selected = towerPlacementId(tower) === selectedTowerId;
+      const selected = String(tower.parent_placement_id || towerPlacementId(tower)) === selectedTowerId;
       const color = tower.owner === "green" ? "53,208,127" : "192,132,252";
       context.save();
       context.strokeStyle = `rgba(${color},${selected ? 0.9 : 0.28})`;
@@ -870,12 +1073,50 @@
 
     function drawCombatEffect(context, image, x, y, size, alpha = 1, rotation = 0, stretch = 1) {
       if (!image) return;
+      // Rasterize common small effects at their destination size once. Large
+      // continuously growing core effects bypass the bounded cache.
+      const width = Math.max(1, Math.round(size * stretch));
+      const height = Math.max(1, Math.round(size));
+      const source = width <= 256 && height <= 256
+        ? scaledImage(image, width, height) : image;
       context.save();
       context.globalAlpha = Math.max(0, Math.min(1, alpha));
       context.translate(x, y);
       context.rotate(rotation);
-      context.drawImage(image, -size * stretch / 2, -size / 2, size * stretch, size);
+      context.drawImage(source, -size * stretch / 2, -size / 2, size * stretch, size);
       context.restore();
+    }
+
+    function scaledImage(image, width, height) {
+      let id = scaledImageIds.get(image);
+      if (id == null) { id = ++nextScaledImageId; scaledImageIds.set(image, id); }
+      const key = `${id}:${width}:${height}`;
+      let raster = effectRasterCache.get(key);
+      if (raster) return raster;
+      raster = document.createElement("canvas");
+      raster.width = width; raster.height = height;
+      const context = raster.getContext("2d");
+      context.imageSmoothingEnabled = false;
+      context.drawImage(image, 0, 0, width, height);
+      effectRasterCache.set(key, raster);
+      return raster;
+    }
+
+    function electrifiedSprite(sprite, blur) {
+      let id = scaledImageIds.get(sprite);
+      if (id == null) { id = ++nextScaledImageId; scaledImageIds.set(sprite, id); }
+      const key = `${id}:${blur}`;
+      let raster = enemyGlowCache.get(key);
+      if (raster) return raster;
+      const padding = Math.max(2, blur * 2);
+      raster = document.createElement("canvas");
+      raster.width = sprite.width + padding * 2;
+      raster.height = sprite.height + padding * 2;
+      const paint = raster.getContext("2d");
+      paint.shadowColor = "#a96cff"; paint.shadowBlur = blur;
+      paint.drawImage(sprite, padding, padding);
+      enemyGlowCache.set(key, raster);
+      return raster;
     }
 
     function tintedEffect(image, color) {
@@ -1009,7 +1250,8 @@
         tower,
         visualTime - FLAMETHROWER_PILOT_LAG_S,
       );
-      const nozzle = flamethrowerNozzlePoint(tower.x, tower.y, turretAngle);
+      const origin = towerHeadOrigin(tower, true);
+      const nozzle = flamethrowerNozzlePoint(origin.x, origin.y, turretAngle, origin.scale);
       const nozzleX = nozzle.x;
       const nozzleY = nozzle.y;
       const directionX = Math.cos(delayedAngle);
@@ -1071,15 +1313,17 @@
       const image = gameImages.get("effect:flame-gasoline");
       if (!image) return;
       const currentAngle = flamethrowerVisualAngleAt(tower, visualTime);
-      const reach = Number(towerTargeting(tower).range || 180);
+      const reach = Number(towerTargeting(tower).range);
+      if (!Number.isFinite(reach) || reach <= 0) return;
       const segmentCount = Math.max(
         1,
         Math.min(FLAMETHROWER_PATH_SEGMENTS, effectQuality.flameSegments),
       );
-      const segmentLength = Math.max(1, reach - FLAMETHROWER_MUZZLE_OFFSET) / segmentCount;
+      const origin = towerHeadOrigin(tower);
+      const segmentLength = Math.max(1, reach - FLAMETHROWER_MUZZLE_OFFSET * origin.scale) / segmentCount;
       const pulse = 0.94 + Math.sin(visualTime * 34) * 0.06;
       const points = [flamethrowerNozzlePoint(
-        tower.x, tower.y, currentAngle,
+        origin.x, origin.y, currentAngle, origin.scale,
       )];
       for (let index = 0; index < segmentCount; index += 1) {
         const progress = (index + 1) / segmentCount;
@@ -1128,7 +1372,26 @@
       return LIVE_POD_SIZE;
     }
 
+    function hasUpgradedTowerArt(tower) {
+      return gameImages.has(`tower:${tower.tower_type}:head:${tower.upgrade_level}`)
+        && gameImages.has(`tower:${tower.tower_type}:base:${tower.upgrade_level}`);
+    }
+
+    function towerHeadOrigin(tower, bodySpace = false) {
+      const upgraded = hasUpgradedTowerArt(tower);
+      const unitScale = bodySpace ? 1 : towerUnitScale(tower);
+      return {x: Number(tower.x), y: Number(tower.y) - (upgraded ? UPGRADED_HEAD_LIFT * unitScale : 0),
+        scale: (upgraded ? UPGRADED_HEAD_SCALE : 1) * unitScale};
+    }
+
+    function towerUnitScale(tower) {
+      return tower.is_companion ? Number(tower.pod_size || 96) / LIVE_POD_SIZE : 1;
+    }
+
     function towerVisualRecord(tower, socketsById) {
+      if (tower.is_companion) return {...tower, x: Number(tower.visual_x), y: Number(tower.visual_y),
+        visual_offset_x: Number(tower.visual_x) - Number(tower.x),
+        visual_offset_y: Number(tower.visual_y) - Number(tower.y)};
       const socket = socketsById.get(String(tower.socket_id));
       const gameplayY = Number(tower.y);
       const opticalY = Number(socket?.marker_y);
@@ -1141,7 +1404,7 @@
     }
 
     function towerVisualState(nextState, socketsById) {
-      const towers = (nextState.towers || []).map((tower) => (
+      const towers = [...(nextState.towers || []), ...(nextState.companions || [])].map((tower) => (
         towerVisualRecord(tower, socketsById)
       ));
       const towersByPlacementId = new Map(towers.map((tower) => [
@@ -1150,10 +1413,18 @@
       ]));
       const projectiles = (nextState.projectiles || []).map((projectile) => {
         const tower = towersByPlacementId.get(String(projectile.tower_id));
-        const offsetY = Number(tower?.visual_offset_y);
+        // Launch metadata keeps rounds stable through a downgrade/replacement.
+        const offsetX = Number(projectile.origin_visual_offset_x ?? tower?.visual_offset_x ?? 0);
+        const unitScale = projectile.origin_pod_size != null ? Number(projectile.origin_pod_size) / LIVE_POD_SIZE
+          : tower ? towerUnitScale(tower) : 1;
+        const upgraded = projectile.origin_upgrade_level != null ? Number(projectile.origin_upgrade_level) > 1
+          : tower && hasUpgradedTowerArt(tower);
+        const offsetY = Number(projectile.origin_visual_offset_y ?? tower?.visual_offset_y ?? 0)
+          - (upgraded ? UPGRADED_HEAD_LIFT * unitScale : 0);
         if (!Number.isFinite(offsetY)) return projectile;
         return {
           ...projectile,
+          origin_x: Number(projectile.origin_x) + offsetX,
           origin_y: Number(projectile.origin_y) + offsetY,
         };
       });
@@ -1287,22 +1558,30 @@
         + 0.16 * Math.sin(visualTime * 19 + towerSeed)
         + 0.08 * Math.sin(visualTime * 37 + towerSeed * 1.7);
       const energy = Math.max(0.04, Math.min(1, charge * fluctuation));
-      const x = Number(tower.x);
-      const y = Number(tower.y);
+      const {x, y} = towerHeadOrigin(tower, true);
       const outerRadius = 27;
       const terminalRadius = 8;
 
       context.save();
       context.globalCompositeOperation = "lighter";
-      const halo = context.createRadialGradient(x, y, 2, x, y, 17 + charge * 8);
-      halo.addColorStop(0, `rgba(244,249,255,${0.32 * energy})`);
-      halo.addColorStop(0.28, `rgba(76,219,255,${0.25 * energy})`);
-      halo.addColorStop(0.66, `rgba(142,83,255,${0.12 * energy})`);
-      halo.addColorStop(1, "rgba(70,110,255,0)");
-      context.fillStyle = halo;
-      context.beginPath();
-      context.arc(x, y, 17 + charge * 8, 0, Math.PI * 2);
-      context.fill();
+      const haloRadius = Math.round(17 + charge * 8);
+      const haloKey = `tesla-halo:${haloRadius}`;
+      let halo = effectRasterCache.get(haloKey);
+      if (!halo) {
+        halo = document.createElement("canvas");
+        halo.width = halo.height = 52;
+        const paint = halo.getContext("2d");
+        const gradient = paint.createRadialGradient(26, 26, 2, 26, 26, haloRadius);
+        gradient.addColorStop(0, "rgba(244,249,255,0.32)");
+        gradient.addColorStop(0.28, "rgba(76,219,255,0.25)");
+        gradient.addColorStop(0.66, "rgba(142,83,255,0.12)");
+        gradient.addColorStop(1, "rgba(70,110,255,0)");
+        paint.fillStyle = gradient;
+        paint.fillRect(0, 0, 52, 52);
+        effectRasterCache.set(haloKey, halo);
+      }
+      context.globalAlpha = energy;
+      context.drawImage(halo, x - 26, y - 26);
 
       const arcCount = Math.max(
         1,
@@ -1332,7 +1611,7 @@
           ["#7447ff", 3.8, 0.34],
           ["#43dcff", 2.1, 0.72],
           ["#f4fbff", 0.8, 0.95],
-        ]) {
+        ].slice(3 - effectQuality.lightningLayers)) {
           context.strokeStyle = color;
           context.lineWidth = width;
           context.globalAlpha = alpha * energy;
@@ -1381,7 +1660,9 @@
       context.lineCap = "round";
       context.lineJoin = "round";
       context.shadowColor = "#a96cff";
-      context.shadowBlur = 14 * intensity * effectQuality.shadowScale;
+      // The layered colored strokes supply the halo. Blurring each long bolt
+      // repeatedly rasterizes its large bounding box and stalls compositing.
+      context.shadowBlur = 0;
       const lightningLayers = [
         ["#7c35ff", 8 * intensity, 0.45],
         ["#ca8cff", 4 * intensity, 0.82],
@@ -1573,7 +1854,7 @@
       const ty = Number(target.y);
       if (tower.tower_type === "mortar") return;
       if (tower.tower_type === "tesla_coil") {
-        let previous = { x: Number(tower.x), y: Number(tower.y) };
+        let previous = towerHeadOrigin(tower);
         for (const link of tower.last_fire_chain || []) {
           const enemy = enemiesById.get(Number(link.enemy_id));
           const next = enemy ? { x: Number(enemy.x), y: Number(enemy.y) } : { x: Number(link.x), y: Number(link.y) };
@@ -1602,6 +1883,7 @@
         return;
       }
       if (tower.tower_type === "machine_gun" && age <= 0.24) {
+        const origin = towerHeadOrigin(tower);
         const liveTarget = enemiesById.get(Number(target.enemy_id));
         const targetX = liveTarget ? Number(liveTarget.x) : tx;
         const targetY = liveTarget ? Number(liveTarget.y) : ty;
@@ -1609,11 +1891,12 @@
           targetY - Number(tower.y), targetX - Number(tower.x)
         );
         const fireLines = machineGunFireLines(
-          Number(tower.x),
-          Number(tower.y),
+          origin.x,
+          origin.y,
           fireAngle,
           targetX,
           targetY,
+          origin.scale,
         );
         for (let barrel = 0; barrel < fireLines.length; barrel += 1) {
           const line = fireLines[barrel];
@@ -1681,8 +1964,9 @@
           halfSize: socket.marker_size / 2,
         }));
         const core = coreMarkerRecord();
+        const coreMarkerId = gameFacts(state).core_marker_id;
         staticKeepOuts.push({
-          markerId: 38,
+          markerId: coreMarkerId,
           x: core.x,
           y: core.y,
           halfSize: Math.max(coreMarkerSize, core.size) / 2,
@@ -1697,6 +1981,59 @@
           .map((keepOut) => normalizedKeepOut(keepOut, clearance))
           .filter(Boolean)
       );
+    }
+
+    function drawRowBarriers(context, gameState, runtimeTime) {
+      const states = gameState.row_barriers || [];
+      const keepOuts = arucoFieldKeepOuts();
+      context.save();
+      context.lineCap = 'butt';
+      context.shadowBlur = 0;
+      for (const row of gameState.row_barrier_geometry || []) {
+        const status = states.find(item => item.row_id === row.row_id);
+        if (!status) continue;
+        const powered = status.powered === true;
+        const breakAge = status.changed_at == null ? Infinity : runtimeTime - status.changed_at;
+        const breaking = !powered && breakAge >= 0 && breakAge < 0.8;
+        const color = breaking ? '#ff6577' : powered ? '#ffd166' : '#a49b7d';
+        const key = `row:${row.ax},${row.ay},${row.bx},${row.by}`;
+        let segments = fieldGeometryCache.get(key);
+        if (!segments) {
+          segments = fieldSegmentsOutsideKeepOuts(row.ax, row.ay, row.bx, row.by, keepOuts);
+          if (fieldGeometryCache.size >= 256) fieldGeometryCache.clear();
+          fieldGeometryCache.set(key, segments);
+        }
+        context.strokeStyle = color;
+        context.setLineDash(powered ? [] : [8, 12]);
+        context.globalAlpha = breaking ? 1 - breakAge / 0.8 : powered ? 0.9 : 0.2;
+        context.lineWidth = powered ? 6 : 2;
+        for (const segment of segments) {
+          context.beginPath();
+          context.moveTo(segment.ax, segment.ay);
+          context.lineTo(segment.bx, segment.by);
+          context.stroke();
+        }
+        context.globalAlpha = 1;
+        context.setLineDash([]);
+        context.fillStyle = color;
+        context.font = 'bold 13px monospace';
+        context.textAlign = row.opening_side === 'right' ? 'right' : 'left';
+        const labelX = row.opening_side === 'right' ? row.bx - 12 : row.ax + 12;
+        context.fillText(`ROW ${status.active_count}/3${breaking ? ' · BROKEN' : ''}`, labelX, row.ay + 44);
+        if (powered) {
+          const gapX = row.opening_side === 'right' ? row.bx + 80 : row.ax - 80;
+          const direction = row.ay < HEIGHT / 2 ? 1 : -1;
+          context.lineWidth = 3;
+          context.beginPath();
+          context.moveTo(gapX, row.ay - direction * 16);
+          context.lineTo(gapX, row.ay + direction * 16);
+          context.moveTo(gapX - 7, row.ay + direction * 7);
+          context.lineTo(gapX, row.ay + direction * 16);
+          context.lineTo(gapX + 7, row.ay + direction * 7);
+          context.stroke();
+        }
+      }
+      context.restore();
     }
 
     function drawForceFields(
@@ -1719,21 +2056,49 @@
         const invulnerable = Boolean(gate.invulnerable);
         context.strokeStyle = preview ? `rgba(54,223,255,${pulse * 0.68})` : broken ? `rgba(255,83,103,${pulse * 0.7})` : invulnerable ? `rgba(255,255,255,${pulse})` : durability > 0.5 ? `rgba(54,223,255,${pulse})` : durability > 0.2 ? `rgba(255,179,71,${pulse})` : `rgba(255,83,103,${pulse})`;
         context.shadowColor = preview ? "#36dfff" : invulnerable ? "#ffffff" : durability > 0.5 ? "#36dfff" : durability > 0.2 ? "#ffb347" : "#ff5367";
-        context.shadowBlur = (provisional ? 6 : preview ? 9 : 15)
-          * effectQuality.shadowScale;
-        context.lineWidth = broken ? 3 : provisional ? 4 : preview ? 6 : 8;
+        context.shadowBlur = 0;
+        context.lineWidth = broken ? 3 : provisional ? 4 : preview ? 6 : Number(gate.visual_width_px || 8);
         context.setLineDash(broken ? [12, 13] : provisional ? [18, 8] : []);
         const ax = Number(gate.ax);
         const ay = Number(gate.ay);
         const bx = Number(gate.bx);
         const by = Number(gate.by);
         const fieldLength = Math.hypot(bx - ax, by - ay);
-        for (const segment of fieldSegmentsOutsideKeepOuts(ax, ay, bx, by, keepOuts)) {
+        const key = `${ax},${ay},${bx},${by}`;
+        let segments = extraKeepOuts.length ? null : fieldGeometryCache.get(key);
+        if (!segments) {
+          segments = fieldSegmentsOutsideKeepOuts(ax, ay, bx, by, keepOuts);
+          if (!extraKeepOuts.length) {
+            if (fieldGeometryCache.size >= 256) fieldGeometryCache.clear();
+            fieldGeometryCache.set(key, segments);
+          }
+        }
+        for (const segment of segments) {
           context.lineDashOffset = -fieldLength * segment.start;
           context.beginPath();
           context.moveTo(segment.ax, segment.ay);
           context.lineTo(segment.bx, segment.by);
+          if (effectQuality.shadowScale > 0) {
+            const width = context.lineWidth;
+            context.globalAlpha = 0.16 * effectQuality.shadowScale;
+            context.lineWidth = width + 8;
+            context.stroke();
+            context.globalAlpha = 1;
+            context.lineWidth = width;
+          }
           context.stroke();
+          const ribbon = gameImages.get(`field:${gate.upgrade_level}`);
+          if (ribbon && !broken && !provisional && !preview) {
+            const length = Math.hypot(segment.bx - segment.ax, segment.by - segment.ay);
+            const width = Number(gate.visual_width_px || 8) * 2;
+            context.save();
+            context.translate(segment.ax, segment.ay);
+            context.rotate(Math.atan2(segment.by - segment.ay, segment.bx - segment.ax));
+            context.globalCompositeOperation = 'screen';
+            context.globalAlpha = invulnerable ? 1 : Math.max(.25, durability);
+            context.drawImage(ribbon, 0, -width / 2, length, width);
+            context.restore();
+          }
         }
       }
       for (const impact of gameState.force_field_impacts || []) {
@@ -1786,7 +2151,7 @@
         const facingY = Number(enemy?.facing_y ?? impact.facing_y ?? 1);
         const rotation = Math.atan2(facingY, facingX) - Math.PI / 2;
         const enemyType = String(enemy?.enemy_type || impact.enemy_type || "grunt");
-        const baseSize = enemyType === "brute" ? 38 : 31;
+        const baseSize = 31 * ENEMY_VISUAL_SCALE * enemyVisualScale(enemyType);
         const pulse = 1 + Math.sin(visualTime * 48 + Number(impact.enemy_id)) * 0.06;
         const alpha = Math.max(0, 1 - age / FORCE_FIELD_ZAP_DURATION_S);
         context.save();
@@ -1808,18 +2173,27 @@
     }
 
     function renderGame(now = performance.now()) {
+      if (destroyed) return false;
+      const profile = Boolean(options.onPerformance);
+      let passStartedAt = profile ? performance.now() : 0;
+      function markPass(name) {
+        if (!profile) return;
+        const at = performance.now();
+        profilingTotals[name] = (profilingTotals[name] || 0) + at - passStartedAt;
+        passStartedAt = at;
+      }
       const context = gameCanvas.getContext("2d");
       context.clearRect(0, 0, WIDTH, HEIGHT);
-      if (!state || !level) return;
+      if (!state || !level) return false;
       const enemies = state.enemies || [];
       const enemyCount = Number(state.active_enemies || enemies.length || 0);
-      const effectQuality = effectQualityForEnemyCount(enemyCount);
-      const enemiesById = new Map();
-      for (const enemy of enemies) enemiesById.set(Number(enemy.id), enemy);
+      const qualityIndex = Math.max(adaptiveQuality, enemyCount >= 800 ? 2 : enemyCount >= 400 ? 1 : 0);
+      const effectQuality = [EFFECT_QUALITY_PROFILES.full, EFFECT_QUALITY_PROFILES.reduced, EFFECT_QUALITY_PROFILES.dense][qualityIndex];
+      renderStats.quality = effectQuality.name;
+      const enemiesById = enemiesByIdCache || (enemiesByIdCache = new Map(enemies.map(enemy => [Number(enemy.id), enemy])));
       const socketsById = socketRecordMap();
-      const visualState = towerVisualState(state, socketsById);
+      const visualState = visualStateCache || (visualStateCache = towerVisualState(state, socketsById));
       context.imageSmoothingEnabled = false;
-      drawSocketMarkers(context, state);
       const visualTime = visualSimulationTime(now, state);
       const runtimeVisualTime = visualRuntimeTime(now, state);
       const extrapolationAge = state.phase === "running" && !state.paused
@@ -1831,19 +2205,27 @@
         }
       }
       drawCoreSequence(context, state, visualTime, false);
+      drawRowBarriers(context, state, runtimeVisualTime);
       drawForceFields(context, state, visualTime, effectQuality);
+      markPass("fieldMs");
       for (const tower of visualState.towers || []) {
+        context.save();
+        const unitScale = towerUnitScale(tower);
+        context.translate(tower.x, tower.y);
+        context.scale(unitScale, unitScale);
+        context.translate(-tower.x, -tower.y);
         if (tower.destroyed) {
           drawTowerDestruction(context, tower, visualTime, effectQuality);
+          context.restore();
           continue;
         }
-        if (drawTowerActivation(context, tower, runtimeVisualTime, visualState)) continue;
+        if (drawTowerActivation(context, tower, runtimeVisualTime, visualState)) { context.restore(); continue; }
         const socket = socketsById.get(String(tower.socket_id));
         const coverSize = livePodVisualSize(socket);
         const cover = gameImages.get("tower:socket-cover");
         if (cover) context.drawImage(cover, tower.x - coverSize / 2, tower.y - coverSize / 2, coverSize, coverSize);
-        const base = gameImages.get(`tower:${tower.tower_type}:base`);
-        const head = gameImages.get(`tower:${tower.tower_type}:head`);
+        const base = gameImages.get(`tower:${tower.tower_type}:base:${tower.upgrade_level}`) || gameImages.get(`tower:${tower.tower_type}:base`);
+        const head = gameImages.get(`tower:${tower.tower_type}:head:${tower.upgrade_level}`) || gameImages.get(`tower:${tower.tower_type}:head`);
         if (base) context.drawImage(base, tower.x - TOWER_VISUAL_SIZE / 2, tower.y - TOWER_VISUAL_SIZE / 2, TOWER_VISUAL_SIZE, TOWER_VISUAL_SIZE);
         else {
           context.fillStyle = tower.owner === "green" ? "#1f6e49" : "#624184";
@@ -1857,11 +2239,13 @@
           const idleBob = Math.round(Math.sin(
             visualTime * Math.PI * 1.5 + Number(tower.aruco_id || 0),
           ));
+          const origin = towerHeadOrigin(tower, true);
+          const headSize = TOWER_VISUAL_SIZE * origin.scale;
           context.save();
-          context.translate(tower.x, tower.y + idleBob);
+          context.translate(origin.x, origin.y + idleBob);
           context.rotate(angle + Math.PI / 2);
           context.scale(pulse, pulse);
-          context.drawImage(head, -TOWER_VISUAL_SIZE / 2, -TOWER_VISUAL_SIZE / 2, TOWER_VISUAL_SIZE, TOWER_VISUAL_SIZE);
+          context.drawImage(head, -headSize / 2, -headSize / 2, headSize, headSize);
           context.restore();
           if (tower.tower_type === "flamethrower") {
             drawFlamethrowerPilotFlame(
@@ -1892,7 +2276,7 @@
         context.fillStyle = "#071018";
         context.font = "900 9px ui-monospace";
         context.textAlign = "center";
-        context.fillText(String(tower.atom_tag_id), tower.x, tower.y + 41);
+        context.fillText(String(tower.is_companion ? "C" : tower.atom_tag_id), tower.x, tower.y + 41);
         const linkBonus = towerLinkMultiplierLabel(tower);
         context.fillStyle = "rgba(4,11,18,0.88)";
         context.fillRect(tower.x - 21, tower.y - 70, 42, 15);
@@ -1938,7 +2322,9 @@
         drawTowerReplenishPulse(
           context, tower, runtimeVisualTime, effectQuality
         );
+        context.restore();
       }
+      markPass("towerMs");
       for (const enemyId of enemyTrailHistory.keys()) {
         const enemy = enemiesById.get(Number(enemyId));
         if (!enemy || Number(enemy.electrocuted_until || 0) <= visualTime) {
@@ -1950,6 +2336,7 @@
           context, enemy, visualTime, extrapolationAge, effectQuality
         );
       }
+      markPass("enemyMs");
       drawForceFieldSkeletonZaps(
         context,
         state,
@@ -1966,28 +2353,75 @@
       }
       drawCoreSequence(context, state, visualTime, true);
       renderCoreHealth(context, state);
-      renderCoreMarkerOverlay(context, state);
       drawAimHandle(
         context,
         (visualState.towers || []).find((tower) => (
           towerPlacementId(tower) === selectedTowerId
         )),
       );
+      drawSocketMarkers(context, state);
+      renderCoreMarkerOverlay(context, state);
+      markPass("combatMs");
+      profilingFrames += 1;
+      return true;
     }
 
     function gameRenderLoop(now) {
       if (destroyed) return;
-      const enemyCount = Number(state?.active_enemies || state?.enemies?.length || 0);
-      const targetFps = effectQualityForEnemyCount(enemyCount).targetFps;
-      if (now - lastGameRenderAt >= 1000 / targetFps) {
+      if (!document.hidden && (nextGameRenderAt == null || now + 0.5 >= nextGameRenderAt)) {
+        // Preserve the fractional deadline; never draw catch-up bursts after a
+        // delayed callback. The tolerance avoids floating-point refresh skips.
+        const deadline = nextGameRenderAt ?? now;
+        nextGameRenderAt = deadline + Math.max(1, Math.floor((now + 0.5 - deadline) / FRAME_INTERVAL_MS) + 1) * FRAME_INTERVAL_MS;
+        const frameMs = lastGameRenderAt == null ? FRAME_INTERVAL_MS : now - lastGameRenderAt;
         lastGameRenderAt = now;
-        renderGame(now);
+        const started = performance.now();
+        const drawn = renderGame(now);
+        const drawMs = performance.now() - started;
+        if (drawn) {
+          fpsRenderedFrames += 1;
+          const weight = Math.min(frameMs, 100);
+          if (drawMs > 18 || frameMs > 25) {
+            slowFrameTime += weight; healthyFrameTime = 0;
+          } else {
+            slowFrameTime = Math.max(0, slowFrameTime - weight);
+            healthyFrameTime = drawMs < 10 && frameMs < 21 ? healthyFrameTime + weight : 0;
+          }
+          if (slowFrameTime >= 400) { adaptiveQuality = Math.min(2, adaptiveQuality + 1); slowFrameTime = 0; }
+          if (healthyFrameTime >= 5000) { adaptiveQuality = Math.max(0, adaptiveQuality - 1); healthyFrameTime = 0; }
+          renderStats.drawMs = drawMs; renderStats.frameMs = frameMs;
+        }
+      }
+      const sampledAt = performance.now();
+      const elapsed = sampledAt - fpsSampleStartedAt;
+      if (!document.hidden && elapsed >= 1000) {
+        renderStats.fps = Math.round(fpsRenderedFrames * 1000 / elapsed);
+        reportFps(renderStats.fps);
+        if (options.onPerformance) {
+          const passes = Object.fromEntries(Object.entries(profilingTotals).map(([key, total]) => [key, total / Math.max(1, profilingFrames)]));
+          try { options.onPerformance({...renderStats, ...passes, cacheBytes: 4 * (enemySpriteCache.pixels + effectRasterCache.pixels + enemyGlowCache.pixels)}); }
+          catch (error) { console.warn("Render diagnostics unavailable", error); }
+        }
+        profilingFrames = 0; profilingTotals = {};
+        fpsRenderedFrames = 0;
+        fpsSampleStartedAt = sampledAt;
       }
       animationFrame = global.requestAnimationFrame(gameRenderLoop);
     }
 
     function applyState(nextState) {
       state = nextState;
+      visualStateCache = null;
+      enemiesByIdCache = null;
+      const nextGeometry = JSON.stringify([state?.aruco_code_footprint_px, state?.core_aruco_code_footprint_px, state?.force_field_marker_clearance_px]);
+      if (nextGeometry !== geometrySignature) { geometrySignature = nextGeometry; invalidateSocketGeometry(); }
+      if (bruteScale !== state?.settings?.brute_size_multiplier) {
+        bruteScale = state?.settings?.brute_size_multiplier;
+        enemySpriteCache.clear(); enemyGlowCache.clear();
+      }
+      const placements = new Set([...(state?.towers || []), ...(state?.companions || [])].map(towerPlacementId));
+      for (const id of towerRenderAngles.keys()) if (!placements.has(id)) towerRenderAngles.delete(id);
+      for (const id of towerAimPreview.keys()) if (!placements.has(id)) towerAimPreview.delete(id);
       stateReceivedAt = performance.now();
       frozenVisualAge = 0;
       const assetsChanged = setPresentation(nextState?.presentation);
@@ -2002,6 +2436,8 @@
       socketRecordCache = null;
       socketRecordMapCache = null;
       staticFieldKeepOutCache = null;
+      fieldGeometryCache.clear();
+      visualStateCache = null;
     }
 
     function setLevel(nextLevel, revision = null) {
@@ -2016,11 +2452,10 @@
       levelRevision = Number.isFinite(Number(revision)) ? Number(revision) : null;
       invalidateSocketGeometry();
       Promise.all([loadGameImages(), loadSceneImages(nextLevel.scene)]).then(() => {
+        if (destroyed) return;
         renderMap();
-        renderGame();
       });
       renderMap();
-      renderGame();
       return level;
     }
 
@@ -2066,6 +2501,15 @@
         .sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0] || null;
     }
 
+    function towerAtPoint(x, y) {
+      const units = [...(state?.towers || []), ...(state?.companions || [])]
+        .map(unit => towerVisualRecord(unit, socketRecordMap()))
+        .filter(unit => Math.abs(unit.x - x) <= LIVE_POD_SIZE * towerUnitScale(unit) / 2
+          && Math.abs(unit.y - y) <= LIVE_POD_SIZE * towerUnitScale(unit) / 2);
+      const hit = units.sort((a,b) => Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))[0];
+      return hit ? (state.towers || []).find(unit => towerPlacementId(unit) === String(hit.parent_placement_id || towerPlacementId(hit))) : null;
+    }
+
     function markerAtPoint(x, y) {
       return socketRecords()
         .filter((socket) => (
@@ -2080,26 +2524,24 @@
 
     function coreAtPoint(x, y) {
       const center = centralCoreCenter();
+      const markerId = gameFacts(state).core_marker_id;
       return Math.hypot(center.x - x, center.y - y) <= 78
-        ? { socket_id: "core_38", aruco_id: 38, x: center.x, y: center.y, size: 156 }
+        ? { socket_id: markerId == null ? "core" : `core_${markerId}`, aruco_id: markerId, x: center.x, y: center.y, size: 156 }
         : null;
     }
 
     function selectTower(placementId) {
       selectedTowerId = placementId == null ? null : String(placementId);
-      renderGame();
     }
 
     function previewTowerAim(placementId, angle, spread) {
       if (placementId == null) return;
       towerAimPreview.set(String(placementId), { angle: Number(angle), spread: Number(spread) });
-      renderGame();
     }
 
     function clearTowerAimPreview(placementId) {
       if (placementId == null) return;
       towerAimPreview.delete(String(placementId));
-      renderGame();
     }
 
     function selectedAimTower(placementId = selectedTowerId) {
@@ -2162,6 +2604,9 @@
       destroy() {
         destroyed = true;
         if (animationFrame) global.cancelAnimationFrame(animationFrame);
+        document.removeEventListener?.("visibilitychange", resetFpsSample);
+        enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear(); tintedEffectCache.clear();
+        enemyTrailHistory.clear(); towerRenderAngles.clear(); towerAimPreview.clear();
       },
       get level() {
         return level;
@@ -2181,6 +2626,7 @@
       coreAtPoint,
       markerAtPoint,
       socketAtPoint,
+      towerAtPoint,
       socketRecords,
     };
   }
@@ -2206,6 +2652,11 @@
       towerAimFromPoint,
       towerHealthBarMetrics,
       towerLinkMultiplierLabel,
+    },
+    presentation: {
+      gameFacts,
+      snapshotReceiver,
+      towerTypeLabel,
     },
   };
 })(typeof window === "undefined" ? globalThis : window);

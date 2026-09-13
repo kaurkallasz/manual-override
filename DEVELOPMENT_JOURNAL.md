@@ -1027,6 +1027,103 @@ acceptance step.
 **Ownership:** user-directed change; OpenAI Codex implementation and
 non-hardware verification. The work remains uncommitted.
 
+### 2026-09-04 — Close the Phase 8 audit gaps without new infrastructure
+
+**Human request:** execute correction-plan steps 1–6: protect the Phase 8 tree,
+remove Y's remaining copied identifiers, add changed-contract and repository-
+boundary checks, distinguish Board's diagnostic and game placement evidence,
+and audit compatibility routes.
+
+**Decision:** checkpoint commit `279b715` was pushed to the existing fork before
+further edits. Y now derives loadout IDs/types, socket count, ring bounds, core
+marker identity and available image keys from Photon Game's existing values. It
+does not substitute a flame range when targeting geometry is absent. No contract
+version or endpoint was added. Board's existing tracking projection now carries
+an additive copy of its already-cached `photon.board.placement` value so the tab
+can label calibrated diagnostic overlap separately from the normalized evidence
+Game consumes; neither calculation nor calibration ownership moved.
+
+One fixture-only isolation suite exercises Level from its own files, Board from
+explicit simulation, Game from an in-memory `photon.level.runtime` producer,
+and Y from a changed Game-shaped value. It loads no sibling implementation as a
+producer. Y's application code and available request logs contained no caller of
+the compatibility-only `/api/art`, so that route and its tests were removed. The
+actively used `/settings` shortcut remains and still checks Game's contract.
+
+**Verification:** all 113 Photon-focused tests and the complete 208-test
+repository suite pass, including the four new isolation/variation checks, and
+the updated Y renderer parses with Node. Laser Tag Z has no post-checkpoint
+diff. No camera, robot, projector or live hub was opened. Physical acceptance
+and publication of the correction remain separate later steps.
+
+**Ownership:** user-directed cleanup; OpenAI Codex implementation and
+non-hardware verification.
+
+## 2026-09-04 — Brute size, strength, and Gamemaster tuning
+
+The user requested Brutes four times the Grunt's visual width and height,
+introduced in wave 4, with four times their former health and damage. Photon
+Game now defaults to 960 HP and 64 damage per second against both core and
+defense pods. Its settings tab exposes first wave, relative size, health, and
+damage; existing global multipliers continue to apply and changes take effect
+on the next Start. The current authored Brute waves remain 4, 8, and 12.
+Changing the first wave substitutes roles while retaining authored group
+counts, timing, and lanes. Game never edits Level's wave source.
+
+Y reads relative size from the active run settings, scales the body and its
+effects in both displays, and allocates sprite caches for the full rotated
+diagonal. Collision geometry, speed, and melee reach retain their existing
+values. Complete older settings files acquire the new defaults without losing
+saved tuning; malformed files remain explicit failures. Laser Tag Z remains
+the rollback implementation.
+
+Verification covers default/custom Brute stats, wave introduction, unchanged
+group totals, validation, persistence, next-run freezing, older-file loading,
+and the real renderer's fallback, rotated sprite cache, burn, and skeleton
+dimensions. User-directed implementation by OpenAI Codex; working-tree change,
+not yet committed. No hardware operation is part of this change.
+
+## 2026-09-05 — Rare Brutes among regular orcs
+
+The user changed the requested mix to one large, strong Brute for every forty
+regular-sized orcs. From the configured first Brute wave (default 4), every
+41st scheduled enemy is now a Brute. The pattern restarts each wave and spans
+its groups after count scaling; remaining slots stay regular. Wave 4 keeps
+its total of 262 enemies, now comprising 256 regular Grunts and 6 Brutes.
+Authored Brute groups supply Grunts in regular slots; other authored roles,
+release timing, and lane weights are retained. Brute size, health, damage,
+and first-wave settings remain available.
+
+Deferred spawns retain their sequence position through blocked lanes and the
+active-enemy cap. Regular Grunt, Runner, and Breaker sprite sizes are unchanged.
+The settings hint and Game specification describe the revised mix.
+
+Verification: all 124 Photon tests pass, including actual spawn-sequence
+checks for every wave, count multipliers, group boundaries, remainders,
+deferred spawns, and renderer checks for all regular orc sizes. User-directed
+implementation by OpenAI Codex; working-tree change, not yet committed.
+
+## 2026-09-05 — Halve Brute visual size
+
+The user requested Brutes at 50% of their current size. The default size
+relative to Grunts changes from 4 to 2 in Photon Game, with matching settings
+help and specifications. Y already derives sprites, fallback shapes, and
+attached effects from this run setting. Health, damage, spawn ratio, and regular
+orc sizes retain their existing values. The local saved settings contain no
+Brute size override and will acquire the new default on load. Existing Brute
+tests cover the updated default and renderer proportions. User-directed
+implementation by OpenAI Codex; uncommitted working-tree change.
+
+## 2026-09-05 — Live playfield FPS monitor
+
+The user requested current FPS beside Virtual play. Y now keeps a compact
+readout with that control and updates it once per second from completed
+playfield draws. Samples reset on browser visibility changes; optional monitor
+callbacks cannot stop rendering. The monitor adds no network or Game state.
+All 125 Photon tests pass, including measured draw rates, interaction redraws,
+visibility recovery, and cleanup; renderer and page scripts parse successfully.
+User-directed implementation by OpenAI Codex; uncommitted working-tree change.
+
 ## Lessons retained in the current design
 
 1. **Prototype topology is disposable; security boundaries are not.** The three-process launcher was replaced within a day, but role isolation and relay-side enforcement survived in the single hub.
@@ -1111,3 +1208,106 @@ Append a dated entry containing:
 7. the commit or pull request that implemented the change.
 
 If the decision changes required behavior, update the relevant specification in the same change. If it only explains existing behavior, update this journal without rewriting the specification as history.
+
+## 2026-09-05 — Remove Photon presentation FPS limits and repeated render work
+
+- **Human decision; AI-assisted implementation:** the user requested applying
+  the FPS optimization plan after observing 17 FPS and below. Codex implemented
+  the changes in the working tree; no commit or PR was created.
+- The 30/24/18 FPS quality caps and discarded scheduling remainder were a
+  confirmed limiter. Y now targets 60 FPS for every quality tier, coalesces
+  interaction draws, resets visibility samples and measures completed animation
+  frames without inflating FPS through diagnostic redraws.
+- Stable geometry and snapshot-derived lookups are cached. Small effect
+  rasters, electric glows and Tesla halos use bounded caches. Measured frame
+  pressure changes cosmetic detail with hysteresis. A smaller-wave replay
+  exposed expensive long-line blur returning during quality recovery, so
+  lightning and field halos now use layered strokes. Burn cues stay visible
+  while lower quality slows their flicker. Enemy/Brute sizes and gameplay rules
+  remain as previously configured.
+- Y diffs DOM writes, limits nonessential HUD updates to 10 Hz and rebuilds
+  controls only on input changes. The existing SSE helper optionally shares
+  preparation and encoding, with full initial/reconnect messages and named
+  dynamic updates. Default complete-snapshot consumers remain supported.
+  Level's optional validated runtime-status read avoids repeated geometry
+  copies and bounds art revalidation to 250 ms.
+- Verification: the full 226-test suite passed, followed by 132 Photon checks
+  on the completed renderer. Synthetic 60/120 Hz tests, shared-stream and
+  reconnect checks, revision/error tests and isolated real-Canvas replays cover
+  the new logic. A ten-minute two-display replay with 1,000 orcs and 16 towers
+  reported median 60 FPS and minimum 42 FPS, with no samples at or below 30.
+  Additional smaller-wave and peak-effect replays are recorded in
+  `docs/FPS_VALIDATION_2026-09-05.md`.
+- The existing paused wave 4 was retained. Refreshing its display raised the
+  observed FPS from 24–26 to 58 with the final renderer. Server changes await the next hub restart,
+  because restarting now would discard the in-memory run.
+
+## 2026-09-05 — Four row barriers and two-entry winding routes
+
+Implemented the approved row-barrier plan alongside ordinary turret links.
+Photon Level revision 18 publishes runtime v2 with explicit three-socket rows,
+alternating end openings, two outer left entrances, and westbound middle-road
+connections. Game validates v2 while preserving v1 compatibility, powers rows
+from completed living turrets, strictly blocks crossings, and reroutes in
+bounded shared batches with swept collision. Y shows row progress, openings,
+and breakage, retaining static geometry across incremental SSE updates.
+
+Preserved enemy/wave balance, existing links, the center sockets, and the core
+ring mechanic. Added lifecycle/routing/collision/transport regression coverage,
+modular and Tiled-native validation, and isolated server/browser stress replays.
+The final ten-minute two-view/1,000-enemy display replay measured median 60 FPS,
+minima 44/43 FPS, and no reports at or below 30. Server profiling also reduced
+unnecessary exact combat checks and road-geometry work and removed a duplicate
+post-work scheduling delay. See docs/ROW_BARRIER_VALIDATION_2026-09-05.md for
+measurement limits, reproduction, and rollout details. The live run was not
+reset or restarted by this implementation.
+
+## 2026-09-05 — LTZ saved progression and upgrade map integration
+
+Implemented the requested LTZ Score plan: Photon Progress SQLite profiles,
+transactional kill credits/purchases, three-win control unlocks, recoverable Game
+results, per-method orc settings, Tesla Coil naming, player stats/history below
+upgrades, and all weapon/field upgrade artwork on both Y map views. The existing
+relay validates saved active control tiers; no extra robot connection was added.
+See `docs/LTZ_IMPLEMENTATION.md` and Photon Progress's specification for the
+contracts, operator workflow and recovery limits. Verification uses temporary
+stores and browser fixtures, with no live player or hardware mutations.
+
+## 2026-09-05 — Gamemaster virtual upgrade testing
+
+Added an in-memory virtual test loadout to Photon Game and a Virtual test unlocks
+panel to Y. Gamemaster can lock turret placement, choose each weapon/field level,
+unlock every L4 upgrade, or restore player levels. Existing defenses refresh
+immediately with health percentages preserved; player progress is untouched.
+The override is virtual-only and survives game Reset within the current module
+session. Validation: 156 Photon + 12 LTZ integration tests, plus an isolated real
+Game/Y browser test and a visually inspected panel screenshot.
+
+## 2026-09-05 — Readable upgraded turret pedestals
+
+Normalized the transparent padding of all twelve L2–L4 turret bases and raised
+the independently rotating heads, with a slight head scale reduction. The green,
+blue and amber armor tiers are now exposed within the existing socket footprint.
+Firing effects follow the new visual mount; gameplay geometry and L1 art are
+unchanged. Both game pages use the shared renderer and a refreshed script version.
+The isolated `tests/turret_bases_browser.cjs` check renders every upgraded weapon
+at eight aiming angles, verifies base/socket bounds and front visibility, and
+writes `/tmp/turret-bases-preview.png` for visual review. It measured at least 80%
+of each pedestal front exposed. All 156 Photon tests passed.
+
+## 2026-09-08 — L4 companion turret implementation completed
+
+Completed the approved companion plan: Level revision 19 publishes twelve
+validated opposite-side anchors, excluding the four middle sockets. Game owns
+same-type child weapons with independent fire, shared health/aim, and unchanged
+primary-only topology/scoring. Both views render 96 px companion pods and route
+selection to the parent; LTZ descriptions and frozen history metadata explain
+the new rule. Existing turret and marker positions remain unchanged.
+
+Finished the interrupted validation: 167 Photon tests and 12 LTZ integration
+tests passed, alongside virtual/companion/LTZ browser checks and modular/Tiled
+verification. Both displays measured median 60 FPS with 28 weapons and 1,000
+orcs. Extreme server stress remained over a 33.3 ms tick budget (42.8 ms median,
+versus 38.0 ms baseline); see `docs/L4_COMPANION_IMPLEMENTATION.md` for measured
+limits, reproduction and activation instructions. Live hub/game/player state
+was not restarted or modified by these isolated checks.

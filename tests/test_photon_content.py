@@ -98,8 +98,6 @@ class PhotonContentTests(unittest.TestCase):
                 frame = next(response.response).decode()
                 output = json.loads(frame.split("data: ", 1)[1].split("\n", 1)[0])
                 self.assertEqual(output["presentation"], expected)
-            result = client.get("/p/laser-tag-y/api/art", environ_overrides={"SCRIPT_NAME": "/s/gamemaster"})
-            self.assertEqual(result.get_json()["base"], "/s/gamemaster" + expected["base"])
 
     def test_missing_malformed_or_incompatible_art_does_not_stop_simulation(self):
         bundle = self.level.runtime_bundle()
@@ -157,5 +155,11 @@ class PhotonContentTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for renderer checks")
     def test_renderer_refreshes_assets_from_game_at_unchanged_geometry_revision(self):
         script = Path(__file__).with_name("photon_content_renderer.cjs")
+        result = subprocess.run(["node", str(script)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for renderer checks")
+    def test_fps_monitor_measures_draws_and_resets_after_hidden_tabs(self):
+        script = Path(__file__).with_name("photon_fps_renderer.cjs")
         result = subprocess.run(["node", str(script)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)

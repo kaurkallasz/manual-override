@@ -1,0 +1,960 @@
+{
+  "date": "2026-09-05",
+  "platform": "macOS-15.6.1-arm64-arm-64bit",
+  "browser": {
+    "seconds": 600,
+    "views": 2,
+    "results": [
+      {
+        "samples": 594,
+        "minFps": 44,
+        "medianFps": 60,
+        "maxFps": 60,
+        "belowTarget": 0,
+        "intervalP95": 17.299999952316284,
+        "intervalP99": 18.700000047683716,
+        "longTasks": 0,
+        "assets": {
+          "requested": 75,
+          "loaded": 75,
+          "failed": 0,
+          "pending": 0,
+          "last_url": "/s/gamemaster/p/photon-level/assets/game-art/z-pixel-v2/normalized/structures/runtime/activation/tesla-coil-activation-v2.png?v=dd2e22359a64dd37ab4b8e6706e18f50a945f30e0ae8f967f569863fbee40320",
+          "last_error": null,
+          "base": "/s/gamemaster/p/photon-level/assets",
+          "revision": "[\"/p/photon-level/assets\",\"7f4ca691fd90ce2cbbe6357d4550e8df47acac111a8411fab70ef7b69f62ee2e\",\"ready\"]"
+        },
+        "passes": [
+          {
+            "fps": 60,
+            "drawMs": 2.299999952316284,
+            "frameMs": 16.699999999953434,
+            "quality": "dense",
+            "fieldMs": 0.2032786744539855,
+            "towerMs": 0.18360655425024813,
+            "enemyMs": 1.9278688548041172,
+            "combatMs": 0.2967213216375132,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.799999952316284,
+            "frameMs": 16.599999999976717,
+            "quality": "dense",
+            "fieldMs": 0.1983333428700765,
+            "towerMs": 0.1883333404858907,
+            "enemyMs": 1.871666665871938,
+            "combatMs": 0.2666666587193807,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.5,
+            "frameMs": 16.5,
+            "quality": "dense",
+            "fieldMs": 0.1967213310179163,
+            "towerMs": 0.1885245901639344,
+            "enemyMs": 1.8803278579086553,
+            "combatMs": 0.2721311537945857,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.299999952316284,
+            "frameMs": 16.699999999953434,
+            "quality": "dense",
+            "fieldMs": 0.19180327165322225,
+            "towerMs": 0.17377048242287557,
+            "enemyMs": 1.8688524590163935,
+            "combatMs": 0.2655737829990074,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.8999998569488525,
+            "frameMs": 16.70000000006985,
+            "quality": "dense",
+            "fieldMs": 0.21666666269302368,
+            "towerMs": 0.19166666269302368,
+            "enemyMs": 1.8799999872843425,
+            "combatMs": 0.2833333412806193,
+            "cacheBytes": 3054788
+          }
+        ],
+        "heapBytes": 14706084
+      },
+      {
+        "samples": 595,
+        "minFps": 43,
+        "medianFps": 60,
+        "maxFps": 60,
+        "belowTarget": 0,
+        "intervalP95": 18,
+        "intervalP99": 18.699999809265137,
+        "longTasks": 0,
+        "assets": {
+          "requested": 75,
+          "loaded": 75,
+          "failed": 0,
+          "pending": 0,
+          "last_url": "/s/gamemaster/p/photon-level/assets/game-art/z-pixel-v2/normalized/structures/runtime/activation/tesla-coil-activation-v2.png?v=dd2e22359a64dd37ab4b8e6706e18f50a945f30e0ae8f967f569863fbee40320",
+          "last_error": null,
+          "base": "/s/gamemaster/p/photon-level/assets",
+          "revision": "[\"/p/photon-level/assets\",\"7f4ca691fd90ce2cbbe6357d4550e8df47acac111a8411fab70ef7b69f62ee2e\",\"ready\"]"
+        },
+        "passes": [
+          {
+            "fps": 60,
+            "drawMs": 2.5,
+            "frameMs": 16.600000000093132,
+            "quality": "dense",
+            "fieldMs": 0.19166667461395265,
+            "towerMs": 0.1683333396911621,
+            "enemyMs": 1.8049999872843425,
+            "combatMs": 0.2700000087420146,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.5999999046325684,
+            "frameMs": 16.699999999953434,
+            "quality": "dense",
+            "fieldMs": 0.20491802106138135,
+            "towerMs": 0.17049182438459554,
+            "enemyMs": 1.836065562044988,
+            "combatMs": 0.26229508978421573,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.4000000953674316,
+            "frameMs": 16.599999999976717,
+            "quality": "dense",
+            "fieldMs": 0.1950819609595127,
+            "towerMs": 0.18360656206725073,
+            "enemyMs": 1.8163934301157467,
+            "combatMs": 0.267213125697902,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.4000000953674316,
+            "frameMs": 16.599999999976717,
+            "quality": "dense",
+            "fieldMs": 0.19333331982294719,
+            "towerMs": 0.17499999602635702,
+            "enemyMs": 1.8183333317438761,
+            "combatMs": 0.2549999872843424,
+            "cacheBytes": 3054788
+          },
+          {
+            "fps": 60,
+            "drawMs": 2.5,
+            "frameMs": 16.599999999976717,
+            "quality": "dense",
+            "fieldMs": 0.20500001112620037,
+            "towerMs": 0.19166663885116578,
+            "enemyMs": 1.8450000007947287,
+            "combatMs": 0.28499999443689983,
+            "cacheBytes": 3054788
+          }
+        ],
+        "heapBytes": 14877208
+      }
+    ],
+    "errors": []
+  },
+  "simulation": {
+    "ticks": 480,
+    "enemies": 1000,
+    "row_masks": 16,
+    "median_tick_ms": 31.605666503310204,
+    "p95_tick_ms": 40.21508409641683,
+    "max_tick_ms": 86.16383303888142,
+    "ticks_over_33ms": 138,
+    "routing_builds": 17,
+    "max_pending_routes": 952,
+    "pending_at_end": 0,
+    "queued_spawns": 51
+  },
+  "modular": {
+    "valid": true,
+    "revision": 18,
+    "runtime_version": 2,
+    "counts": {
+      "Ground Modules": 18,
+      "Road Modules": 61
+    },
+    "tile_layers": 0,
+    "tile_objects": 105,
+    "referenced_gids": 56,
+    "placed_gids": 19,
+    "visible_image_layers": [],
+    "spawn_groups": [
+      "top_outer",
+      "bottom_outer"
+    ],
+    "row_masks_checked": 16,
+    "families": {
+      "photon-yard-z-pixel-v2-ground": {
+        "images": 4,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          }
+        ]
+      },
+      "photon-yard-z-pixel-v2-seam-safe-roads": {
+        "images": 6,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          }
+        ]
+      },
+      "photon-yard-z-pixel-v2-core-plaza": {
+        "images": 1,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              512,
+              512
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              512,
+              512
+            ]
+          }
+        ]
+      },
+      "photon-yard-z-pixel-v2-targets": {
+        "images": 16,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              47,
+              29,
+              273,
+              290
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              44,
+              298,
+              276
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              24,
+              43,
+              295,
+              277
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              59,
+              35,
+              261,
+              285
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              34,
+              32,
+              285,
+              287
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              34,
+              297,
+              286
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              31,
+              26,
+              288,
+              294
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              45,
+              22,
+              275,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              31,
+              22,
+              289,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              22,
+              298,
+              297
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              35,
+              298,
+              285
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              37,
+              23,
+              282,
+              297
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              37,
+              22,
+              283,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              23,
+              298,
+              297
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              44,
+              298,
+              276
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              53,
+              22,
+              266,
+              298
+            ]
+          }
+        ]
+      },
+      "photon-yard-z-pixel-v2-towers": {
+        "images": 20,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              52,
+              74,
+              267,
+              246
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              25,
+              66,
+              295,
+              253
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              69,
+              51,
+              251,
+              269
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              57,
+              55,
+              262,
+              264
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              72,
+              30,
+              248,
+              290
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              41,
+              39,
+              278,
+              280
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              73,
+              47,
+              247,
+              272
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              38,
+              22,
+              281,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              58,
+              31,
+              262,
+              289
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              48,
+              42,
+              272,
+              278
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              61,
+              22,
+              259,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              38,
+              22,
+              281,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              52,
+              22,
+              267,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              37,
+              298,
+              283
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              22,
+              30,
+              298,
+              290
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              28,
+              22,
+              292,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              46,
+              5,
+              274,
+              315
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              46,
+              5,
+              274,
+              315
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              46,
+              5,
+              274,
+              315
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              46,
+              5,
+              274,
+              315
+            ]
+          }
+        ]
+      },
+      "photon-yard-z-pixel-v2-core": {
+        "images": 4,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              58,
+              24,
+              298,
+              296
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              30,
+              22,
+              274,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              38,
+              20,
+              286,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              32,
+              20,
+              288,
+              297
+            ]
+          }
+        ]
+      },
+      "photon-yard-z-pixel-v2-force-fields": {
+        "images": 4,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              62,
+              23,
+              258,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              32,
+              22,
+              284,
+              298
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              59,
+              21,
+              267,
+              282
+            ]
+          },
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              56,
+              23,
+              264,
+              298
+            ]
+          }
+        ]
+      },
+      "z-pixel-v2-seam-caps": {
+        "images": 1,
+        "modes": [
+          "RGBA"
+        ],
+        "empty": 0,
+        "bounds": [
+          {
+            "size": [
+              320,
+              320
+            ],
+            "alpha_bounds": [
+              0,
+              0,
+              320,
+              320
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "tiled": {
+    "valid": true,
+    "tiled": "/Applications/Tiled.app/Contents/MacOS/Tiled",
+    "tiled_version": "1.12.2",
+    "format_version": "1.11",
+    "layer_count": 15,
+    "tileset_count": 8,
+    "render": "/private/tmp/photon-rows-tiled.png",
+    "render_bytes": 1980641
+  },
+  "tests": {
+    "command": ".venv/bin/python -m unittest discover -s tests",
+    "count": 242,
+    "status": "passed"
+  }
+}

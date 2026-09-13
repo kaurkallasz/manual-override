@@ -14,6 +14,8 @@ def runtime_asset_paths():
     assets = {"fallback/enemy": "enemy.svg", "fallback/tower": "tower.svg", "fallback/core": "core.svg"}
     for tower_type in ("machine_gun", "flamethrower", "mortar", "tesla_coil"):
         filename = tower_type.replace("_", "-")
+        for tier in (2, 3, 4):
+            assets[f"tower/{tower_type}/upgrade/{tier}"] = f"upgrades/{filename}-l{tier}-atlas.png"
         for layer in ("base", "head"):
             version = 2 if tower_type == "tesla_coil" and layer == "head" else 1
             assets[f"tower/{tower_type}/{layer}"] = (
@@ -24,6 +26,7 @@ def runtime_asset_paths():
             "game-art/z-pixel-v2/normalized/structures/runtime/activation/"
             f"{filename}-activation-v2.png"
         )
+    assets['field/upgrade-atlas'] = 'upgrades/force-field-atlas.png'
     assets["tower/socket-cover"] = (
         "game-art/z-pixel-v2/normalized/structures/runtime/"
         "tower-socket-cover-v1.png"

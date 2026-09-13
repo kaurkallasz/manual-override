@@ -263,7 +263,7 @@ class RelayClient:
         return arm.get("target")
 
     # -- motion ---------------------------------------------------------------
-    def set_target_pose(self, x, y, z, r=None):
+    def set_target_pose(self, x, y, z, r=None, *, ltz_action="xyz"):
         """Forward a Cartesian target to the relay. Signature matches the direct
         driver's set_target_pose so prototype.py / recall call it unchanged. R
         falls back to the last cached target's R when omitted."""
@@ -274,7 +274,7 @@ class RelayClient:
         if token is None:
             return
         status, body = self._post("/api/move", {
-            "side": self.side, "token": token, "mode": "cartesian",
+            "side": self.side, "token": token, "mode": "cartesian", "ltz_action": ltz_action,
             "pose": [float(x), float(y), float(z), float(r)],
         })
         if not body or not body.get("ok"):

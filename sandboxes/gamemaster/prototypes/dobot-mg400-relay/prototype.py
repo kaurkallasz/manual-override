@@ -1055,6 +1055,9 @@ def move():
     if err:
         _log_incoming("move", data, ok=False, error=err)
         return _fail(err)
+    capability_error = _ltz_motion_error(side, data)
+    if capability_error:
+        return _fail(capability_error), 403
     robot = _arm(side)
     if robot is None or not robot.is_connected():
         _log_command("robot", side, "move", {}, ok=False, error="Not connected")
@@ -1208,3 +1211,39 @@ def hold():
             _log_command("robot", side, "hold", {}, ok=False, error="hold failed")
     _live.bump()
     return _ok(side=side)
+
+
+# LTZ capability decisions belong to Photon Progress; the relay enforces them.
+_hub_ctx = None
+
+
+def hub_init(ctx):
+    global _hub_ctx
+    _hub_ctx = ctx
+
+
+def hub_stop():
+    global _hub_ctx
+    _hub_ctx = None
+
+
+def _ltz_motion_error(side, data):
+    if _hub_ctx is None or not _hub_ctx.is_prototype_enabled('photon-progress'):
+        return 'Cannot verify LTZ controls: Photon Progress is unavailable or disabled'
+    try:
+        module = _hub_ctx.get_prototype('photon-progress')
+        policy = module.control_policy(side)
+        if policy.get('contract') != 'photon.progress' or type(policy.get('version')) is not int or policy['version'] != 1 or policy.get('status') != 'ready':
+            raise ValueError('Photon Progress unavailable')
+        if not policy.get('active'):
+            return None
+        mode = data.get('mode', 'joint')
+        action = data.get('ltz_action', 'joint' if mode == 'joint' else 'xyz')
+        required = {'joint': 1, 'xyz': 2, 'image': 3, 'cue': 4}.get(action)
+        if required is None or (mode == 'cartesian' and required < 2):
+            return 'invalid LTZ control action'
+        if required > policy.get('tier', 0):
+            return 'this control method is locked for the active LTZ player'
+    except Exception as exc:
+        return f'Cannot verify LTZ controls: {exc}'
+    return None

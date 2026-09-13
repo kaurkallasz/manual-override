@@ -1,0 +1,86 @@
+[
+  {
+    "type": "machine-gun",
+    "tier": 2,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-ebdf24b4-55d3-4098-929f-0c75ae87c4b8.png",
+    "prompt": "Edit the supplied machine-gun Level 2 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 2 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "machine-gun-l2-atlas.png"
+  },
+  {
+    "type": "machine-gun",
+    "tier": 3,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-24629a03-d46f-4b3a-92df-56650dbf271c.png",
+    "prompt": "Edit the supplied machine-gun Level 3 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 3 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "machine-gun-l3-atlas.png"
+  },
+  {
+    "type": "machine-gun",
+    "tier": 4,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-c2d1aa9e-ae65-43ec-ada2-9a5aecdbc4d5.png",
+    "prompt": "Edit the supplied machine-gun Level 4 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 4 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "machine-gun-l4-atlas.png"
+  },
+  {
+    "type": "flamethrower",
+    "tier": 2,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-6bee0b18-bcc9-4823-be88-da5ff97cc5b9.png",
+    "prompt": "Edit the supplied flamethrower Level 2 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 2 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "flamethrower-l2-atlas.png"
+  },
+  {
+    "type": "flamethrower",
+    "tier": 3,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-fe5b657c-8d2c-492b-836e-20718311c281.png",
+    "prompt": "Edit the supplied flamethrower Level 3 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 3 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "flamethrower-l3-atlas.png"
+  },
+  {
+    "type": "flamethrower",
+    "tier": 4,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-8f350514-4bc5-4e98-bdd2-f6baa5544253.png",
+    "prompt": "Edit the supplied flamethrower Level 4 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 4 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "flamethrower-l4-atlas.png"
+  },
+  {
+    "type": "mortar",
+    "tier": 2,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-819a327e-08ce-4883-9562-eb01053f49d0.png",
+    "prompt": "Edit the supplied mortar Level 2 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 2 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "mortar-l2-atlas.png"
+  },
+  {
+    "type": "mortar",
+    "tier": 3,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-026c1b00-c233-4b02-85ab-540819e96604.png",
+    "prompt": "Edit the supplied mortar Level 3 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 3 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "mortar-l3-atlas.png"
+  },
+  {
+    "type": "mortar",
+    "tier": 4,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-5a785ff9-2ec3-4539-b01a-270fd1bfcb99.png",
+    "prompt": "Edit the supplied mortar Level 4 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 4 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "mortar-l4-atlas.png"
+  },
+  {
+    "type": "tesla-coil",
+    "tier": 2,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-31085ec7-b033-4489-9879-8cc0e080c384.png",
+    "prompt": "Edit the supplied Tesla Coil Level 2 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 2 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "tesla-coil-l2-atlas.png"
+  },
+  {
+    "type": "tesla-coil",
+    "tier": 3,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-45ef29c7-19bf-42a8-ac75-e4fc2c6a9742.png",
+    "prompt": "Edit the supplied Tesla Coil Level 3 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 3 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "tesla-coil-l3-atlas.png"
+  },
+  {
+    "type": "tesla-coil",
+    "tier": 4,
+    "source": "/Users/kaur/.codex/generated_images/01a07121-d7a7-7f73-a54d-669fc566af83/exec-8ef37d28-d709-43ee-82fc-65493b63938e.png",
+    "prompt": "Edit the supplied Tesla Coil Level 4 game sprite into ONE two-layer runtime atlas image. Canvas aspect ratio exactly 2:1, 1536x768. Two equal square cells side by side, no gutters, no labels: LEFT cell stationary armored base only, remove weapon and complete the chassis underneath it; RIGHT cell only the detached rotating weapon assembly, remove its floor and remove muzzle flashes or fire. Keep the distinctive reference pixel-art design and level 4 armor colors. Both objects individually centered in their square. The base rotation mount and the head rotation pivot must each be at their square's center. Base spans 70% of square width, gun head spans 60% width and 70% height. Point barrels vertically UP. When cells are overlaid at their center they must form one coherent turret. Render on a PERFECTLY FLAT SOLID PURE MAGENTA #ff00ff backing, no checkerboard, no shadows outside objects, no colored reflections from the backing. The game will chroma-key this exact magenta into alpha at texture load. Preserve dark sprite outlines.",
+    "file": "tesla-coil-l4-atlas.png"
+  }
+]

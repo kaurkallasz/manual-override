@@ -79,6 +79,8 @@ DEFAULT_SANDBOXES = {
         "admin": True,
         "shared_api": {
             "dobot-mg400-relay": ["green", "purple"],
+            "photon-progress": ["green", "purple"],
+            "photon-game": ["green", "purple"],
             "tag-game": ["green", "purple"],
             "2p-tag-game": ["green", "purple"],
             "pickup-game": ["green", "purple"],

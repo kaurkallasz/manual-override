@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .engine import DEFAULT_SETTINGS
+from .engine import DEFAULT_SETTINGS, CONTROL_ORC_KEYS
 
 
 RULES = {
@@ -17,10 +17,15 @@ RULES = {
     "wave_interval_s": (float, 2.0, 600.0),
     "release_rate_multiplier": (float, 0.05, 20.0),
     "enemy_count_multiplier": (float, 0.1, 5.0),
+    **{key: (float, 0.1, 5.0) for key in CONTROL_ORC_KEYS},
     "enemy_health_multiplier": (float, 0.1, 10.0),
     "enemy_speed_multiplier": (float, 0.1, 5.0),
     "enemy_core_damage_multiplier": (float, 0.0, 10.0),
     "enemy_tower_damage_multiplier": (float, 0.0, 10.0),
+    "brute_first_wave": (int, 1, 12),
+    "brute_size_multiplier": (float, 0.5, 10.0),
+    "brute_health": (float, 1.0, 100000.0),
+    "brute_damage_per_s": (float, 0.0, 10000.0),
     "force_field_damage_per_s": (float, 0.0, 500.0),
     "force_field_slow": (float, 0.05, 1.0),
     "force_field_hit_capacity": (int, 1, 10000),
@@ -42,6 +47,10 @@ RULES = {
 }
 
 DEFAULTS = {key: DEFAULT_SETTINGS[key] for key in RULES}
+# Accept the complete pre-Brute settings shape without losing saved tuning.
+BRUTE_SETTING_KEYS = {
+    "brute_first_wave", "brute_size_multiplier", "brute_health", "brute_damage_per_s",
+}
 PRESETS = {
     "balanced": dict(DEFAULTS),
     "training": {
@@ -89,6 +98,9 @@ def validate_settings(incoming: dict[str, Any]) -> tuple[dict[str, Any], dict[st
             errors[key] = f"must be between {lower:g} and {upper:g}"
             continue
         clean[key] = value
+    for previous, current in zip(CONTROL_ORC_KEYS, CONTROL_ORC_KEYS[1:]):
+        if previous in clean and current in clean and clean[current] <= clean[previous]:
+            errors[current] = 'must be greater than the preceding control method'
     return clean, errors
 
 
@@ -110,7 +122,11 @@ class SettingsStore:
             if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
                 raise ValueError("expected settings schema version 1")
             incoming = data.get("settings")
-            if not isinstance(incoming, dict) or set(incoming) != set(RULES):
+            if not isinstance(incoming, dict) or set(incoming) not in (
+                set(RULES), set(RULES) - BRUTE_SETTING_KEYS,
+                set(RULES) - set(CONTROL_ORC_KEYS),
+                set(RULES) - BRUTE_SETTING_KEYS - set(CONTROL_ORC_KEYS),
+            ):
                 raise ValueError("settings document must contain every known setting and no unknown settings")
             clean, errors = validate_settings(incoming)
             if errors:

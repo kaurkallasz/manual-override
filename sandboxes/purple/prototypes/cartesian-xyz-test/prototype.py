@@ -635,7 +635,8 @@ def move():
     except (KeyError, ValueError, TypeError):
         return _fail("Expected numeric x, y, z (r optional)")
     x, y, z, r = _clamp_pose(x, y, z, r)
-    result = robot.set_target_pose(x, y, z, r)
+    result = (robot.set_target_pose(x, y, z, r, ltz_action=data.get("ltz_action", "xyz"))
+              if _link == "relay" else robot.set_target_pose(x, y, z, r))
     if isinstance(result, tuple) and result and result[0] is False:
         return _fail(result[1] or "relay move failed")
     _live.bump()

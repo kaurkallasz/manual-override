@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build square first/last keyframes for Kling turret-install videos.
+"""Build square elevator first/last keyframes for Kling turret-install videos.
 
 The last keyframe is composed from the exact runtime socket cover, turret base,
-and turret head. Image-generated first-frame sources are normalized onto the
-same 1024px transparent canvas with an 896px maximum mechanical footprint.
+and turret head. One image-generated sliding hatch serves all four turrets.
+Exports include RGBA masters and opaque black-matte Kling upload copies.
+Legacy v1 first frames remain available for the original trapdoor videos.
 """
 
 from __future__ import annotations
@@ -21,6 +22,9 @@ SOURCES = PACK / "source-sheets" / "kling-keyframes"
 OUTPUT = PACK / "normalized" / "structures" / "runtime" / "kling-keyframes"
 MANIFEST = PACK / "kling-turret-install-keyframes.json"
 PROMPTS = PACK / "KLING_TURRET_INSTALL_PROMPTS.md"
+FIRST_SOURCE = SOURCES / "turret-elevator-install-first-source-v2.png"
+FIRST_FRAME = OUTPUT / "turret-elevator-install-first-v2.png"
+UPLOAD = OUTPUT / "kling-upload-v2"
 
 CANVAS_SIZE = 1024
 CONTENT_SIZE = 896
@@ -45,7 +49,9 @@ def clean_alpha(image: Image.Image) -> Image.Image:
     return image
 
 
-def square_canvas(image: Image.Image, *, source_is_pixel_art: bool) -> Image.Image:
+def square_canvas(
+    image: Image.Image, *, source_is_pixel_art: bool, square_footprint: bool = False
+) -> Image.Image:
     image = clean_alpha(image)
     bounds = image.getchannel("A").getbbox()
     if not bounds:
@@ -57,19 +63,26 @@ def square_canvas(image: Image.Image, *, source_is_pixel_art: bool) -> Image.Ima
         if source_is_pixel_art
         else Image.Resampling.LANCZOS
     )
-    resized = cropped.resize(
-        (
-            max(1, round(cropped.width * scale)),
-            max(1, round(cropped.height * scale)),
-        ),
-        resampling,
+    size = (
+        max(1, round(cropped.width * scale)),
+        max(1, round(cropped.height * scale)),
     )
+    if square_footprint:
+        size = (CONTENT_SIZE, CONTENT_SIZE)
+    resized = cropped.resize(size, resampling)
     frame = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (0, 0, 0, 0))
     frame.alpha_composite(
         resized,
         ((CANVAS_SIZE - resized.width) // 2, (CANVAS_SIZE - resized.height) // 2),
     )
     return clean_alpha(frame)
+
+
+def save_upload(image: Image.Image, path: Path) -> None:
+    """Use an explicit backdrop instead of relying on video-input alpha."""
+    matte = Image.new("RGBA", image.size, (0, 0, 0, 255))
+    matte.alpha_composite(image.convert("RGBA"))
+    matte.convert("RGB").save(path, optimize=True)
 
 
 def active_runtime_frame(tower_type: str, head_version: int) -> Image.Image:
@@ -90,30 +103,43 @@ def active_runtime_frame(tower_type: str, head_version: int) -> Image.Image:
 
 
 def build() -> dict[str, object]:
+    if not FIRST_SOURCE.is_file():
+        raise RuntimeError(f"missing elevator hatch source: {FIRST_SOURCE}")
+    source = Image.open(FIRST_SOURCE).convert("RGBA")
+    if source.getchannel("A").getextrema()[0] != 0:
+        raise RuntimeError("elevator source must have a genuinely transparent exterior")
+    # Generated extraction leaves alpha 253 on solid black shaft pixels.
+    # Snap nearly opaque pixels to 255, retaining antialiasing at the perimeter.
+    source.putalpha(source.getchannel("A").point(
+        lambda value: 255 if value >= 248 else value
+    ))
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    UPLOAD.mkdir(parents=True, exist_ok=True)
+    first = square_canvas(
+        source, source_is_pixel_art=False, square_footprint=True
+    )
+    first.save(FIRST_FRAME, optimize=True)
+    first_upload = UPLOAD / "turret-elevator-install-first-v2-black.png"
+    save_upload(first, first_upload)
     assets: list[dict[str, object]] = []
     for tower_type, config in TOWER_TYPES.items():
         last_path = OUTPUT / f"{tower_type}-install-last-v1.png"
-        square_canvas(
+        last = square_canvas(
             active_runtime_frame(tower_type, config["head_version"]),
             source_is_pixel_art=True,
-        ).save(last_path, optimize=True)
-
-        first_source = SOURCES / f"{tower_type}-install-first-source-v1.png"
-        first_path = OUTPUT / f"{tower_type}-install-first-v1.png"
-        if first_source.is_file():
-            square_canvas(
-                Image.open(first_source), source_is_pixel_art=False
-            ).save(first_path, optimize=True)
+        )
+        last.save(last_path, optimize=True)
+        last_upload = UPLOAD / f"{tower_type}-install-last-v2-black.png"
+        save_upload(last, last_upload)
 
         assets.append(
             {
                 "tower_type": tower_type.replace("-", "_"),
-                "first_source": str(first_source.relative_to(ROOT)),
-                "first_frame": (
-                    str(first_path.relative_to(ROOT)) if first_path.is_file() else None
-                ),
+                "first_source": str(FIRST_SOURCE.relative_to(ROOT)),
+                "first_frame": str(FIRST_FRAME.relative_to(ROOT)),
+                "first_upload": str(first_upload.relative_to(ROOT)),
                 "last_frame": str(last_path.relative_to(ROOT)),
+                "last_upload": str(last_upload.relative_to(ROOT)),
                 "canvas_size": [CANVAS_SIZE, CANVAS_SIZE],
                 "content_size_px": CONTENT_SIZE,
                 "pivot": [0.5, 0.5],
@@ -122,14 +148,39 @@ def build() -> dict[str, object]:
         )
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "motion": "sliding_floor_doors_then_perspective_elevator_rise_then_boot_rotation",
         "aspect_ratio": "1:1",
         "duration_s": 3.0,
         "canvas_size": [CANVAS_SIZE, CANVAS_SIZE],
+        "runtime_target": {"fps": 24, "frame_count": 72, "hold_final_frames": 6},
+        "alpha": {
+            "master": "RGBA PNG",
+            "exterior": "transparent",
+            "shaft_and_mechanisms": "opaque",
+            "upload": "RGB PNG with black exterior matte",
+            "video_delivery": "native alpha is not assumed; matte only the exterior",
+        },
+        "perspective": {
+            "camera": "fixed direct-overhead perspective",
+            "ground_footprint_scale": 1.0,
+            "rising_assembly_start_scale": 0.55,
+            "rising_assembly_end_scale": 1.0,
+            "fixed_pivot": [0.5, 0.5],
+        },
+        "timeline": [
+            {"frames": [0, 14], "time_s": [0, 0.625], "stage": "sliding_doors_open"},
+            {"frames": [15, 41], "time_s": [0.625, 1.75], "stage": "perspective_elevator_rise"},
+            {"frames": [42, 50], "time_s": [1.75, 2.125], "stage": "platform_dock"},
+            {"frames": [51, 65], "time_s": [2.125, 2.75], "stage": "boot_rotation"},
+            {"frames": [66, 71], "time_s": [2.75, 3], "stage": "active_hold"},
+        ],
         "prompt_file": str(PROMPTS.relative_to(ROOT)),
         "assets": assets,
     }
-    MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    temporary_manifest = MANIFEST.with_suffix(".json.tmp")
+    temporary_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    temporary_manifest.replace(MANIFEST)
     return manifest
 
 
