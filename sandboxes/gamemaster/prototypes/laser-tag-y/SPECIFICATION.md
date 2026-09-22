@@ -183,3 +183,13 @@ unlock all L4, or return everything to base level. The UI preserves unsaved
 selections during unrelated SSE updates and shows the server's applied loadout
 after refresh. Changes affect existing defenses and subsequent placements on
 both shared map views. The form forwards one Game command and owns no upgrades.
+
+
+### Mobile control test unlocks
+
+The same Virtual test unlocks form includes **Mobile control unlock**: Joint (1),
+Cartesian XYZ (2), Targeting (3), and Cue autonomy (4). Apply sends
+`virtual_test_loadout` with `levels` plus `control` (integer 1–4, or null when the
+override is off). The selection unlocks through that tier for Green mobile practice.
+Unlock all L4 includes tier 4; All base levels restores tier 1. Targeting enables finger dragging; Cue autonomy enables queued pickup and placement. Unsaved dropdown edits survive unrelated SSE updates.
+These overrides do not write saved players, credits, wins, or physical-arm settings.

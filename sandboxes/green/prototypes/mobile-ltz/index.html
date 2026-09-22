@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101715"><title>mobile ltz · Green</title>
+<link rel="stylesheet" href="mobile.css?v=20260917-touch-map">
+</head>
+<body>
+<main id="app">
+  <div id="battlefield" aria-label="Live battlefield. Use two fingers to zoom and pan.">
+    <div id="world"><img id="playfieldVideo" alt="Corrected live playground" hidden><canvas id="mapCanvas"></canvas><canvas id="gameCanvas"></canvas><canvas id="armCanvas" width="1696" height="960"></canvas><div id="markerLabels" aria-label="Visible ArUco codes"></div><svg id="xyzBullseyes" viewBox="0 0 1696 960" aria-label="Arm XY positions" hidden><path id="cueWaypointGuides" class="xyzWaypoint xyzGuides" hidden/><g id="cueWaypointBullseye" class="xyzWaypoint" hidden><circle r="16"/><circle r="5"/><path d="M-24 0H-10 M10 0H24 M0-24V-10 M0 10V24"/></g><path id="xyzTargetGuides" class="xyzTarget xyzGuides"/><path id="xyzActualGuides" class="xyzActual xyzGuides"/><g id="xyzTargetBullseye" class="xyzTarget"><circle r="16"/><circle r="5"/><path d="M-24 0H-10 M10 0H24 M0-24V-10 M0 10V24"/></g><g id="xyzActualBullseye" class="xyzActual"><circle r="16"/><circle r="5"/><path d="M-24 0H-10 M10 0H24 M0-24V-10 M0 10V24"/></g></svg></div>
+    <div id="turretOverlay" hidden><svg aria-label="Turret firing area"></svg></div>
+    <div id="turretAimPanel" class="glass" hidden><b id="turretAimTitle">Turret</b><button type="button" aria-label="Close turret targeting">×</button><span id="turretAimStatus">Drag square to aim and set range</span></div>
+    <div id="empty"><span class="signal"></span><h1>Ready when you are.</h1><p id="emptyMessage">Connecting to Gamemaster…</p></div>
+  </div>
+  <header><div class="identity"><i></i><span>Green</span><span class="divider">/</span><button id="levelsOpen" aria-haspopup="dialog">Joint <span class="muted">⌄</span></button></div>
+    <div class="telemetry">
+      <div class="facts"><span>Wave <b id="wave">—</b></span><span>Core <b id="core">—</b></span><span>Score <b id="score">0</b></span><span class="fps" title="Game frames drawn per second">FPS <b id="fps">—</b></span></div>
+      <div class="diagnostics" aria-label="Movement performance">
+        <span title="Received game updates per second over the last five seconds">Updates <b id="updateHz">—</b>/s</span>
+        <span title="Time since the latest received game update, not network ping">Age <b id="updateAge">—</b>ms</span>
+        <span title="Percentage of moving frames using prediction during the last sample">Pred <b id="prediction">—</b>%</span>
+        <span title="Current adaptive playback buffer">Buffer <b id="bufferMs">—</b>ms</span>
+        <span title="Longest interval between drawn frames in the last sample; amber indicates an interval above 34 ms">Peak <b id="framePeak">—</b>ms</span>
+      </div>
+    </div>
+    <button id="expand" aria-label="Expand view">⤢ <span>Expand</span></button>
+  </header>
+  <div class="mode"><span id="mode">Waiting</span><span id="connection">Offline</span></div>
+  <aside class="connectionControls"><button id="connect" class="glass primary" disabled><span class="connectIcon">◉</span> Connect</button><button id="stop" class="glass stop"><span>■</span> Stop</button></aside>
+  <section class="leftControls" aria-label="Base and gripper controls">
+    <div class="baseDial">
+    <div id="wheel" class="wheel" role="slider" tabindex="0" aria-label="Base rotation" aria-valuemin="-160" aria-valuemax="160" aria-valuenow="-80" aria-disabled="true">
+      <svg viewBox="0 0 240 160" aria-hidden="true"><path class="dialBack" d="M22 136 A98 98 0 0 1 218 136"/><g id="ticks"></g><g id="baseSelector"><rect class="baseThumb" x="108" y="24" width="24" height="28" rx="4"/></g><g id="baseActual" class="baseActual" visibility="hidden"><path class="baseActualHalo" d="M120 27 L120 49"/><path class="baseActualCore" d="M120 27 L120 49"/></g></svg>
+      <div class="wheelLabel"><output id="j1Value">−80°</output></div>
+    </div>
+    <div id="pumpButtons" class="basePumpControls" role="group" aria-label="Gripper pump">
+      <button id="pumpSuck" type="button" aria-pressed="false" disabled>Suck</button>
+      <button id="pumpBlow" type="button" aria-pressed="false" disabled>Blow</button>
+    </div>
+    </div>
+  </section>
+  <section id="jointRig" class="jointRig" aria-label="Arm illustration"></section>
+  <section class="jointControls glass" aria-label="Arm joint controls">
+    <div class="jointSliderStack">
+      <div class="jointSliderRow"><label for="j3">Elbow · J3 <output id="j3Value" for="j3">−5°</output></label><input id="j3" type="range" min="-25" max="105" step="0.5" value="-5" disabled aria-describedby="jointSliderHint"><span id="j3Actual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+      <div class="jointSliderRow"><label for="j2">Shoulder · J2 <output id="j2Value" for="j2">−5°</output></label><input id="j2" type="range" min="-25" max="85" step="0.5" value="-5" disabled aria-describedby="jointSliderHint"><span id="j2Actual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+    </div>
+    <button id="jointPrecision" role="switch" aria-checked="false" aria-label="Fine tune" title="10× slider zoom with 0.05° steps"><span class="fineTuneTrack" aria-hidden="true"></span><span>Fine tune</span><b>10×</b></button>
+    <p id="jointSliderHint" class="srOnly">Sliders choose joint targets. Fine tune zooms each slider to one tenth of its range around the selected target, with 0.05 degree steps. Toggle off for the full range; toggle on again to center a new zoom. Red arrows at an edge mean the actual angle is outside the zoomed range. The white arm smoothly previews the full selected pose; thin glowing red lines show the confirmed position on the arm and each slider.</p>
+  </section>
+  <section id="xyzHeightControl" class="xyzHeight glass" aria-label="Height control" hidden>
+    <label for="xyzZ">Height · Z <output id="xyzZValue" for="xyzZ">—</output></label>
+    <div class="xyzVerticalTrack jointSliderRow"><input id="xyzZ" type="range" min="0" max="400" step="1" value="60" disabled aria-describedby="xyzHint"><span id="xyzZActual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+    <svg id="zPresetGuides" aria-hidden="true"><g id="zPresetGuide1"><path class="zPresetMark"/><path class="zPresetLink"/></g><g id="zPresetGuide2"><path class="zPresetMark"/><path class="zPresetLink"/></g><g id="zPresetGuide3"><path class="zPresetMark"/><path class="zPresetLink"/></g></svg><div id="zPresetButtons" role="group" aria-label="Saved heights"><button id="zPreset1" type="button" class="zPresetButton" aria-describedby="zPresetHint" disabled>1</button><button id="zPreset2" type="button" class="zPresetButton" aria-describedby="zPresetHint" disabled>2</button><button id="zPreset3" type="button" class="zPresetButton" aria-describedby="zPresetHint" disabled>3</button></div><p id="zPresetHint" class="srOnly">Tap a saved preset to recall its height. Hold for 3 seconds to save or replace the selected Z height on this phone.</p>
+  </section>
+  <section class="xyzHeight xyzYControl glass" aria-label="Y position control" hidden>
+    <label for="xyzY">Y <output id="xyzYValue" for="xyzY">—</output></label>
+    <div class="xyzVerticalTrack jointSliderRow"><input id="xyzY" type="range" min="0" max="960" step="1" value="0" disabled aria-describedby="xyzHint"><span id="xyzYActual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+  </section>
+  <section class="xyzControls glass" aria-label="Cartesian XYZ controls" hidden>
+    <div class="jointSliderStack">
+      <div class="jointSliderRow"><label for="xyzX">X <output id="xyzXValue" for="xyzX">—</output></label><input id="xyzX" type="range" min="0" max="1696" step="1" value="0" disabled aria-describedby="xyzHint"><span id="xyzXActual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+    </div>
+    <button id="xyzPrecision" role="switch" aria-checked="false" aria-label="XYZ fine tune"><span class="fineTuneTrack" aria-hidden="true"></span><span>Fine tune</span><b>10×</b></button>
+    <p id="xyzHint" class="srOnly">In Targeting, drag the green bullseye with one finger; Fine tune reduces drag movement to one tenth. Use two fingers to pan and zoom. In XYZ, sliders select map coordinates; red markers show actual arm position. Green bullseye and dashed cross lines show your XY target; thin red bullseye and dashed cross lines show actual XY. The right vertical Y slider increases downward; the left height slider increases upward. Orange means XY aligned; height is separate. The simulation can reach all map coordinates at heights from 0 to 400. Fine tune zooms to one tenth of the range with 0.1 unit steps.</p>
+    <div class="xyzLegend"><span class="targetKey">⊕ Target</span><span class="actualKey">⊕ Actual</span><span id="xyzAlignment">XY aligned</span></div>
+  </section>
+  <aside id="cuePanel" class="cuePanel glass" aria-label="Cue sequence" hidden>
+    <div class="cueHeading"><b>Cue</b><button id="cueMinimize" aria-label="Minimize cue" aria-expanded="true">›</button></div>
+    <div id="cueRows" aria-label="Cue rows"><div id="cueWaypointRow" hidden><span id="cueWaypointLabel">Blue waypoint</span><button id="cueWaypointCancel" aria-label="Cancel blue waypoint">×</button></div></div>
+    <div class="cueTransport"><button id="cueAdd" aria-label="Add cue row">+</button><button id="cuePlay" aria-label="Play cue">▶</button><button id="cueStop" aria-label="Stop cue">■</button></div>
+    <p id="cueStatus" role="status" aria-live="polite">Choose piece → marker. Tap the map to insert a blue waypoint.</p>
+  </aside>
+  <output id="height" class="srOnly"></output>
+  <div id="feedback" role="status" aria-live="polite">Waiting for the live game.</div>
+  <a id="returnLink" href="/s/green/" hidden>← Player tabs</a>
+</main>
+<dialog id="levels"><div class="dialogHead"><div><p class="eyebrow">Your control path</p><h2>More ways to move.</h2></div><button id="levelsClose" aria-label="Close control path">×</button></div><p id="profileStatus">Checking saved progress…</p><label class="mobileControlLabel" for="mobileControl">Mobile controls<select id="mobileControl" disabled><option value="joint">Joint</option><option value="xyz" disabled>Cartesian XYZ · locked</option><option value="targeting" disabled>Targeting · locked</option><option value="cue" disabled>Cue autonomy · locked</option></select></label><p id="controlPathStatus" role="status">Connect to select controls.</p><div class="tierGrid">
+<article class="tier current" data-control="joint"><div class="tierNumber">01 <span>Live</span></div><div class="miniJoint">◜ ◝ <span>━━●━━</span></div><h3>Joint</h3><p>Use the shoulder and elbow sliders to move the arm. The white sketch previews the selected pose. Use the dial for base rotation.</p><strong>Available in this release</strong></article>
+<article class="tier" data-control="xyz"><div class="tierNumber">02 <span id="tier2">Preview</span></div><div class="miniXYZ">✛ <span>↕</span></div><h3>Cartesian XYZ</h3><p>X and Y sliders, a vertical height slider, and target / actual bullseyes.</p><strong>Available when unlocked</strong></article>
+<article class="tier" data-control="targeting"><div class="tierNumber">03 <span id="tier3">Preview</span></div><div class="miniTarget">⊕ <span>·····◎</span></div><h3>Targeting</h3><p>Drag the green target with one finger. Keep height and presets; use Fine tune for 10× precision.</p><strong>Available when unlocked</strong></article>
+<article class="tier" data-control="cue"><div class="tierNumber">04 <span id="tier4">Preview</span></div><div class="miniCue">①─②─③ <span>▶</span></div><h3>Cue autonomy</h3><p>Queue piece → marker rows. Play, pause, or stop automatic pickup and placement.</p><strong>Available when unlocked</strong></article>
+</div><p class="muted">Three eligible wins unlock the next control level. Simulation is practice and does not award permanent progress.</p></dialog>
+<dialog id="login"><form id="loginForm"><p class="eyebrow">mobile ltz</p><h2>Join Green.</h2><p>Use your Green player password.</p><label for="password">Player password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit" class="primary">Sign in</button><p id="loginError" role="alert"></p></form></dialog>
+<script src="viewport.js?v=20260917-touch-map"></script><script src="live-game.js?v=20260917-touch-map"></script><script src="network.js?v=20260917-touch-map"></script><script src="mobile.js?v=20260918-rig-bundle"></script>
+</body></html>

@@ -46,6 +46,9 @@
         "photon-game": [
           "green",
           "purple"
+        ],
+        "mobile-ltz-api": [
+          "green"
         ]
       },
       "password": "2d555ed8"

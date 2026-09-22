@@ -30,3 +30,6 @@ Thumbs.db
 
 # Note: each machine also has its own .gitignore for its runtime *.json
 # (camera-settings.json, areas.json, settings.json, ...).
+
+# Private mobile relay credentials and generated deployment bundles
+.mobile-ltz-runtime/

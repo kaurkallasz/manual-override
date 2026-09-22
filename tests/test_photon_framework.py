@@ -887,17 +887,27 @@ class PhotonGameExtractionTests(unittest.TestCase):
         def comparable(engine):
             value = engine.snapshot()
             value.pop("server_time", None)
+            # Motion guides are read-only presentation metadata, not physics.
+            value.pop("enemy_motion", None)
+            for enemy in value["enemies"]:
+                enemy.pop("motion", None)
+            # Idle mobile practice telemetry is additive; combat stays identical.
+            arm = value.pop("mobile_arm", None)
+            if arm is not None:
+                self.assertFalse(arm["connected"])
             # Older levels have no companion geometry; the additive fields
             # must not change their primary combat or topology behavior.
             self.assertEqual(value.pop('companions', []), [])
             value.pop('companion_policy', None)
-            for key in ("row_barrier_geometry", "row_barriers", "row_topology_revision", "released_orcs", "contract_control_tier", "player_progression", "virtual_test_loadout"):
+            for key in ("row_barrier_geometry", "row_barriers", "row_topology_revision", "released_orcs", "contract_control_tier", "player_progression", "virtual_test_loadout", "virtual_test_control", "movable_piece_codes"):
                 value.pop(key, None)
             value.pop("physical_input_error", None)
             # Brute tuning is additive in Game; this parity fixture runs Grunts.
-            for key in ("brute_first_wave", "brute_size_multiplier", "brute_health", "brute_damage_per_s", "control_orc_multiplier_joint", "control_orc_multiplier_xyz", "control_orc_multiplier_image", "control_orc_multiplier_cue"):
+            for key in ("brute_first_wave", "brute_size_multiplier", "brute_health", "brute_damage_per_s", "control_orc_multiplier_joint", "control_orc_multiplier_xyz", "control_orc_multiplier_image", "control_orc_multiplier_cue", "green_piece_1", "green_piece_2", "purple_piece_1", "purple_piece_2"):
                 value["settings"].pop(key, None)
             for tower in value["towers"]:
+                # Opaque mobile edit identity does not change combat behavior.
+                tower.pop("aim_instance", None)
                 tower.get("targeting", {}).pop("control", None)
                 if "upgrade_multiplier" in tower:
                     self.assertEqual(tower.pop("upgrade_multiplier"), 1)
@@ -1391,6 +1401,20 @@ vm.runInContext(html.split('<script>')[1].split('</script>')[0], context);
 
 
 class HubLifecycleTests(unittest.TestCase):
+    def test_simulation_allowlist_does_not_import_excluded_modules(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            (root/'hub-config.json').write_text(json.dumps({'sandboxes':{'gamemaster':{'prototypes':['active']}}}))
+            machines=root/'sandboxes/gamemaster/prototypes'
+            for name in ('active','hardware'):
+                (machines/name).mkdir(parents=True)
+            (machines/'active/prototype.py').write_text("from flask import Blueprint\nbp=Blueprint('only_active',__name__)\n")
+            (machines/'hardware/prototype.py').write_text("raise AssertionError('Excluded module was imported')\n")
+            sandbox=Hub(root).sandboxes['gamemaster'];sandbox.discover()
+            self.assertEqual(set(sandbox._modules),{'active'})
+            sandbox.cfg['prototypes']={}
+            with self.assertRaises(ValueError):sandbox.discover()
+
     def test_group_is_reported_and_disabled_module_never_starts(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

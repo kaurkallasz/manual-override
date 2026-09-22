@@ -1,6 +1,6 @@
 # HHH Gamemaster development journal
 
-Last reconstructed: 2026-08-29, through commit `9d22a3a` plus the current uncommitted Laser Tag Z working tree on branch `codex/laser-tag-z`.
+Last updated: 2026-09-22, through commit `cd00d97` plus the current uncommitted mobile LTZ, Photon Game, shared renderer, and camera-presentation changes. This continuation covers developments since the last dated entry, 2026-09-08. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
 
 This journal explains how the repository reached its current design: what changed, what was learned, why the next decision followed, and whether the repository records the work as human-only or AI-assisted. The reconstruction is based on commit history and messages, the current README and specifications, implementation diffs, calibration files, and local Laser Tag X run and score logs.
 
@@ -28,7 +28,9 @@ During normal play, the gamemaster relay exclusively owns two Dobot MG400 arms. 
 
 The physical-game stack combines corrected ArUco camera observations, camera-to-robot calibration, relay pose and pump state, Atom impact sensors, shared playfield rendering, and per-team automation. Laser Tag X remains the mature two-arm cooperative placement game: it has browser-side high-frequency fusion, coarse server state, append-only diagnostics and scores, recovery from visible board state, and operator escape hatches.
 
-Laser Tag Z is the active tower-defence branch. It keeps the Laser Tag X camera, calibration, arm-visualization, relay, and safety boundaries, but gives the Gamemaster a separate server-authoritative defence simulation and an external game screen. Its editable Tiled map has sixteen fixed ArUco turret sockets, four movable Atom activators, four weapon roles, physical and virtual setup, durable turret placements, versioned force-field topology, a deterministic spatial core-ring objective, linked-group scaling, bounded dense waves, and a two-tag core purge finale. Several of those rules exist only in the current working tree and are not yet a committed baseline.
+The active tower-defence implementation is now the modular Photon stack: Level owns authored content, Board publishes physical observations, Game owns the simulation, Progress owns saved player progression, and Laser Tag Y presents the game. Laser Tag Z remains the rollback/reference implementation. Commit `cd00d97` records the progression, row barriers, L4 companions, and artwork described in the September 5–8 entries.
+
+The current uncommitted continuation adds Green mobile LTZ as another presentation of that same Game, with a restricted hosted gateway and Game-owned virtual practice arm. Joint, Cartesian XYZ, Targeting, and Cue controls share session and progression checks. Mobile turret aiming also supports physical play through corrected-camera registration; that presentation does not acquire robot control. Shared enemy rendering now uses timestamped interpolation and bounded route guidance. These additions have focused deterministic coverage, but this journal update does not establish a deployed-phone or physical-installation release.
 
 Across both games, the most important physical-play rule is that the **stable corrected-camera result is board truth**. A robot operation says what was intended and supplies transaction receipts; it helps attribute or diagnose the result, but it cannot replace or overrule a uniquely observed physical placement. Laser Tag Z adds a second distinction: physical observation activates gameplay state, while only the defence engine owns combat, topology, health, and objective state.
 
@@ -1170,13 +1172,13 @@ The following commits explicitly record AI co-authorship:
 
 The remaining commits through `9d22a3a` are authored by Kaspar without an AI trailer. Their correct label is **human-recorded; AI involvement not evidenced**, not “definitely human-only.” Commit `561b4e4` is a special case: it lacks an AI trailer, but the journal committed in that change explicitly records OpenAI Codex's implementation and verification role for the crane controls and arm overlays. That narrower file-level provenance should be retained without rewriting the Git trailer record.
 
-The Laser Tag Z changes after `9d22a3a` are still uncommitted, so Git supplies neither a human author nor an AI co-author. This reconstruction intentionally leaves their earlier ownership unresolved. OpenAI Codex is evidenced only as the author of the 2026-08-29 journal continuation and as the runner of its non-hardware test verification.
+At the August 29 reconstruction, the Laser Tag Z changes after `9d22a3a` were uncommitted. Subsequent checkpoints include `d8ffbdf`, the September modular extraction commits, `279b715`, and `cd00d97`; the earlier working-tree status is historical, not the current release boundary. Commit `cd00d97` records Kaspar Kallas as author and committer without an AI trailer. Earlier journal entries retain their narrower recorded AI provenance. The mobile continuation after `cd00d97` remains uncommitted, so its implementation ownership is not inferred from file style or the current assistant. OpenAI Codex reviewed evidence, ran the checks listed below, and wrote this September 22 continuation at the user's request.
 
 ## Evidence of physical iteration
 
 At the 2026-08-19 reconstruction, the local working setup contained 89 Laser Tag X JSONL runs from August 9–19, totaling 21,968 events, and 26 appended win records. That is historical evidence recorded by the earlier journal pass; those ignored local files are not present in the current checkout and were not recounted on 2026-08-29. The recorded event mix showed repeated real-system iteration rather than a purely paper design: release-pending and unresolved center transactions, activation blocks, late attribution, operation failures, reload recovery, and finally camera-authoritative decisions with matched operation attribution.
 
-The repository now contains a focused 84-test Laser Tag Z suite, but the older physical-game stack still lacks a broad conventional automated suite. Specifications, runtime diagnostics, score/run logs, and physical trials therefore carry much of the Laser Tag X verification burden. Deterministic tests should still be added around state patches, recovery, event correlation, scoring, coordinate transforms, and multi-frame voting wherever hardware can be simulated.
+The August 29 reconstruction recorded a focused 84-test Laser Tag Z suite; later entries record the growth of Photon and integration coverage. On September 22, the focused mobile and enemy-guidance Python runs passed 54 tests, and the selected Node run passed 26 checks. These are selected suites, not a current full-repository count. The older physical-game stack still relies substantially on specifications, runtime diagnostics, score/run logs, and physical trials. Deterministic tests should still be added around state patches, recovery, event correlation, scoring, coordinate transforms, and multi-frame voting wherever hardware can be simulated.
 
 ## Known trade-offs and unfinished edges
 
@@ -1185,7 +1187,7 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - Manual completion keeps an event running but intentionally weakens the claim that every transition was physically sensed; the diagnostic record must retain that distinction.
 - Calibration is installation-specific data. Updating it is a real system change and should be paired with the physical setup and a dated journal entry.
 - The current camera-authoritative rule depends on camera quality. It fails closed when corrected tracking or a valid spatial model is unavailable, and the gamemaster remains the recovery authority.
-- Laser Tag Z's post-`9d22a3a` placement, topology, ring, scaling, Tesla, and combat-presentation contracts remain working-tree changes. They should not be treated as a stable release until committed and reviewed.
+- The earlier Laser Tag Z and Photon work now has Git checkpoints through `cd00d97`. The mobile modules, gateway, virtual controls, camera presentation, and shared motion changes reviewed on September 22 remain working-tree changes; a checkpoint alone does not establish installation acceptance.
 - Laser Tag Z server simulation state is process memory. The external screen can reconnect to the current process, but a process restart does not resume an in-progress defence run.
 - Ordinary force-field links preserve activation history while the objective ring is spatial and order-independent. This is intentional, but diagnostics and the connection contract must continue to make the distinction visible.
 - The deterministic ring solver explores spatial subsets from sixteen down to eight. Current pruning and tests keep the authored sixteen-socket level tractable; a materially larger socket set would require a new performance decision.
@@ -1194,6 +1196,8 @@ The repository now contains a focused 84-test Laser Tag Z suite, but the older p
 - Phase 6 deliberately retains the proven simulation in both Laser Tag Z and Photon Game. Photon Game is the new modular owner used by Y; remove Z's rollback copy only after production presentation parity and a complete live game prove the new Level → Board → Game chain.
 - Phase 8 completed the deterministic authority cleanup after direct Z parity. Z remains unchanged as the requested rollback/reference implementation. A full physical Game → Y trial is still needed to prove camera-derived Board placement, all four weapons, ring/core completion, failure handling, and external display continuity before declaring an installation release.
 - The former Level/Art normalized-image duplication is resolved: Level owns one shared authored content package for Tiled editing and runtime delivery, and Game forwards its versioned asset descriptor to Y.
+- Mobile virtual geometry deliberately reaches the full map and is not calibrated physical MG400 geometry. Virtual practice does not award permanent progression; cues do not resume automatically after session loss.
+- Hosted delivery and physical-camera alignment require installation checks beyond isolated fixtures. Bounded prediction cannot reconstruct unseen collisions or arbitrarily long network outages. Publishing a new frozen mobile UI requires a main-hub restart, which must account for the in-memory game run.
 
 ## How to record the next decision
 
@@ -1311,3 +1315,274 @@ orcs. Extreme server stress remained over a 33.3 ms tick budget (42.8 ms median,
 versus 38.0 ms baseline); see `docs/L4_COMPANION_IMPLEMENTATION.md` for measured
 limits, reproduction and activation instructions. Live hub/game/player state
 was not restarted or modified by these isolated checks.
+
+## 2026-09-13 — Checkpoint progression, barriers, companions, and artwork
+
+**Trigger and evidence:** the September 5–8 entries described completed Photon
+progression, routing, performance, virtual upgrades, and companion work. Commit
+`cd00d97` (September 13) brings that work and its documentation into a recorded
+repository baseline.
+
+**Options and trade-off:** retaining the changes only in the working tree versus
+recording a recoverable checkpoint is the relevant distinction. The checkpoint
+is evidenced by Git; this rationale is an inference, not a quoted decision.
+
+**Decision and affected contracts:** preserve the modular Photon implementation,
+including Level row/companion geometry, Game combat, Progress persistence, Y
+presentation, and the LTZ score interfaces. The detailed decisions remain in the
+earlier dated entries and their implementation reports.
+
+**Verification:** inspected the commit metadata and changed-file list. The
+September 8 record reports 167 Photon and 12 LTZ integration tests and documents
+the extreme-stress tick-budget limitation in `docs/L4_COMPANION_IMPLEMENTATION.md`.
+Those historical results were not rerun by this checkpoint review.
+
+**Human decision owner:** Kaspar Kallas is the recorded author and committer.
+
+**AI participation:** no AI co-author trailer appears in `cd00d97`; earlier
+file-level journal attribution remains valid without inventing commit attribution.
+
+**Implementation commit or PR:** `cd00d971e2d3f8730591df7ebbdcd9bbacd06d47`.
+
+## 2026-09-22 — Share the main Photon game with the hosted Green player
+
+**Trigger and evidence:** `tools/mobile-ltz/README.md` records the retirement of
+the separate port-8012 game and describes the hosted player using the main
+port-8000 Gamemaster. New `mobile-ltz-api`, Green `mobile-ltz`, and gateway/hosting
+files implement that shared-game arrangement. This date records reconstruction;
+the exact implementation date is not evidenced by an uncommitted diff.
+
+**Options and trade-off:** a separate mobile simulation would isolate mobile
+development but split gameplay truth. The chosen arrangement shares Game through
+an authenticated adapter and restricted gateway. The architectural trade-off is
+inferred from the implementation; the retired separate instance is documented.
+
+**Decision and affected contracts:** retain Photon Game v2 as the authority for
+both screens. The gateway exposes fixed player routes and published Level assets,
+not an arbitrary proxy or a new robot connection. Green's port-scoped service
+identity supports frontend delivery; game state and commands still require player
+authentication. `mobile.client` v1 freezes the six-file client at each hub launch,
+rejects old build URLs, and lets the hosted PHP entry point obtain the current
+build on refresh. Hub discovery supports a prototype allowlist; the dashboard
+supports a requested tab and origin/source-checked mobile expansion.
+
+**Verification:** the September 22 mobile Python run passed 50 tests, including
+gateway authorization, route restrictions, build freezing, stale-build rejection,
+and helper bundling. Tests use temporary files and mocked upstream responses.
+The documented hosted URL was not checked, deployed, or restarted in this update.
+
+**Human decision owner:** not evidenced in the reviewed implementation record.
+The current user requested this journal continuation, not a deployment.
+
+**AI participation:** implementation attribution is not evidenced. OpenAI Codex
+reviewed the local record, ran the focused verification, and drafted this entry.
+
+**Implementation commit or PR:** uncommitted working tree after `cd00d97`; no
+implementation commit or PR is identified in the reviewed evidence.
+
+## 2026-09-22 — Make mobile sessions and streamed state recoverable
+
+**Trigger and evidence:** the mobile README and regression tests address lost SSE
+event labels, buffered or truncated responses, stale recovery snapshots, phone
+backgrounding, and ambiguous joins. These are evidenced failure cases in tests;
+their frequency in live use is not recorded here.
+
+**Options and trade-off:** reconnecting transport alone does not resolve who owns
+controls or whether an old command is safe to replay. The implementation chooses
+explicit stream identity and resumable ownership, with bounded queues and
+recovery. This rationale is reconstructed from code and tests.
+
+**Decision and affected contracts:** optional `hub.live` v1 JSON envelopes carry
+snapshot/update kind plus run and level identity. A single retry owner handles
+feed recovery. Five-second virtual-arm expiry freezes motion and turns the pump
+off; rejoining rotates command tokens, and repeated ambiguous joins are
+idempotent. Explicit Stop persists across refresh and prevents automatic joining.
+Pending motion and ambiguous pump actions are not replayed. Artwork revisions
+load into staging caches and replace the visible set together.
+
+The hosted feed can use a ten-minute, origin-scoped, read-only `mobile.stream`
+v1 URL through the existing tunnel, with renewal and hosted fallback. Bounded
+stream parsing rejects HTML and incomplete frames. Gateway coalescing retains
+scene changes and latest enemy membership; `photon.delivery` v1 reports preparation
+and relay timing without presenting snapshot age as network round-trip latency.
+
+**Verification:** the 50-test mobile Python run covers session ownership,
+stale-command rejection, framing, token scope/expiry, and coalescing. The selected
+Node run passed all 26 reported checks across eight files, including game sync,
+feed retry/fallback, JSON handling, stream parsing, and atomic artwork loading.
+These runs did not measure real hosted delivery latency.
+
+**Human decision owner:** not evidenced for these uncommitted changes.
+
+**AI participation:** implementation attribution is not evidenced; OpenAI Codex
+performed this evidence review, isolated checks, and journal update.
+
+**Implementation commit or PR:** uncommitted after `cd00d97`.
+
+## 2026-09-22 — Separate joint targets, arm illustration, and confirmed movement
+
+**Trigger and evidence:** the September 18 asset output contains MG400 outline
+concepts and a `JOINT-RIG-PLAN.md` marked user-approved and implemented. The
+current Green `JOINT-RIG.md` explicitly supersedes the earlier direct head/elbow
+drag interaction with native joint sliders and a read-only arm illustration.
+
+**Options and trade-off:** the recorded progression compares dragging an
+articulated drawing with sliders plus a pose illustration. The current design
+keeps touch controls explicit and distinguishes a selected target from slow
+confirmed movement. The reason for the final switch is inferred; the switch
+itself is documented.
+
+**Decision and affected contracts:** J2/J3 retain independent selected goals,
+fine adjustment, a fixed-base SVG sketch, and red actual-position indicators.
+J1 has its own rotation dial; Suck/Blow are acknowledged pump toggles. A bounded
+approach and serialized sender preserve one command path. Stop, stale telemetry,
+cancellation, or backgrounding cancel pending approach. Illustration and
+indicator smoothing remain presentation-only. The helper is bundled into the
+existing mobile client rather than adding a hosted script route.
+
+**Verification:** all 19 `mobile_joint_rig.test.js` checks passed within the
+September 22 Node run, covering geometry, independent targets, limits, slew,
+telemetry handling, and indicator continuity. `JOINT-RIG.md` also records earlier
+isolated Chrome checks; those browser checks were not repeated for this update.
+The generated reference images are visual evidence, not measured robot geometry.
+
+**Human decision owner:** the saved plan records approval by the user without
+naming that person. Ownership of the later slider revision is not evidenced.
+
+**AI participation:** `../output/mg400-green-controls-20260918/PROMPTS.md` records
+Midjourney concept generation. It does not establish who implemented the current
+controls. OpenAI Codex ran the checks above and wrote this continuation.
+
+**Implementation commit or PR:** the current mobile implementation is uncommitted
+after `cd00d97`; the reference plan/output is outside the nested repository.
+
+## 2026-09-22 — Add virtual XYZ, Targeting, cues, and temporary waypoints
+
+**Trigger and evidence:** the Photon Game and Green mobile specifications now
+describe four unlocked control tiers, local height presets, configurable movable
+piece IDs, and queued pickup/placement. They define current behavior; exact dates
+and original requests for the individual additions are not available in Git.
+
+**Options and trade-off:** browser-timed automation would make execution depend
+on phone visibility and delivery timing. The implementation keeps the cue state
+machine inside Game's simulated arm and reuses its movement and placement checks.
+Full-map virtual reach favors practice coverage over reproducing physical MG400
+geometry. These trade-offs are inferred from the implementation and specifications.
+
+**Decision and affected contracts:** additive `photon.mobile-arm` v1 fields expose
+mode, mode revision, actual pose, target, markers, and cue status. Saved Green
+progress or a virtual-only Game override unlocks Joint, XYZ, Targeting, and Cue;
+missing progress grants only Joint. A fresh connection chooses the highest
+implemented unlocked mode. Mode revisions reject obsolete inputs.
+
+XYZ uses validated inverse kinematics and the shared 12°/s joint follower;
+Targeting replaces X/Y sliders with finger dragging. Three phone-local Z presets
+save on a three-second hold. Game owns cue approach, pickup, transfer, release,
+and completion for up to 32 rows. A blue waypoint temporarily detours the current
+stage without advancing the row or repeating pump actions. Pause retains the
+stage and held piece; reconnection does not automatically play a cue. Configurable
+piece IDs retain their team/weapon roles and apply in setup or at the next Start.
+Practice overrides never award permanent progression.
+
+**Verification:** the 50-test mobile Python run passed, including XYZ validation,
+mode defaults, cue execution, custom IDs, pause/stop, full-map reach, and detours.
+Phone-layout and gesture scripts are present for XYZ, presets, Targeting, Cue,
+and waypoints, but were not executed in this journal pass. Physical timing and
+collision-free Cartesian travel are not established by these virtual tests.
+
+**Human decision owner:** not evidenced for these uncommitted changes.
+
+**AI participation:** implementation attribution is not evidenced. OpenAI Codex
+reviewed the specifications and tests, ran isolated verification, and wrote this entry.
+
+**Implementation commit or PR:** uncommitted after `cd00d97`.
+
+## 2026-09-22 — Smooth enemy motion while retaining server combat truth
+
+**Trigger and evidence:** the mobile delivery documentation and new
+`test_enemy_motion_guides.py` / `photon_motion_renderer.cjs` cover jitter, batched
+updates, turns, and 900 ms–1.2 second gaps. The code distinguishes rendering stalls
+from delayed state delivery; no new live performance measurement is claimed here.
+
+**Options and trade-off:** drawing only the latest position causes visible steps;
+unbounded straight-line prediction invents motion through turns. The chosen
+approach combines a short adaptive playback delay with bounded server-authored
+route guidance. It trades some visual delay for continuity without moving combat
+authority into the browser.
+
+**Decision and affected contracts:** the shared Y renderer retains three seconds
+of pose history but normally starts with a 300 ms playback delay, adapting between
+250 and 450 ms. Interpolation follows sampled velocity and facing. Additive
+`photon.enemy-motion` v1 supplies up to twelve guide points, mode, speed, and
+topology revision. Valid guidance predicts for up to 1.2 seconds, then brakes over
+200 ms; stale topology and known stalls hold. Disconnects freeze presentation,
+while pause, run/map changes, and large jumps reset history. Health, deaths,
+membership, scoring, and outcomes remain current server facts. Mobile diagnostics
+expose update cadence, age, prediction share, buffer delay, and peak frame interval.
+
+**Verification:** all four Python enemy-guidance tests passed. The Node motion
+renderer check passed interpolation, turns, prediction bounds, corrections,
+authority, and Canvas-call integration using a stubbed Canvas context. The real
+browser gap replay script exists but was not rerun. These checks do not establish
+a new FPS benchmark or guarantee continuity through sustained outages.
+
+**Human decision owner:** not evidenced for these uncommitted changes.
+
+**AI participation:** implementation attribution is not evidenced; OpenAI Codex
+ran the focused checks and drafted this evidence-based continuation.
+
+**Implementation commit or PR:** uncommitted after `cd00d97`.
+
+## 2026-09-22 — Aim Green turrets in virtual and corrected-camera views
+
+**Trigger and evidence:** the Green mobile specification and new turret tests
+describe a firing overlay for placed Green turrets, including physical play where
+there is no virtual-arm session. Camera Calibration adds a small public cached
+frame contract for that presentation.
+
+**Options and trade-off:** sharing the arm's control session would unnecessarily
+couple turret settings to robot practice. The implementation gives aiming a
+separate Game-validated intent and uses camera registration only for display and
+hit-testing. This rationale is inferred from the boundaries and regression tests.
+
+**Decision and affected contracts:** `mobile_turret_aim` on Photon Game v2 validates
+run, Green ownership, placement identity, aim revision, phase, and finite inputs
+before using the existing tower-aim rules. A touch handle adjusts direction and
+range, or radius for Tesla. Destroyed or replaced turrets cannot inherit a stale
+save. Physical mode displays the shared corrected JPEG; at least four fresh,
+non-collinear marker centers establish presentation registration, and invalid or
+stale evidence disables editing. `hhh.camera-frame` v1 returns only fresh cached
+frames, with no second camera capture or copied lens calibration. Camera
+Calibration also gains an explicit stop path for its encoder resources.
+
+**Verification:** all seven `test_mobile_turret.py` tests passed as part of the
+50-test mobile run: ownership/identity rejection, revision checks, replacement,
+registration failure, physical edits without an arm session, and authenticated
+fresh-frame delivery. The browser suite uses synthetic camera imagery and was
+not rerun here. Live optical alignment and physical-installation acceptance remain
+unverified by this update; no hardware was moved.
+
+**Human decision owner:** not evidenced for these uncommitted changes.
+
+**AI participation:** implementation attribution is not evidenced. OpenAI Codex
+reviewed source/specifications, ran the isolated tests, and updated the journal.
+
+**Implementation commit or PR:** uncommitted after `cd00d97`.
+
+### Verification record for this continuation
+
+On 2026-09-22, OpenAI Codex ran the following from the repository root:
+
+```sh
+.venv/bin/python -m unittest discover -s tests -p 'test_mobile*.py'
+.venv/bin/python -m unittest discover -s tests -p 'test_enemy_motion_guides.py'
+node --test tests/mobile_game_sync.test.js tests/mobile_live_feed.test.js tests/mobile_network.test.js tests/mobile_stream_parser.test.js tests/mobile_viewport.test.js tests/mobile_joint_rig.test.js tests/mobile_artwork_renderer.cjs tests/photon_motion_renderer.cjs
+```
+
+Results: 50 mobile Python tests, four enemy-guidance Python tests, and 26 Node
+checks passed. The initial system-`python3` attempt could not import Flask; using
+the existing project `.venv` resolved the environment issue without installing
+dependencies. No live game run ID applies: these were isolated deterministic
+checks, not a physical trial. No hub restart, deployment, saved-player mutation,
+or new implementation commit was performed. This continuation explains existing
+code and specifications; it does not introduce new required behavior.

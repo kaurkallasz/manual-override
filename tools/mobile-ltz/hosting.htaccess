@@ -1,0 +1,20 @@
+Options -Indexes
+DirectoryIndex index.php
+<Files "bridge-config.php">
+Require all denied
+</Files>
+RewriteEngine On
+# Live events must reach the phone immediately, without compression buffers.
+SetEnvIf Request_URI "api\.php$" no-gzip=1
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://mecharena.eu%{REQUEST_URI} [R=301,L]
+# Old bookmarks must use the current entry page as well.
+RewriteRule ^index\.html$ index.php [L]
+<IfModule mod_headers.c>
+Header always set X-Content-Type-Options nosniff
+Header always set Referrer-Policy same-origin
+<FilesMatch "^(index\.(html|php)|api\.php)$">
+Header always set Cache-Control "no-store, max-age=0, must-revalidate"
+Header always set Expires "0"
+</FilesMatch>
+</IfModule>

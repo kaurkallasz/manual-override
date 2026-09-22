@@ -291,3 +291,90 @@ and art update without repairing broken fields or erasing absorbed hits.
 Locking a type blocks further placement and leaves already placed units intact;
 Reset clears those units. Test selections do not mutate player profiles, credits,
 or progression and work without a saved player or enabled Progress module.
+
+
+## Virtual mobile Cartesian controls
+
+`virtual_test_loadout` accepts an optional `control` integer 1–4 or null, validated
+atomically with the defense levels. Omission preserves the previous control
+selection for older clients. Game state publishes `virtual_test_control`; reset
+retains this operator selection, while returning the arm to Joint mode. Disabling
+the test override restores saved-profile unlock availability. Lowering the override
+to Joint, or disabling it, freezes pending XYZ motion and returns to Joint.
+
+The existing `mobile_command` input supports `control_mode` (`joint`, `xyz`, `targeting`, or `cue`) and
+`xyz` with an `xyz: {x,y,z}` target and integer `control_revision`. The server reads
+Green's saved unlock from the versioned Photon Progress output when no test
+override is active. Missing or malformed progress grants only the default Joint
+control. Targeting requires tier 3 and reuses the validated `xyz` command. Cue autonomy requires tier 4 and uses the same movement and placement validation.
+The existing virtual-play, scored-attempt exclusion, session ownership, monotonic
+sequence, lease, pause, Stop and reconnect checks apply to all new commands.
+
+The additive `photon.mobile-arm` version 1 fields are `control_mode`,
+`control_revision`, `xyz_limits`, and `xyz_target`. `tip` remains the actual pose.
+XYZ uses existing map X/Y units and the virtual arm's existing height scale, not
+physical robot millimetres. Inverse kinematics uses both possible elbow branches
+and picks the valid solution closest to the current joints. Coordinates must be
+finite, within the workspace, geometrically reachable, and within all joint
+limits. Rejection leaves accepted targets unchanged. Motion still runs through
+the existing 12°/s joint simulation; this initial version does not promise a
+straight-line Cartesian trajectory. Mode switching freezes at the actual pose,
+preserves held tags, and increments a revision to reject obsolete motion.
+
+New mobile connections select the highest implemented unlocked mode automatically:
+Joint for tier 1, XYZ for tier 2, Targeting for tier 3, Cue for tier 4. Changed unlock tiers apply the same default
+immediately and freeze pending movement. Ordinary heartbeats and reapplying the
+same tier preserve a manually selected lower mode. Preview modes never become
+movement defaults.
+
+### Movable piece IDs and virtual cues
+
+Game settings add integer `green_piece_1`, `green_piece_2`, `purple_piece_1`,
+and `purple_piece_2` (defaults 100, 101, 102, 103; range 0–999). IDs must be
+distinct and cannot collide with socket markers or the core marker 38. Slot
+roles remain machine gun, flamethrower, mortar, and Tesla respectively. Old saved
+settings migrate with default IDs. Game owns the ID→team/role mapping for both
+virtual and incoming Board placements; this does not reconfigure camera detection.
+Saved changes apply during setup and at the next Start, never to an active run.
+Changing IDs resets the mobile session/cue and remaps existing setup tower roles.
+Game snapshots publish `movable_piece_codes` for both teams.
+
+`photon.mobile-arm` v1 adds `markers` (virtual socket/core coordinates) and `cue`
+(`rows`, zero-based `index`, `status`, `stage`, `error`). Authenticated, sequenced
+`cue_set`, `cue_play`, `cue_pause`, and `cue_stop` require Cue mode/tier 4 and an
+exact integer control revision. Rows contain integer `piece` and `destination`
+IDs; 1–32 rows are allowed. Only this Green arm's configured pieces are eligible.
+
+The module-local MobileCue advances inside MobileArm.step, never on a browser
+timer. It preflights each row's IK, retains held pieces on cue pause/stop, calls
+the shared pump/placement operations, and rejects competing manual movement.
+Session suspension cancels execution under the existing virtual-tag policy.
+`tests/test_mobile_cue.py` covers execution, revisions, ownership, pause/stop,
+unavailable markers, invalid poses, migration, and custom-code placement.
+
+### Full-map virtual reach and cue detours
+
+The virtual MobileArm uses equal links sized for all map corners and Z=0–400,
+and ±180° virtual joint ranges. Initial piece positions are preserved. Existing
+IK and 12°/s joint stepping still own actual movement; this does not configure
+physical robots or imply collision-free/straight-line Cartesian travel.
+
+Cue commands add `cue_waypoint` with finite map `point: {x,y}` and
+`cue_cancel_waypoint`, under the same tier/session/revision gates. Cue snapshots
+add nullable `waypoint: {x,y,z}`. A waypoint has a separate temporary movement
+goal while preserving the interrupted row/stage goal. Arrival clears the detour
+and resumes that stage; it never performs a pump action or advances the row.
+Replacement keeps only the latest point. Pause retains both goals and any held
+piece; Stop and all session/mode transitions discard the detour. Queued idle
+waypoints wait for explicit Play.
+
+### Mobile player turret aim
+
+Photon Game v2 exposes `mobile_turret_aim(data)` for the authenticated Green
+presentation. Required fields are `run_id`, `socket_id`, `atom_tag_id`,
+`activation_started_at`, `aim_instance`, `aim_revision`, `angle_degrees`, and `spread` (0–1).
+The opaque `aim_instance` changes for every placement/replacement, including setup resets.
+The selected live placement must belong to Green and match the supplied run,
+activation and revision. Setup and unpaused running games accept the command
+in virtual or physical play, independently of robot sessions. The existing
+`set_tower_aim` rules remain authoritative and publish the resulting revision.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import math
 import os
 import threading
@@ -18,7 +19,7 @@ from flask import Blueprint, jsonify, request, send_from_directory
 import live
 from photon_game_runtime import ContractLevelModel, DefenseEngine, SettingsStore
 from photon_game_runtime.engine import orc_schedule
-from photon_game_runtime.settings import validate_settings
+from photon_game_runtime.settings import validate_settings, PRESETS
 from progress_link import ProgressLink
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -292,6 +293,7 @@ def _install_level(bundle):
             _level_projection = projection
             _set_input("level", status="ready", revision=revision)
             _revision += 1
+        engine.configure_piece_codes(_settings.snapshot())
         if start_engine:
             engine.start_background()
     return True
@@ -618,6 +620,67 @@ def game_snapshot():
     return _public_snapshot()
 
 
+def _mobile_saved_control():
+    """Read the documented progression output; unavailable progress grants only Joint."""
+    module = _module('photon-progress')
+    if not module or not callable(getattr(module, 'progress_snapshot', None)):
+        return 1
+    try:
+        profile = module.progress_snapshot({'side': 'green'})
+        if not isinstance(profile, dict) or profile.get('status') != 'ready' or profile.get('contract') != 'photon.progress' or type(profile.get('version')) is not int or profile['version'] != 1:
+            return 1
+        level = (profile.get('player') or {}).get('unlocked_control', 1)
+        return level if type(level) is int and 1 <= level <= 4 else 1
+    except Exception:
+        logging.getLogger(__name__).exception('Green mobile progression unavailable; only Joint is granted')
+        return 1
+
+
+def mobile_command(data):
+    """Validate practice-only Green intents; all mutations remain Game-owned."""
+    if not isinstance(data, dict) or data.get('side', 'green') != 'green':
+        raise ValueError('Green mobile command required.')
+    with _command_lock:
+        engine, ready = _require_engine()
+        if not ready and data.get('action') not in ('stop', 'disconnect'):
+            raise ValueError('Level unavailable.')
+        with engine.lock:
+            if _progress.snapshot().get('reward_enabled') and data.get('action') not in ('stop', 'disconnect'):
+                raise ValueError('Mobile simulation is practice only.')
+            result = engine.mobile_arm.command(data, engine, _mobile_saved_control())
+    _live.bump()
+    return result
+
+
+def mobile_turret_aim(data):
+    """Photon Game v2 player aim intent; independent of virtual robot sessions."""
+    with _command_lock:
+        engine, ready = _require_engine()
+        if not ready:
+            raise ValueError('Level unavailable.')
+        with engine.lock:
+            if engine.paused or engine.phase not in ('setup', 'running'):
+                raise ValueError('Turret adjustment is unavailable while the game is paused or ended.')
+            if data.get('run_id') != _run_id:
+                raise ValueError('Game changed. Select the turret again.')
+            sid = data.get('socket_id')
+            tower = engine.placements.get(sid) if isinstance(sid, str) else None
+            if not tower or tower.get('owner') != 'green':
+                raise ValueError('Select a placed Green turret.')
+            if (not isinstance(data.get('aim_instance'), str) or data['aim_instance'] != tower['aim_instance']
+                    or type(data.get('atom_tag_id')) is not int or data['atom_tag_id'] != tower['atom_tag_id']
+                    or data.get('activation_started_at') != tower['activation_started_at']
+                    or type(data.get('aim_revision')) is not int or data['aim_revision'] != tower['aim_revision']):
+                raise ValueError('Turret changed. Select it again.')
+            if any(type(data.get(k)) not in (int, float) or not math.isfinite(data[k])
+                   for k in ('angle_degrees', 'spread')):
+                raise ValueError('Finite direction and range are required.')
+            result = engine.set_tower_aim(data['atom_tag_id'], data['angle_degrees'],
+                                          data['spread'], socket_id=sid)
+    _live.bump()
+    return result
+
+
 def _event_snapshot():
     return _public_snapshot(compact_enemies=True)
 
@@ -640,6 +703,8 @@ def _require_engine():
         level_ready = _inputs["level"].get("status") == "ready"
     if engine is None:
         raise GameError("Photon Level is unavailable")
+    if engine.phase == "setup":
+        engine.configure_piece_codes(_settings.snapshot())
     return engine, level_ready
 
 
@@ -736,6 +801,7 @@ def _apply_command(data):
         elif action == "reset":
             _progress.flush(outcome='aborted')
             engine.reset()
+            engine.configure_piece_codes(_settings.snapshot())
             if "virtual_play" in data:
                 engine.set_virtual_play(bool(data["virtual_play"]))
             with _lock:
@@ -747,7 +813,7 @@ def _apply_command(data):
         elif action == 'virtual_test_loadout':
             if 'levels' not in data:
                 raise GameError('levels is required; use null to restore saved-player upgrades')
-            engine.set_virtual_test_loadout(data['levels'])
+            engine.set_virtual_test_loadout(data['levels'], data.get('control', ...))
         elif action == "set_virtual":
             if engine.phase == 'running':
                 raise GameError('finish the attempt before switching physical/virtual play')
@@ -775,6 +841,11 @@ def _apply_command(data):
                 socket_id=data.get("socket_id"),
             )
         elif action == "configure":
+            candidate, validation = validate_settings(PRESETS.get(data.get('preset'), data.get('settings') or {}))
+            if validation:
+                raise GameError('settings validation failed', fields=validation)
+            if _engine is not None:
+                _engine.validate_piece_codes(candidate)
             response, errors = _settings.update(
                 data.get("settings") or {}, data.get("preset")
             )
@@ -786,6 +857,8 @@ def _apply_command(data):
             with _lock:
                 _storage["settings"] = {"status": "ready", "error": None}
                 _revision += 1
+            if _engine is not None and _engine.phase == "setup":
+                _engine.configure_piece_codes(response["settings"])
             _append_history("settings_saved", {
                 "revision": response["revision"], "preset": response["preset"]
             })
@@ -794,6 +867,8 @@ def _apply_command(data):
             with _lock:
                 _storage["settings"] = {"status": "ready", "error": None}
                 _revision += 1
+            if _engine is not None and _engine.phase == "setup":
+                _engine.configure_piece_codes(response["settings"])
             _append_history("settings_reset", {"revision": response["revision"]})
         else:
             raise GameError("unknown action")

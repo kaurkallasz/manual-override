@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101715"><title>mobile ltz · Green</title>
+<link rel="stylesheet" href="mobile.css?v=20260917-touch-map">
+</head>
+<body>
+<main id="app">
+  <div id="battlefield" aria-label="Live battlefield. Use two fingers to zoom and pan.">
+    <div id="world"><canvas id="mapCanvas"></canvas><canvas id="gameCanvas"></canvas><canvas id="armCanvas" width="1696" height="960"></canvas></div>
+    <div id="empty"><span class="signal"></span><h1>Ready when you are.</h1><p id="emptyMessage">Connecting to Gamemaster…</p></div>
+  </div>
+  <header><div class="identity"><i></i><span>Green</span><span class="divider">/</span><button id="levelsOpen" aria-haspopup="dialog">Joint <span class="muted">⌄</span></button></div>
+    <div class="telemetry">
+      <div class="facts"><span>Wave <b id="wave">—</b></span><span>Core <b id="core">—</b></span><span>Score <b id="score">0</b></span><span class="fps" title="Game frames drawn per second">FPS <b id="fps">—</b></span></div>
+      <div class="diagnostics" aria-label="Movement performance">
+        <span title="Received game updates per second over the last five seconds">Updates <b id="updateHz">—</b>/s</span>
+        <span title="Time since the latest received game update, not network ping">Age <b id="updateAge">—</b>ms</span>
+        <span title="Percentage of moving frames using prediction during the last sample">Pred <b id="prediction">—</b>%</span>
+        <span title="Current adaptive playback buffer">Buffer <b id="bufferMs">—</b>ms</span>
+        <span title="Longest interval between drawn frames in the last sample; amber indicates an interval above 34 ms">Peak <b id="framePeak">—</b>ms</span>
+      </div>
+    </div>
+    <button id="expand" aria-label="Expand view">⤢ <span>Expand</span></button>
+  </header>
+  <section class="mapNavigation" aria-label="Camera navigation">
+    <div id="minimapPanel" class="minimapPanel glass" hidden>
+      <div id="minimap" role="group" tabindex="0" aria-label="Level minimap. Tap to center the view, drag to pan, or use arrow keys." aria-describedby="mapHint">
+        <canvas id="minimapCanvas" width="320" height="182" aria-hidden="true"></canvas><span id="mapWindow" aria-hidden="true"></span>
+      </div>
+      <span id="mapHint" class="srOnly">Camera only. Arrow keys pan; Home fits the level.</span>
+    </div>
+    <nav class="zoom glass" aria-label="Battlefield zoom"><button id="mapToggle" aria-label="Show minimap" aria-expanded="false" aria-controls="minimapPanel"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2Zm6-2v16m6-14v16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button><button id="zoomOut" aria-label="Zoom out">−</button><output id="zoomValue" aria-live="polite">1×</output><button id="zoomIn" aria-label="Zoom in">+</button><button id="fit">Fit</button></nav>
+  </section>
+  <div class="mode"><span id="mode">Waiting</span><span id="connection">Offline</span></div>
+  <aside class="connectionControls"><button id="connect" class="glass primary" disabled><span class="connectIcon">◉</span> Connect</button><button id="stop" class="glass stop"><span>■</span> Stop</button></aside>
+  <section class="leftControls" aria-label="Base and gripper controls">
+    <div class="pump threeWay" data-position="1">
+      <div class="switchLabels" aria-hidden="true"><span>S</span><span>Off</span><span>B</span></div>
+      <input id="pumpMode" class="switchInput" type="range" min="0" max="2" step="1" value="1" disabled aria-label="Pump: suction, off, blow" aria-orientation="vertical" aria-valuetext="Off">
+    </div>
+    <div id="wheel" class="wheel" role="slider" tabindex="0" aria-label="Base rotation" aria-valuemin="-160" aria-valuemax="160" aria-valuenow="-80" aria-disabled="true">
+      <svg viewBox="0 0 240 160" aria-hidden="true"><path class="dialBack" d="M15 136 A105 105 0 0 1 225 136"/><g id="ticks"></g><path class="dialInner" d="M40 136 A80 80 0 0 1 200 136"/><path class="needle" d="M120 15 L120 39"/><circle cx="120" cy="136" r="4" fill="#91efbc"/></svg>
+      <div class="wheelLabel"><output id="j1Value">−80°</output><span>Base rotation</span></div>
+    </div>
+  </section>
+  <section class="rightControls glass" aria-label="Arm joint controls" data-joint-mode="j2">
+    <div class="jointSliders">
+      <div class="jointRow" id="j2Row"><label for="j2"><span>Joint 2</span><output id="j2Value" for="j2">−5°</output></label><input id="j2" type="range" min="-25" max="85" step=".5" value="-5" disabled></div>
+      <div class="jointRow" id="j3Row" hidden><label for="j3"><span>Joint 3</span><output id="j3Value" for="j3">−5°</output></label><input id="j3" type="range" min="-25" max="105" step=".5" value="-5" disabled></div>
+    </div>
+    <div class="jointModePicker threeWay" data-position="0">
+      <div class="switchLabels" aria-hidden="true"><span>J2</span><span>J3</span><span>FC</span></div>
+      <input id="jointMode" class="switchInput" type="range" min="0" max="2" step="1" value="0" aria-label="Joint control mode" aria-orientation="vertical" aria-valuetext="Joint 2" aria-describedby="fineHint">
+    </div>
+    <span id="fineHint" class="srOnly">Fine control shows both joints with 0.05 degree steps and ten times finer drag adjustment. Release to center the next adjustment range.</span>
+    <output id="height" class="srOnly">—</output>
+  </section>
+  <div id="feedback" role="status" aria-live="polite">Waiting for the live game.</div>
+  <a id="returnLink" href="/s/green/" hidden>← Player tabs</a>
+</main>
+<dialog id="levels"><div class="dialogHead"><div><p class="eyebrow">Your control path</p><h2>More ways to move.</h2></div><button id="levelsClose" aria-label="Close control path">×</button></div><p id="profileStatus">Checking saved progress…</p><div class="tierGrid">
+<article class="tier current"><div class="tierNumber">01 <span>Live</span></div><div class="miniJoint">◜ ◝ <span>━━●━━</span></div><h3>Joint</h3><p>A rotation dial and two joint sliders. Direct control, one movement at a time.</p><strong>Available in this release</strong></article>
+<article class="tier"><div class="tierNumber">02 <span id="tier2">Preview</span></div><div class="miniXYZ">✛ <span>↕</span></div><h3>Cartesian XYZ</h3><p>An XY thumb pad and a separate height slider.</p><strong>Interface preview · coming next</strong></article>
+<article class="tier"><div class="tierNumber">03 <span id="tier3">Preview</span></div><div class="miniTarget">⊕ <span>·····◎</span></div><h3>Targeting</h3><p>Tap a reachable point. Preview, then move, pick, or place.</p><strong>Interface preview · coming next</strong></article>
+<article class="tier"><div class="tierNumber">04 <span id="tier4">Preview</span></div><div class="miniCue">①─②─③ <span>▶</span></div><h3>Cue autonomy</h3><p>Build a waypoint sequence, preview its route, and run it.</p><strong>Interface preview · coming next</strong></article>
+</div><p class="muted">Three eligible wins unlock the next control level. Simulation is practice and does not award permanent progress.</p></dialog>
+<dialog id="login"><form id="loginForm"><p class="eyebrow">mobile ltz</p><h2>Join Green.</h2><p>Use your Green player password.</p><label for="password">Player password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit" class="primary">Sign in</button><p id="loginError" role="alert"></p></form></dialog>
+<script src="viewport.js?v=20260917-touch-map"></script><script src="live-game.js?v=20260917-touch-map"></script><script src="network.js?v=20260917-touch-map"></script><script src="mobile.js?v=20260917-touch-map"></script>
+</body></html>

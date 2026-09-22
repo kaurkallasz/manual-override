@@ -9,6 +9,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request, send_from_directory, url_for
 
@@ -216,6 +217,15 @@ def presentation_assets():
         if _load_error:
             output.update(status="unavailable", error=_load_error)
         return output
+
+
+def presentation_asset_response(filename):
+    """Serve only an asset published by the current versioned descriptor."""
+    from flask import abort
+    paths = {urlsplit(path).path for path in presentation_assets()['assets'].values()}
+    if filename not in paths:
+        abort(404)
+    return send_from_directory(ASSET_ROOT, filename)
 
 
 def editor_snapshot():

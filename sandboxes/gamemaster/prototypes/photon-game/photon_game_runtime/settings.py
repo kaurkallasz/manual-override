@@ -9,10 +9,11 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .engine import DEFAULT_SETTINGS, CONTROL_ORC_KEYS
+from .engine import DEFAULT_SETTINGS, CONTROL_ORC_KEYS, PIECE_KEYS
 
 
 RULES = {
+    **{key: (int, 0, 999) for key in PIECE_KEYS},
     "wave_count": (int, 1, 12),
     "wave_interval_s": (float, 2.0, 600.0),
     "release_rate_multiplier": (float, 0.05, 20.0),
@@ -85,6 +86,8 @@ def validate_settings(incoming: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     for key, (kind, lower, upper) in RULES.items():
         raw = incoming.get(key, DEFAULTS[key])
         try:
+            if isinstance(raw, bool):
+                raise ValueError
             if kind is int:
                 numeric = float(raw)
                 if not numeric.is_integer():
@@ -101,6 +104,10 @@ def validate_settings(incoming: dict[str, Any]) -> tuple[dict[str, Any], dict[st
     for previous, current in zip(CONTROL_ORC_KEYS, CONTROL_ORC_KEYS[1:]):
         if previous in clean and current in clean and clean[current] <= clean[previous]:
             errors[current] = 'must be greater than the preceding control method'
+    codes = [clean.get(key) for key in PIECE_KEYS]
+    if len(set(codes)) != len(codes):
+        for key in PIECE_KEYS:
+            errors[key] = "movable piece codes must be unique across both teams"
     return clean, errors
 
 
@@ -122,10 +129,11 @@ class SettingsStore:
             if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
                 raise ValueError("expected settings schema version 1")
             incoming = data.get("settings")
-            if not isinstance(incoming, dict) or set(incoming) not in (
-                set(RULES), set(RULES) - BRUTE_SETTING_KEYS,
-                set(RULES) - set(CONTROL_ORC_KEYS),
-                set(RULES) - BRUTE_SETTING_KEYS - set(CONTROL_ORC_KEYS),
+            legacy = set(incoming) - set(PIECE_KEYS) if isinstance(incoming, dict) else set()
+            if not isinstance(incoming, dict) or set(incoming) - set(RULES) or legacy not in (
+                set(RULES) - set(PIECE_KEYS), set(RULES) - set(PIECE_KEYS) - BRUTE_SETTING_KEYS,
+                set(RULES) - set(PIECE_KEYS) - set(CONTROL_ORC_KEYS),
+                set(RULES) - set(PIECE_KEYS) - BRUTE_SETTING_KEYS - set(CONTROL_ORC_KEYS),
             ):
                 raise ValueError("settings document must contain every known setting and no unknown settings")
             clean, errors = validate_settings(incoming)

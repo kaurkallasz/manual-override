@@ -81,6 +81,7 @@ DEFAULT_SANDBOXES = {
             "dobot-mg400-relay": ["green", "purple"],
             "photon-progress": ["green", "purple"],
             "photon-game": ["green", "purple"],
+            "mobile-ltz-api": ["green"],
             "tag-game": ["green", "purple"],
             "2p-tag-game": ["green", "purple"],
             "pickup-game": ["green", "purple"],
@@ -316,7 +317,13 @@ class Sandbox:
         # disabled modules are never started.
         self._disabled.clear()
         self._disabled.update(self._load_settings())
+        allowed = self.cfg.get("prototypes")
+        if allowed is not None and (not isinstance(allowed, list) or
+                                    any(not isinstance(slug, str) for slug in allowed)):
+            raise ValueError("prototypes must be a list of module slugs")
         for slug in sorted(os.listdir(self.machines_dir)):
+            if allowed is not None and slug not in allowed:
+                continue
             if not os.path.isfile(os.path.join(self.machines_dir, slug, "prototype.py")):
                 continue
             try:
@@ -723,4 +730,15 @@ class Hub:
         print(f"(passwords are editable in {os.path.relpath(self.config_path, os.getcwd())})",
               flush=True)
         self._server = make_server(host, self.port, self.wsgi, threaded=True)
+        # Private bootstrap for the allowlisted mobile UI relay. Scope it to
+        # this port so another development hub cannot redirect its identity.
+        green = self.sandboxes.get('green')
+        if green and 'mobile-ltz' in green._modules:
+            directory = os.path.join(self.root_dir, '.mobile-ltz-runtime')
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            token_path = os.path.join(directory, f'client-auth-{self.port}')
+            temporary = token_path + '.tmp'
+            with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as handle:
+                handle.write(self.service_tokens['green'])
+            os.replace(temporary, token_path)
         self._server.serve_forever()

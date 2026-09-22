@@ -217,6 +217,273 @@
     return Math.min(limit, age);
   }
 
+  // Presentation only: retain poses, never health, damage, membership or scores.
+  // Three seconds of history is not three seconds of blind prediction.
+  function enemyMotion(options = {}) {
+    const initialDelay = Math.max(0, Math.min(3, Number(options.delay ?? 0.3) || 0));
+    const adaptive = options.delay == null;
+    let delay = initialDelay, desiredDelay = initialDelay, delayUpdatedAt = null;
+    const historySeconds = Math.max(3, initialDelay + 0.5);
+    const predictionSeconds = 1.4, guidedCoastSeconds = 1.2;
+    const fallbackSeconds = 0.5, coastSeconds = 0.15;
+    const correctionSeconds = 0.18;
+    const tracks = new Map();
+    let clocks = [], identity = null, latest = null, serverTime = -Infinity;
+    let clockOffset = 0, frozenAt = null, moving = false;
+    let playbackTime = null, arrivals = [], cadence = [], lastArrival = null;
+    let jitter = 0, sampledFrames = 0, predictedFrames = 0;
+    let delivery = null, receiveGapMs = 0, correctionPeak = 0;
+    let sourceGapMs = null, gatewayGapMs = null, snapshotBuildMs = null;
+    const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+    const angleDelta = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
+
+    function clear() {
+      tracks.clear(); clocks = []; identity = null; latest = null;
+      serverTime = -Infinity; clockOffset = 0; moving = false;
+      delay = desiredDelay = initialDelay; delayUpdatedAt = playbackTime = null;
+      arrivals = []; cadence = []; lastArrival = null;
+      jitter = sampledFrames = predictedFrames = 0;
+      delivery = null; receiveGapMs = correctionPeak = 0;
+      sourceGapMs = gatewayGapMs = snapshotBuildMs = null;
+    }
+    function targetTime(now) {
+      if (latest === null) return 0;
+      const at = frozenAt ?? now;
+      const dt = delayUpdatedAt === null ? 0 : Math.min(.25, Math.max(0, at - delayUpdatedAt) / 1000);
+      delayUpdatedAt = at;
+      // Change playback speed gently, never jump the buffer or rewind orcs.
+      if (adaptive && moving) {
+        const step = dt * (desiredDelay > delay ? .04 : .015);
+        delay += Math.max(-step, Math.min(step, desiredDelay - delay));
+      }
+      const candidate = moving
+        ? Math.min(latest + predictionSeconds, at / 1000 - clockOffset - delay)
+        : latest;
+      playbackTime = playbackTime === null || !moving ? candidate : Math.max(playbackTime, candidate);
+      return playbackTime;
+    }
+    // Monotone cubic tangents follow observed turns without overshooting the
+    // endpoints on either axis, including reversals and stopped/attacking units.
+    function axis(a, b, va, vb, duration, u) {
+      const distance = b - a;
+      if (Math.abs(distance) < 1e-8) return a;
+      let ma = Math.max(0, va * duration / distance);
+      let mb = Math.max(0, vb * duration / distance);
+      const length = Math.hypot(ma, mb);
+      if (length > 3) { ma *= 3 / length; mb *= 3 / length; }
+      const u2 = u * u, u3 = u2 * u;
+      return a + distance * ((u3 - 2 * u2 + u) * ma + (-2 * u3 + 3 * u2) + (u3 - u2) * mb);
+    }
+    function movementGuide(enemy, snapshot) {
+      const contract = snapshot.enemy_motion, value = enemy.motion;
+      if (contract?.contract !== "photon.enemy-motion" || contract.version !== 1
+        || contract.horizon_s !== guidedCoastSeconds || !value
+        || !["road", "orbit", "hold"].includes(value.mode)
+        || value.revision !== snapshot.row_topology_revision
+        || !Number.isFinite(value.speed) || value.speed < 0 || value.speed > 2000
+        || !Array.isArray(value.points) || value.points.length > 12) return null;
+      const points = [{x:Number(enemy.x), y:Number(enemy.y), distance:0}];
+      let distance = 0;
+      for (const point of value.points) {
+        if (!Array.isArray(point) || point.length !== 2 || !point.every(Number.isFinite)) return null;
+        const previous = points[points.length - 1];
+        distance += Math.hypot(point[0] - previous.x, point[1] - previous.y);
+        points.push({x:point[0], y:point[1], distance});
+      }
+      return {points, speed:value.mode === "hold" ? 0 : value.speed};
+    }
+    function alongGuide(guide, distance, angle) {
+      const points = guide.points;
+      let last = points[0];
+      distance = Math.max(0, Math.min(points[points.length - 1].distance, distance));
+      for (let i = 1; i < points.length; i++) {
+        const next = points[i], length = next.distance - last.distance;
+        if (length > 1e-6 && distance <= next.distance) {
+          const ratio = (distance - last.distance) / length;
+          return {x:last.x + (next.x - last.x) * ratio, y:last.y + (next.y - last.y) * ratio,
+            angle:Math.atan2(next.y - last.y, next.x - last.x), guide, distance};
+        }
+        last = next;
+      }
+      return {x:last.x, y:last.y, angle, guide, distance};
+    }
+    function nearestGuide(guide, value) {
+      let best = null;
+      for (let i = 1; i < guide.points.length; i++) {
+        const a = guide.points[i - 1], b = guide.points[i];
+        const dx = b.x - a.x, dy = b.y - a.y, length2 = dx * dx + dy * dy;
+        if (length2 < 1e-6) continue;
+        const u = Math.max(0, Math.min(1, ((value.x - a.x) * dx + (value.y - a.y) * dy) / length2));
+        const x = a.x + dx * u, y = a.y + dy * u, error = Math.hypot(x - value.x, y - value.y);
+        if (!best || error < best.error) best = {x, y, error, distance:a.distance + Math.sqrt(length2) * u};
+      }
+      return best;
+    }
+    function trajectory(points, time) {
+      const first = points[0], last = points[points.length - 1];
+      if (time <= first.t) return {x:first.x, y:first.y, angle:first.angle};
+      if (time >= last.t) {
+        if (last.guide) {
+          const age = Math.min(predictionSeconds, Math.max(0, time - last.t));
+          const braking = Math.max(0, age - guidedCoastSeconds);
+          const travel = age - braking * braking / (2 * (predictionSeconds - guidedCoastSeconds));
+          return alongGuide(last.guide, last.guide.speed * travel, last.angle);
+        }
+        // Coast through short delivery gaps, then smoothly brake to a bounded
+        // stop. Starting to brake immediately makes every small gap visible.
+        const age = Math.min(fallbackSeconds, Math.max(0, time - last.t));
+        const braking = Math.max(0, age - coastSeconds);
+        const travel = age - braking * braking / (2 * (fallbackSeconds - coastSeconds));
+        return {x:last.x + last.vx * travel, y:last.y + last.vy * travel, angle:last.angle};
+      }
+      let low = 0, high = points.length - 1;
+      while (high - low > 1) {
+        const mid = (low + high) >> 1;
+        if (points[mid].t <= time) low = mid; else high = mid;
+      }
+      const a = points[low], b = points[high], duration = b.t - a.t;
+      const u = (time - a.t) / duration;
+      return {
+        x:axis(a.x, b.x, a.vx, b.vx, duration, u),
+        y:axis(a.y, b.y, a.vy, b.vy, duration, u),
+        angle:a.angle + angleDelta(a.angle, b.angle) * u,
+      };
+    }
+    function pose(track, time, now) {
+      let value = trajectory(track.points, time);
+      const weight = Math.exp(-Math.max(0, (frozenAt ?? now) - track.correctedAt) / (correctionSeconds * 1000));
+      if (value.guide && value.guide === track.correctionGuide) {
+        value = alongGuide(value.guide, value.distance + track.distanceCorrection * weight, value.angle);
+      }
+      value.x += track.dx * weight; value.y += track.dy * weight;
+      value.angle += track.da * weight;
+      return value;
+    }
+    function push(snapshot, now) {
+      if (!snapshot) { clear(); return true; }
+      const nextServerTime = finite(snapshot.server_time, null);
+      if (nextServerTime !== null && nextServerTime < serverTime) return false;
+      const time = finite(snapshot.sim_time, now / 1000);
+      const key = JSON.stringify([snapshot.run_id, snapshot.level_revision, snapshot.row_topology_revision, snapshot.phase, Boolean(snapshot.paused)]);
+      if (key !== identity || (latest !== null && time < latest)) clear();
+      identity = key;
+      if (nextServerTime !== null) serverTime = nextServerTime;
+      const previousTime = targetTime(now);
+      const previous = new Map();
+      for (const [id, track] of tracks) previous.set(id, pose(track, previousTime, now));
+      if (latest !== null && time > latest && time - latest < 1) {
+        cadence.push(time - latest);
+        if (cadence.length > 32) cadence.shift();
+      }
+      latest = time;
+      if (lastArrival !== null) receiveGapMs = Math.max(receiveGapMs, now - lastArrival);
+      lastArrival = now;
+      delivery = snapshot.delivery?.contract === 'photon.delivery' && snapshot.delivery.version === 1 ? snapshot.delivery : null;
+      if (Number.isFinite(delivery?.source_gap_ms)) sourceGapMs = Math.max(sourceGapMs ?? 0, delivery.source_gap_ms);
+      if (Number.isFinite(delivery?.gateway_gap_ms)) gatewayGapMs = Math.max(gatewayGapMs ?? 0, delivery.gateway_gap_ms);
+      if (Number.isFinite(delivery?.build_ms)) snapshotBuildMs = Math.max(snapshotBuildMs ?? 0, delivery.build_ms);
+      arrivals.push(now);
+      while (arrivals.length > 256 || (arrivals.length && arrivals[0] < now - 5000)) arrivals.shift();
+      moving = snapshot.phase === "running" && !snapshot.paused;
+      clocks.push({t:time, offset:now / 1000 - time});
+      while (clocks.length > 256 || (clocks.length > 1 && clocks[0].t < time - historySeconds)) clocks.shift();
+      // A delayed/batched packet must not restart the animation clock.
+      clockOffset = Math.min(...clocks.map(clock => clock.offset));
+      if (adaptive && moving && clocks.length >= 4 && cadence.length >= 3) {
+        const offsets = clocks.map(clock => clock.offset - clockOffset).sort((a, b) => a - b);
+        const intervals = [...cadence].sort((a, b) => a - b);
+        jitter = offsets[Math.floor((offsets.length - 1) * .9)];
+        // Two typical snapshot intervals plus observed excess delivery delay.
+        desiredDelay = Math.max(.25, Math.min(.45, 2 * intervals[Math.floor(intervals.length / 2)] + jitter));
+      }
+      const live = new Set(), nextTime = targetTime(now);
+      for (const enemy of snapshot.enemies || []) {
+        const id = Number(enemy.id);
+        if (!Number.isFinite(id) || !Number.isFinite(Number(enemy.x)) || !Number.isFinite(Number(enemy.y))) continue;
+        live.add(id);
+        let track = tracks.get(id);
+        if (!track) {
+          track = {points:[], dx:0, dy:0, da:0, correctedAt:now};
+          tracks.set(id, track);
+        }
+        const point = {t:time, x:Number(enemy.x), y:Number(enemy.y),
+          vx:moving && !enemy.attacking ? finite(enemy.vx) : 0,
+          vy:moving && !enemy.attacking ? finite(enemy.vy) : 0,
+          angle:Math.atan2(finite(enemy.facing_y, 1), finite(enemy.facing_x)),
+          guide:moving ? movementGuide(enemy, snapshot) : null};
+        if (snapshot.enemy_motion && !point.guide) { point.vx = 0; point.vy = 0; }
+        const prior = track.points.at(-1);
+        // Historical interpolation needs only poses/tangents; only the newest
+        // point can predict. Do not retain three seconds of duplicate routes.
+        if (prior) prior.guide = null;
+        if (prior && Math.hypot(point.x - prior.x, point.y - prior.y)
+          > Math.max(128, 2 * Math.hypot(prior.vx, prior.vy) * (time - prior.t) + 32)) {
+          track.points.length = 0;
+          previous.delete(id);
+        }
+        if (track.points.at(-1)?.t === time) track.points.pop();
+        track.points.push(point);
+        while (track.points.length > 256 || (track.points.length > 2 && track.points[1].t < time - historySeconds)) track.points.shift();
+        const old = previous.get(id), next = trajectory(track.points, nextTime);
+        // Large relocations/reset corrections snap instead of sweeping across
+        // unrelated map geometry. Small network corrections decay smoothly.
+        const correct = moving && old && Math.hypot(old.x - next.x, old.y - next.y) < 128;
+        if (moving && old) correctionPeak = Math.max(correctionPeak, Math.hypot(old.x - next.x, old.y - next.y));
+        track.correctionGuide = null; track.distanceCorrection = 0;
+        track.dx = correct ? old.x - next.x : 0;
+        track.dy = correct ? old.y - next.y : 0;
+        if (correct && next.guide) {
+          const projected = nearestGuide(next.guide, old);
+          if (projected && projected.error < 8) {
+            track.correctionGuide = next.guide;
+            track.distanceCorrection = projected.distance - next.distance;
+            track.dx = old.x - projected.x; track.dy = old.y - projected.y;
+          }
+        }
+        track.da = correct ? angleDelta(next.angle, old.angle) : 0;
+        track.correctedAt = frozenAt ?? now;
+      }
+      for (const id of tracks.keys()) if (!live.has(id)) tracks.delete(id);
+      return true;
+    }
+    function sample(enemies, now) {
+      const time = targetTime(now);
+      if (moving && enemies?.length && frozenAt === null) {
+        sampledFrames++;
+        if (time > latest) predictedFrames++;
+      }
+      return new Map((enemies || []).map(enemy => {
+        const id = Number(enemy.id), track = tracks.get(id);
+        if (!track) return [id, enemy];
+        const value = pose(track, time, now);
+        return [id, {...enemy, x:value.x, y:value.y,
+          facing_x:Math.cos(value.angle), facing_y:Math.sin(value.angle)}];
+      }));
+    }
+    function diagnostics(now) {
+      const recent = arrivals.filter(at => at >= now - 5000);
+      const span = recent.length ? Math.max(1, (now - recent[0]) / 1000) : 1;
+      const result = {
+        updateHz: Math.max(0, recent.length - 1) / span,
+        updateAgeMs: lastArrival === null ? null : Math.max(0, now - lastArrival),
+        bufferMs: delay * 1000, targetBufferMs: desiredDelay * 1000,
+        jitterMs: jitter * 1000,
+        predictionPercent: sampledFrames ? predictedFrames / sampledFrames * 100 : 0,
+        receiveGapMs, correctionPeakPx:correctionPeak,
+        sourceGapMs, gatewayGapMs, snapshotBuildMs,
+        sequence:delivery?.sequence ?? null,
+      };
+      sampledFrames = predictedFrames = 0;
+      receiveGapMs = correctionPeak = 0;
+      sourceGapMs = gatewayGapMs = snapshotBuildMs = null;
+      return result;
+    }
+    return {push, sample, clear, diagnostics, setConnected(connected, now) {
+      if (!connected && frozenAt === null) frozenAt = now;
+      if (connected) frozenAt = null;
+    }};
+  }
+
   function targetingHandlePoint(tower, targeting) {
     const angle = Number(targeting.angle || 0);
     const distance = Number(targeting.range || 0);
@@ -415,7 +682,7 @@
     const scaledImageIds = new WeakMap();
     let nextScaledImageId = 0;
     let visualStateCache = null;
-    let enemiesByIdCache = null;
+    const motion = enemyMotion({delay:options.enemyInterpolationDelay});
     const fieldGeometryCache = new Map();
     let geometrySignature = "";
     let bruteScale = null;
@@ -440,11 +707,15 @@
     let profilingTotals = {};
     let fpsSampleStartedAt = performance.now();
     let fpsRenderedFrames = 0;
+    let peakFrameMs = 0, frameSpikes = 0;
     let animationFrame = 0;
     let destroyed = false;
     let selectedTowerId = null;
     const towerAimPreview = new Map();
-    let gameImagesStarted = false;
+    let gameImagesLoading = null;
+    let levelRequest = 0;
+    let pendingLevelKey = null;
+    let retryLevelAt = 0;
 
     mapCanvas.width = WIDTH;
     mapCanvas.height = HEIGHT;
@@ -454,13 +725,19 @@
       try { options.onFps?.(fps); }
       catch (error) { console.warn("FPS monitor unavailable", error); }
     }
+    function reportDiagnostics(value) {
+      try { options.onDiagnostics?.(value); }
+      catch (error) { console.warn("Movement diagnostics unavailable", error); }
+    }
     function resetFpsSample() {
       fpsSampleStartedAt = performance.now();
       fpsRenderedFrames = 0;
+      peakFrameMs = frameSpikes = 0;
       nextGameRenderAt = null;
       lastGameRenderAt = null;
       slowFrameTime = healthyFrameTime = 0;
       reportFps(null);
+      reportDiagnostics(null);
     }
     document.addEventListener?.("visibilitychange", resetFpsSample);
     function reportAssetLoads() {
@@ -483,6 +760,7 @@
         };
         image.onerror = () => {
           if (generation === assetGeneration) {
+            images.delete(url);
             assetLoads.failed++; assetLoads.pending--; assetLoads.last_url=url;
             assetLoads.last_error=`Artwork failed to load: ${url}`;
             reportAssetLoads();
@@ -498,17 +776,22 @@
     }
 
     function setPresentation(value) {
-      const valid = value?.contract === "photon.level.assets" && value.version === 1;
-      const next = valid ? value : {};
+      const valid = value?.contract === "photon.level.assets" && value.version === 1
+        && value.status === "ready" && typeof value.base === "string" && value.base
+        && typeof value.revision === "string" && value.assets && typeof value.assets === "object";
+      // Missing/unavailable descriptors never evict the last usable artwork.
+      // Feed availability is handled separately from presentation caches.
+      if (!valid) return false;
+      const next = value;
       const revision = JSON.stringify([next.base, next.revision, next.status]);
       if (revision === assetRevision) return false;
       assetRevision = revision;
       assetGeneration += 1;
       assetRoot = next.base ? sandboxRoot + String(next.base).replace(/\/$/, "") : "";
       assetPaths = next.assets || {};
-      images.clear(); gameImages.clear(); sceneImages.clear(); markerImages.clear();
-      tintedEffectCache.clear(); enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear();
-      gameImagesStarted = false;
+      images.clear();
+      gameImagesLoading = null;
+      retryLevelAt = 0;
       assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null};
       reportAssetLoads();
       return true;
@@ -516,6 +799,7 @@
 
     function assetUrl(assetId) {
       const path = assetPaths[String(assetId)];
+      if (path && options.resolveAsset) return options.resolveAsset(path);
       return assetRoot && path ? `${assetRoot}/${String(path).replace(/^\//, "")}` : "";
     }
 
@@ -531,9 +815,15 @@
       return assetUrl(`effect/${name}`);
     }
 
-    async function loadGameImages() {
-      if (gameImagesStarted || !assetRoot) return;
-      gameImagesStarted = true;
+    function loadGameImages() {
+      if (gameImagesLoading) return gameImagesLoading;
+      gameImagesLoading = prepareGameImages();
+      return gameImagesLoading;
+    }
+
+    async function prepareGameImages() {
+      const nextGameImages = new Map(), nextMarkerImages = new Map();
+      if (!assetRoot) return {game:nextGameImages, markers:nextMarkerImages};
       const pending = [];
       for (const assetId of Object.keys(assetPaths)) {
         const upgrade = assetId.match(/^tower\/([^/]+)\/upgrade\/([234])$/);
@@ -576,7 +866,7 @@
                 texture.getContext('2d').drawImage(raw, 0, 0, 256, 256);
               }
               raw.width = raw.height = 1;
-              gameImages.set(`tower:${upgrade[1]}:${layer}:${upgrade[2]}`, texture);
+              nextGameImages.set(`tower:${upgrade[1]}:${layer}:${upgrade[2]}`, texture);
             }
           }));
           continue;
@@ -589,7 +879,7 @@
               texture.width = 512; texture.height = 96;
               texture.getContext('2d').drawImage(image, 0, (tier - 2) * image.naturalHeight / 3,
                 image.naturalWidth, image.naturalHeight / 3, 0, 0, 512, 96);
-              gameImages.set(`field:${tier}`, texture);
+              nextGameImages.set(`field:${tier}`, texture);
             }
           }));
           continue;
@@ -598,13 +888,13 @@
         if (match) {
           const [, type, layer] = match;
           pending.push(loadImage(assetUrl(assetId)).then((image) => {
-            gameImages.set(`tower:${type}:${layer}`, image);
+            nextGameImages.set(`tower:${type}:${layer}`, image);
           }));
           continue;
         }
         if (assetId === "tower/socket-cover") {
           pending.push(loadImage(assetUrl(assetId)).then((image) => {
-            gameImages.set("tower:socket-cover", image);
+            nextGameImages.set("tower:socket-cover", image);
           }));
           continue;
         }
@@ -612,7 +902,7 @@
         if (match) {
           const [, type, frame] = match;
           pending.push(loadImage(assetUrl(assetId)).then((image) => {
-            gameImages.set(`enemy:${type}:${frame}`, image);
+            nextGameImages.set(`enemy:${type}:${frame}`, image);
           }));
           continue;
         }
@@ -620,7 +910,7 @@
         if (match) {
           const effect = match[1];
           pending.push(loadImage(assetUrl(assetId)).then((image) => {
-            gameImages.set(`effect:${effect}`, image);
+            nextGameImages.set(`effect:${effect}`, image);
           }));
           continue;
         }
@@ -628,26 +918,30 @@
         if (match) {
           const markerId = Number(match[1]);
           pending.push(loadImage(assetUrl(assetId)).then((image) => {
-            markerImages.set(markerId, image);
+            nextMarkerImages.set(markerId, image);
           }));
         }
       }
-      await Promise.allSettled(pending);
-      visualStateCache = null;
+      const results = await Promise.allSettled(pending);
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure) throw failure.reason;
+      return {game:nextGameImages, markers:nextMarkerImages};
     }
 
     async function loadSceneImages(scene) {
+      const nextSceneImages = new Map();
       const assetIds = new Set();
       for (const layer of scene?.layers || []) {
         for (const item of layer.items || []) {
           if (item.kind === "sprite" && item.asset_id) assetIds.add(String(item.asset_id));
         }
       }
-      await Promise.allSettled([...assetIds].map((assetId) => (
+      await Promise.all([...assetIds].map((assetId) => (
         loadImage(assetUrl(`map/${assetId}`)).then((image) => {
-          sceneImages.set(assetId, image);
+          nextSceneImages.set(assetId, image);
         })
       )));
+      return nextSceneImages;
     }
 
     function socketMarkerVisualSize() {
@@ -904,13 +1198,13 @@
       return sprite;
     }
 
-    function drawEnemy(context, enemy, visualTime, extrapolationAge, effectQuality) {
+    function drawEnemy(context, enemy, visualTime, effectQuality) {
       const frame = 1 + (Math.floor(visualTime * 8 + Number(enemy.id || 0)) % 4);
       const size = enemyVisualSize(enemy.enemy_type);
       const facingX = Number(enemy.facing_x ?? 0);
       const facingY = Number(enemy.facing_y ?? 1);
-      const rawX = Number(enemy.x) + Number(enemy.vx || 0) * extrapolationAge;
-      const rawY = Number(enemy.y) + Number(enemy.vy || 0) * extrapolationAge;
+      const rawX = Number(enemy.x);
+      const rawY = Number(enemy.y);
       const electrified = Number(enemy.electrocuted_until || 0) > visualTime;
       const intensity = Math.max(0, Math.min(1, Number(enemy.electrocution_intensity || 0)));
       const shake = electrified ? 2.5 + intensity * 3.5 : 0;
@@ -2128,7 +2422,7 @@
     }
 
     function drawForceFieldSkeletonZaps(
-      context, gameState, visualTime, extrapolationAge, enemiesById,
+      context, gameState, visualTime, enemiesById,
       effectQuality
     ) {
       const skeleton = gameImages.get("effect:force-field-zap-skeleton");
@@ -2142,10 +2436,10 @@
         ) continue;
         const enemy = enemiesById.get(Number(impact.enemy_id));
         const x = enemy
-          ? Number(enemy.x) + Number(enemy.vx || 0) * extrapolationAge
+          ? Number(enemy.x)
           : Number(impact.enemy_x);
         const y = enemy
-          ? Number(enemy.y) + Number(enemy.vy || 0) * extrapolationAge
+          ? Number(enemy.y)
           : Number(impact.enemy_y);
         const facingX = Number(enemy?.facing_x ?? impact.facing_x ?? 0);
         const facingY = Number(enemy?.facing_y ?? impact.facing_y ?? 1);
@@ -2190,15 +2484,12 @@
       const qualityIndex = Math.max(adaptiveQuality, enemyCount >= 800 ? 2 : enemyCount >= 400 ? 1 : 0);
       const effectQuality = [EFFECT_QUALITY_PROFILES.full, EFFECT_QUALITY_PROFILES.reduced, EFFECT_QUALITY_PROFILES.dense][qualityIndex];
       renderStats.quality = effectQuality.name;
-      const enemiesById = enemiesByIdCache || (enemiesByIdCache = new Map(enemies.map(enemy => [Number(enemy.id), enemy])));
+      const enemiesById = motion.sample(enemies, now);
       const socketsById = socketRecordMap();
       const visualState = visualStateCache || (visualStateCache = towerVisualState(state, socketsById));
       context.imageSmoothingEnabled = false;
       const visualTime = visualSimulationTime(now, state);
       const runtimeVisualTime = visualRuntimeTime(now, state);
-      const extrapolationAge = state.phase === "running" && !state.paused
-        ? boundedVisualAge(stateReceivedAt, now, feedConnected, frozenVisualAge, 0.14)
-        : 0;
       for (const tower of visualState.towers || []) {
         if (!towerIsActivating(tower, runtimeVisualTime, visualState)) {
           drawTargetingOverlay(context, tower);
@@ -2331,9 +2622,9 @@
           enemyTrailHistory.delete(enemyId);
         }
       }
-      for (const enemy of enemies) {
+      for (const enemy of enemiesById.values()) {
         drawEnemy(
-          context, enemy, visualTime, extrapolationAge, effectQuality
+          context, enemy, visualTime, effectQuality
         );
       }
       markPass("enemyMs");
@@ -2341,7 +2632,6 @@
         context,
         state,
         visualTime,
-        extrapolationAge,
         enemiesById,
         effectQuality,
       );
@@ -2380,6 +2670,8 @@
         const drawMs = performance.now() - started;
         if (drawn) {
           fpsRenderedFrames += 1;
+          peakFrameMs = Math.max(peakFrameMs, frameMs);
+          if (frameMs > 34) frameSpikes++;
           const weight = Math.min(frameMs, 100);
           if (drawMs > 18 || frameMs > 25) {
             slowFrameTime += weight; healthyFrameTime = 0;
@@ -2397,6 +2689,7 @@
       if (!document.hidden && elapsed >= 1000) {
         renderStats.fps = Math.round(fpsRenderedFrames * 1000 / elapsed);
         reportFps(renderStats.fps);
+        reportDiagnostics({...motion.diagnostics(sampledAt), peakFrameMs, frameSpikes});
         if (options.onPerformance) {
           const passes = Object.fromEntries(Object.entries(profilingTotals).map(([key, total]) => [key, total / Math.max(1, profilingFrames)]));
           try { options.onPerformance({...renderStats, ...passes, cacheBytes: 4 * (enemySpriteCache.pixels + effectRasterCache.pixels + enemyGlowCache.pixels)}); }
@@ -2404,15 +2697,16 @@
         }
         profilingFrames = 0; profilingTotals = {};
         fpsRenderedFrames = 0;
+        peakFrameMs = frameSpikes = 0;
         fpsSampleStartedAt = sampledAt;
       }
       animationFrame = global.requestAnimationFrame(gameRenderLoop);
     }
 
     function applyState(nextState) {
+      if (!motion.push(nextState, performance.now())) return;
       state = nextState;
       visualStateCache = null;
-      enemiesByIdCache = null;
       const nextGeometry = JSON.stringify([state?.aruco_code_footprint_px, state?.core_aruco_code_footprint_px, state?.force_field_marker_clearance_px]);
       if (nextGeometry !== geometrySignature) { geometrySignature = nextGeometry; invalidateSocketGeometry(); }
       if (bruteScale !== state?.settings?.brute_size_multiplier) {
@@ -2448,14 +2742,35 @@
         || !nextLevel.paths
         || !Array.isArray(nextLevel.sockets)
       ) throw new Error("Photon Game level projection is invalid");
-      level = nextLevel;
-      levelRevision = Number.isFinite(Number(revision)) ? Number(revision) : null;
-      invalidateSocketGeometry();
-      Promise.all([loadGameImages(), loadSceneImages(nextLevel.scene)]).then(() => {
-        if (destroyed) return;
+      const key = JSON.stringify([assetGeneration, revision]);
+      if (pendingLevelKey === key || performance.now() < retryLevelAt) return level;
+      pendingLevelKey = key;
+      const request = ++levelRequest, generation = assetGeneration;
+      // First arrival can draw the existing vector fallback immediately.
+      // Once a scene is visible, retain it until a replacement is ready.
+      if (!level) {
+        level = nextLevel;
+        invalidateSocketGeometry();
         renderMap();
+      }
+      Promise.all([loadGameImages(), loadSceneImages(nextLevel.scene)]).then(([game, scene]) => {
+        if (destroyed || request !== levelRequest || generation !== assetGeneration) return;
+        pendingLevelKey = null;
+        // Commit one complete presentation; asynchronous loads never replace
+        // visible markers/sprites one at a time or publish an old map.
+        for (const [target, source] of [[gameImages, game.game], [markerImages, game.markers], [sceneImages, scene]]) {
+          target.clear(); for (const [key, value] of source) target.set(key, value);
+        }
+        tintedEffectCache.clear(); enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear();
+        level = nextLevel;
+        levelRevision = Number.isFinite(Number(revision)) ? Number(revision) : null;
+        invalidateSocketGeometry();
+        renderMap();
+      }).catch(error => {
+        if (destroyed || generation !== assetGeneration || request !== levelRequest) return;
+        pendingLevelKey = null;gameImagesLoading = null;retryLevelAt = performance.now() + 5000;
+        (options.onAssetError || console.warn)(`Artwork is not ready: ${error.message}`);
       });
-      renderMap();
       return level;
     }
 
@@ -2587,6 +2902,7 @@
     function setFeedConnected(connected) {
       const next = Boolean(connected);
       const now = performance.now();
+      motion.setConnected(next, now);
       if (!next && feedConnected) {
         frozenVisualAge = boundedVisualAge(
           stateReceivedAt, now, true, frozenVisualAge,
@@ -2607,6 +2923,7 @@
         document.removeEventListener?.("visibilitychange", resetFpsSample);
         enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear(); tintedEffectCache.clear();
         enemyTrailHistory.clear(); towerRenderAngles.clear(); towerAimPreview.clear();
+        motion.clear();
       },
       get level() {
         return level;
@@ -2654,6 +2971,7 @@
       towerLinkMultiplierLabel,
     },
     presentation: {
+      enemyMotion,
       gameFacts,
       snapshotReceiver,
       towerTypeLabel,

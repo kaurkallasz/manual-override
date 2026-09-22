@@ -41,7 +41,10 @@ _enabled = True
 _board_found = False
 _board_checked_at = 0.0
 _corrected_jpeg = None
+_corrected_frame_at = 0.0
+_corrected_size = (0, 0)
 _corrected_thread = None
+_corrected_stop = threading.Event()
 _map_cache = {}
 _pattern_revision = 0
 _pattern_ack_revision = 0
@@ -77,10 +80,24 @@ def _wait_for_pattern(revision, timeout=2.0):
 
 def hub_init(ctx):
     global _webcam
+    _corrected_stop.clear()
     _webcam = ctx.get_prototype("webcam")
     if _webcam is not None and hasattr(_webcam, "set_tag_transformer"):
         _webcam.set_tag_transformer(correct_tag_sets)
     _load_calibration()
+
+
+def hub_stop():
+    global _webcam, _corrected_thread, _corrected_jpeg, _corrected_frame_at
+    _corrected_stop.set()
+    thread = _corrected_thread
+    if thread and thread.is_alive():
+        thread.join(timeout=1)
+    with _lock:
+        _corrected_thread = None
+        _corrected_jpeg = None
+        _corrected_frame_at = 0
+        _webcam = None
 
 
 def _load_calibration():
@@ -257,8 +274,8 @@ def _undistort(frame, calibration):
 
 def _corrected_worker():
     """Encode correction once; all Gamemaster/player viewers share this cache."""
-    global _corrected_jpeg
-    while True:
+    global _corrected_jpeg, _corrected_frame_at, _corrected_size
+    while not _corrected_stop.is_set():
         frame = _frame()
         if frame is not None:
             with _lock:
@@ -273,12 +290,16 @@ def _corrected_worker():
             if ok:
                 with _lock:
                     _corrected_jpeg = buf.tobytes()
-        time.sleep(1 / 12)
+                    _corrected_frame_at = time.time()
+                    _corrected_size = (frame.shape[1], frame.shape[0])
+        _corrected_stop.wait(1 / 12)
 
 
 def _ensure_corrected_worker():
     global _corrected_thread
     with _lock:
+        if _corrected_stop.is_set():
+            return
         if _corrected_thread is None or not _corrected_thread.is_alive():
             _corrected_thread = threading.Thread(
                 target=_corrected_worker, name="corrected-camera", daemon=True)
@@ -701,3 +722,15 @@ def enabled():
     global _enabled
     _enabled = bool((request.get_json(silent=True) or {}).get("enabled", True))
     return jsonify({"ok": True, "enabled": _enabled})
+
+
+def preview_frame():
+    """hhh.camera-frame v1: shared corrected JPEG, without diagnostic overlays."""
+    _ensure_corrected_worker()
+    with _lock:
+        ready = bool(_corrected_jpeg and 0 <= time.time()-_corrected_frame_at <= 2)
+        return {'contract':'hhh.camera-frame', 'version':1,
+                'status':'ready' if ready else 'unavailable',
+                'coordinate_space':'corrected-camera-normalized',
+                'frame_at':_corrected_frame_at, 'width':_corrected_size[0], 'height':_corrected_size[1],
+                'jpeg':_corrected_jpeg if ready else None}

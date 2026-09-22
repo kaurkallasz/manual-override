@@ -8,6 +8,7 @@ import math
 import random
 import threading
 import time
+import uuid
 from collections import defaultdict
 from functools import lru_cache
 from itertools import combinations
@@ -15,6 +16,7 @@ from typing import Any, Callable
 
 from .row_barriers import RowBarrierRuntime, validate_rows, validate_wave_routes
 from . import companions
+from .mobile_arm import MobileArm
 
 
 MAX_ACTIVE_ENEMIES = 1000
@@ -101,7 +103,9 @@ RING_MIN_TURRETS = 8
 RING_MAX_TURRETS = 16
 CORE_MARKER_ID = 38
 CORE_DETONATION_DURATION_S = 2.4
+PIECE_KEYS = ('green_piece_1', 'green_piece_2', 'purple_piece_1', 'purple_piece_2')
 DEFAULT_SETTINGS = {
+    **dict(zip(PIECE_KEYS, (100, 101, 102, 103))),
     "wave_count": 12,
     "wave_interval_s": 45.0,
     "enemy_health_multiplier": 1.0,
@@ -315,6 +319,23 @@ def _core_octagon_face(
         if clearance > best[3]:
             best = index, unit_x, unit_y, clearance
     return best
+
+
+@lru_cache(maxsize=256)
+def _visual_orbit_polygon(padding: float) -> tuple[tuple[float, float], ...]:
+    """Offset the authored core silhouette for presentation guidance only."""
+    planes = [(x, y, limit + padding * math.hypot(x, y))
+              for x, y, limit in CORE_OCTAGON_PLANES]
+    vertices = []
+    for i, (ax, ay, a) in enumerate(planes):
+        for bx, by, b in planes[i + 1:]:
+            determinant = ax * by - ay * bx
+            if abs(determinant) < 1e-9:
+                continue
+            x, y = (a * by - ay * b) / determinant, (ax * b - a * bx) / determinant
+            if all(nx * x + ny * y <= limit + 1e-6 for nx, ny, limit in planes):
+                vertices.append((x, y))
+    return tuple(sorted(set(vertices), key=lambda p: math.atan2(p[1], p[0])))
 
 
 def _offset_polyline(
@@ -816,6 +837,7 @@ class DefenseEngine(RowBarrierRuntime):
             self.virtual_play = False
             # Retain the operator's test selection across virtual resets.
             self.virtual_test_loadout = getattr(self, 'virtual_test_loadout', None)
+            self.virtual_test_control = getattr(self, 'virtual_test_control', None)
             self.sim_time = 0.0
             self.runtime_time = 0.0
             self.run_started_at = None
@@ -840,6 +862,8 @@ class DefenseEngine(RowBarrierRuntime):
             self.placements: dict[str, dict[str, Any]] = {}
             self.activation_order: list[str] = []
             self.placement_link_attempts: list[dict[str, Any]] = []
+            self.atom_owners = dict(ATOM_OWNERS)
+            self.piece_roles = dict(DEFAULT_LOADOUT)
             self.loadout = dict(DEFAULT_LOADOUT)
             self.force_fields: dict[str, dict[str, Any]] = {}
             self.force_field_impacts: list[dict[str, Any]] = []
@@ -867,6 +891,7 @@ class DefenseEngine(RowBarrierRuntime):
             self._next_event_sequence = 1
             self._reset_rows()
             self._road_tracking_tick = 0
+            self.mobile_arm = MobileArm(self.level)
 
     def set_wake(self, callback: Callable[[], None]) -> None:
         self._wake = callback
@@ -937,6 +962,7 @@ class DefenseEngine(RowBarrierRuntime):
 
     def start(self, settings: dict[str, Any] | None = None, *, progression=None) -> None:
         with self.lock:
+            mobile_arm = self.mobile_arm
             virtual_play = self.virtual_play
             runtime_time = self.runtime_time
             loadout = dict(self.loadout)
@@ -968,6 +994,8 @@ class DefenseEngine(RowBarrierRuntime):
             self.reset()
             self.virtual_play = virtual_play
             self.player_progression = json.loads(json.dumps(progression or {}))
+            self.mobile_arm = mobile_arm
+            self.mobile_arm.targets = list(self.mobile_arm.joints)
             self.contract_control_tier = max((p['control_tier'] for p in self.player_progression.values()), default=1)
             self.runtime_time = runtime_time
             self.loadout = loadout
@@ -976,6 +1004,8 @@ class DefenseEngine(RowBarrierRuntime):
             self.placement_link_attempts = placement_link_attempts
             if settings:
                 self.settings.update(settings)
+            self.configure_piece_codes(self.settings)
+            self.mobile_arm.cue.stop(self.mobile_arm)
             self.settings["max_active_enemies"] = min(MAX_ACTIVE_ENEMIES, int(self.settings["max_active_enemies"]))
             self.core_max_hp = self.core_hp = float(self.settings["core_hp"])
             for tower in self.placements.values():
@@ -1017,6 +1047,8 @@ class DefenseEngine(RowBarrierRuntime):
 
     def pause(self, paused: bool = True) -> None:
         with self.lock:
+            if paused:
+                self.mobile_arm.halt('Game paused. Connect after resuming.')
             if self.phase == "running":
                 self.paused = bool(paused)
                 self._event("paused" if paused else "resumed")
@@ -1024,18 +1056,22 @@ class DefenseEngine(RowBarrierRuntime):
 
     def set_virtual_play(self, enabled: bool) -> None:
         with self.lock:
+            if not enabled:
+                self.mobile_arm.halt('Physical mode selected.')
             self.virtual_play = bool(enabled)
             self._refresh_upgrade_levels()
             self._event("input_mode", virtual_play=self.virtual_play)
         self._changed()
 
-    def set_virtual_test_loadout(self, levels) -> None:
+    def set_virtual_test_loadout(self, levels, control=...) -> None:
         """Practice-only overrides; no saved player or currency mutations."""
         with self.lock:
             if not self.virtual_play:
                 raise ValueError('enable Virtual play before changing test unlocks')
             if self.phase not in ('setup', 'running'):
                 raise ValueError('reset the finished game before changing test unlocks')
+            if control is not ... and control is not None and (type(control) is not int or not 1 <= control <= 4):
+                raise ValueError('mobile control unlock must be an integer from 1 to 4, or null')
             if levels is not None:
                 tracks = {*UPGRADE_TRACKS.values(), 'forcefield'}
                 if not isinstance(levels, dict) or set(levels) != tracks:
@@ -1044,9 +1080,12 @@ class DefenseEngine(RowBarrierRuntime):
                     minimum = 1 if track == 'forcefield' else 0
                     if type(level) is not int or not minimum <= level <= 4:
                         raise ValueError(f'{track} must be an integer from {minimum} to 4')
+            if control is not ...:
+                self.virtual_test_control = control
+                self.mobile_arm.refresh_control_unlock(control if control is not None else 1)
             self.virtual_test_loadout = dict(levels) if levels is not None else None
             self._refresh_upgrade_levels()
-            self._event('virtual_test_loadout', levels=self.virtual_test_loadout)
+            self._event('virtual_test_loadout', levels=self.virtual_test_loadout, control=self.virtual_test_control)
         self._changed()
 
     def _refresh_upgrade_levels(self) -> None:
@@ -1063,13 +1102,37 @@ class DefenseEngine(RowBarrierRuntime):
             if not field['broken'] and field['hits'] >= field['capacity']:
                 field.update(broken=True, broken_at=self.sim_time)
 
+    def validate_piece_codes(self, settings):
+        codes = [settings.get(key, DEFAULT_SETTINGS[key]) for key in PIECE_KEYS]
+        if any(type(code) is not int or not 0 <= code <= 999 for code in codes) or len(set(codes)) != 4:
+            raise ValueError('Movable piece codes must be four distinct integers from 0 to 999.')
+        fixed = set(self.level.socket_by_marker) | {CORE_MARKER_ID}
+        if fixed.intersection(codes):
+            raise ValueError('Movable piece codes conflict with level markers: ' + ', '.join(map(str, sorted(fixed.intersection(codes)))))
+        return codes
+
+    def configure_piece_codes(self, settings):
+        with self.lock:
+            codes = self.validate_piece_codes(settings)
+            owners = dict(zip(codes, ('green', 'green', 'purple', 'purple')))
+            if self.atom_owners == owners and list(self.mobile_arm.tags) == codes[:2]:
+                return
+            self.mobile_arm.configure_pieces(codes[:2])
+            self.atom_owners = owners
+            self.piece_roles = dict(zip(codes, DEFAULT_LOADOUT.values()))
+            self.loadout = dict(self.piece_roles)
+            by_role = {role: code for code, role in self.piece_roles.items()}
+            for tower in self.placements.values():
+                tower['atom_tag_id'] = by_role[tower['tower_type']]
+            self.physical_relation_tokens.clear()
+            self.settings.update(dict(zip(PIECE_KEYS, codes)))
+
     def set_loadout(self, atom_tag_id: int, tower_type: str) -> None:
         atom_tag_id = int(atom_tag_id)
-        expected = DEFAULT_LOADOUT.get(atom_tag_id)
+        expected = self.piece_roles.get(atom_tag_id)
         if expected is None or str(tower_type) != expected:
             raise ValueError(
-                "Atom roles are fixed: 100 machine gun, 101 flamethrower, "
-                "102 mortar, 103 Tesla coil"
+                "Atom roles are fixed by the configured team piece slots"
             )
         with self.lock:
             self.loadout[atom_tag_id] = expected
@@ -1245,6 +1308,7 @@ class DefenseEngine(RowBarrierRuntime):
             "aim_angle": aim_angle,
             "aim_spread": 1.0 if kind == "tesla_coil" else 0.5,
             "aim_revision": 0,
+            "aim_instance": uuid.uuid4().hex,
             "facing_angle": aim_angle,
             "hp": max_hp,
             "max_hp": max_hp,
@@ -1344,9 +1408,9 @@ class DefenseEngine(RowBarrierRuntime):
 
     def place(self, atom_tag_id: int, socket_id: str | None, tower_type: str | None = None, *, source: str, team: str | None = None) -> None:
         atom_tag_id = int(atom_tag_id)
-        if atom_tag_id not in ATOM_OWNERS:
-            raise ValueError("Atom tag must be 100-103")
-        owner = ATOM_OWNERS[atom_tag_id]
+        if atom_tag_id not in self.atom_owners:
+            raise ValueError("Atom tag must be a configured movable piece")
+        owner = self.atom_owners[atom_tag_id]
         if team and team != owner:
             raise PermissionError(f"tag {atom_tag_id} belongs to {owner}")
         if source == "virtual" and not self.virtual_play:
@@ -1358,7 +1422,7 @@ class DefenseEngine(RowBarrierRuntime):
                 return
             if socket_id not in self.level.sockets:
                 raise ValueError("unknown socket")
-            kind = DEFAULT_LOADOUT[atom_tag_id]
+            kind = self.piece_roles[atom_tag_id]
             if source == 'virtual' and self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[kind]] == 0:
                 raise ValueError(f'{kind.replace("_", " ")} is locked in the virtual test loadout')
             if tower_type not in (None, "", kind):
@@ -1403,9 +1467,9 @@ class DefenseEngine(RowBarrierRuntime):
         self, atom_tag_id: int, *, source: str, team: str | None = None
     ) -> None:
         atom_tag_id = int(atom_tag_id)
-        if atom_tag_id not in ATOM_OWNERS:
-            raise ValueError("Core activation requires an Atom tag from 100-103")
-        owner = ATOM_OWNERS[atom_tag_id]
+        if atom_tag_id not in self.atom_owners:
+            raise ValueError("Core activation requires a configured movable piece")
+        owner = self.atom_owners[atom_tag_id]
         if team and team != owner:
             raise PermissionError(f"tag {atom_tag_id} belongs to {owner}")
         if source == "virtual" and not self.virtual_play:
@@ -1461,7 +1525,7 @@ class DefenseEngine(RowBarrierRuntime):
             self.physical_input_error = None
             relations = placement.get("relations") or []
             sampled_at = float(placement["sampled_at"])
-            for atom_tag_id, owner in ATOM_OWNERS.items():
+            for atom_tag_id, owner in self.atom_owners.items():
                 candidates = [
                     (float(relation["distance"]), "socket", int(relation["marker_id"]), relation)
                     for relation in relations
@@ -3790,6 +3854,7 @@ class DefenseEngine(RowBarrierRuntime):
     def step(self, dt: float) -> None:
         dt = max(0.0, min(float(dt), 0.1))
         with self.lock:
+            self.mobile_arm.step(dt, self)
             if dt > 0:
                 self.runtime_time += dt
             self._refresh_row_barriers()
@@ -4152,7 +4217,7 @@ class DefenseEngine(RowBarrierRuntime):
                 "placement_id", "atom_tag_id", "owner", "socket_id", "aruco_id", "tower_type",
                 "x", "y", "last_fire_at", "last_fire_target", "source", "hp",
                 "max_hp", "destroyed", "destroyed_at", "facing_angle",
-                "last_fire_chain", "aim_revision", "last_damage_at",
+                "last_fire_chain", "aim_revision", "aim_instance", "last_damage_at",
                 "last_damage_amount", "activation_started_at",
                 "activation_complete_at", "replenished_at", "upgrade_level", "upgrade_multiplier",
             )
@@ -4402,6 +4467,55 @@ class DefenseEngine(RowBarrierRuntime):
             "purge_ignited_count": len(self.core_purge_ignited_ids),
         }
 
+    def _enemy_motion_guide(self, enemy: dict[str, Any]) -> dict[str, Any]:
+        """Read-only intent, not future combat/collision outcomes. Bounded wire size."""
+        revision = self.row_topology_revision
+        guide = {"mode": "hold", "speed": 0, "points": [], "revision": revision}
+        if (self.phase != "running" or self.paused or enemy.get("blocked_steps", 0) > 0
+                or (not enemy["attacking"] and self.level.row_barriers
+                    and enemy.get("row_route_revision") != revision)):
+            return guide
+        speed = min(math.hypot(enemy["vx"], enemy["vy"]),
+                    CORE_BASIN_SPEED * PARTICLE_MAX_SPEED_SCALE if enemy["attacking"] else enemy["speed"])
+        if speed < .1:
+            return guide
+        origin = (enemy["x"], enemy["y"])
+        if enemy["attacking"]:
+            cx, cy = float(self.level.core["x"]), float(self.level.core["y"])
+            radius = enemy["collision_radius"]
+            clearance = _core_octagon_face(origin[0] - cx, origin[1] - cy, radius)[3]
+            clearance = max(.5, min(clearance, CORE_BASIN_HALF_SIZE - 2 * radius - CORE_OCTAGON_MAX_AXIS_EXTENT))
+            polygon = [(cx + x, cy + y) for x, y in _visual_orbit_polygon(round(radius + clearance, 1))]
+            candidates = []
+            for i, a in enumerate(polygon):
+                b = polygon[(i + 1) % len(polygon)]
+                x, y, _ = _closest_point_on_segment(*origin, *a, *b)
+                candidates.append((math.hypot(x - origin[0], y - origin[1]), i, (x, y)))
+            _, edge, projection = min(candidates)
+            direction = 1 if enemy["basin_direction"] > 0 else -1
+            first = edge + 1 if direction > 0 else edge
+            route = [projection] + [polygon[(first + direction * n) % len(polygon)] for n in range(8)]
+            mode = "orbit"
+        else:
+            # Includes the server's rounded corners, lane offset and barrier reroute.
+            route = enemy["path"][int(enemy["segment"]) + 1:]
+            mode = "road"
+        points = []
+        remaining = speed * 1.4
+        x, y = origin
+        for tx, ty in route:
+            distance = math.hypot(tx - x, ty - y)
+            if distance < .05:
+                continue
+            if distance > remaining:
+                tx, ty = x + (tx - x) * remaining / distance, y + (ty - y) * remaining / distance
+            points.append([round(tx, 2), round(ty, 2)])
+            remaining -= distance
+            x, y = tx, ty
+            if remaining <= 0 or len(points) >= 12:
+                break
+        return {"mode": mode, "speed": round(speed, 2), "points": points, "revision": revision}
+
     def snapshot(self, *, compact_enemies: bool = False) -> dict[str, Any]:
         with self.lock:
             self._refresh_row_barriers()
@@ -4459,6 +4573,8 @@ class DefenseEngine(RowBarrierRuntime):
                     for enemy in self.enemies.values()
                 ]
             link_state = self._sync_tower_link_bonuses()
+            for public_enemy in enemies:
+                public_enemy["motion"] = self._enemy_motion_guide(self.enemies[public_enemy["id"]])
             towers = [
                 self._public_tower(tower, link_state)
                 for tower in self.placements.values()
@@ -4470,6 +4586,7 @@ class DefenseEngine(RowBarrierRuntime):
                 "phase": self.phase,
                 "paused": self.paused,
                 "virtual_play": self.virtual_play,
+                "mobile_arm": self.mobile_arm.snapshot(),
                 "level_revision": self.level.layout_revision,
                 "aruco_code_footprint_px": self.level.aruco_code_footprint_px,
                 "core_aruco_code_footprint_px": (
@@ -4493,9 +4610,11 @@ class DefenseEngine(RowBarrierRuntime):
                 "released_orcs": self.next_enemy_id - 1,
                 "contract_control_tier": self.contract_control_tier,
                 "player_progression": self.player_progression,
+                "virtual_test_control": self.virtual_test_control,
                 "virtual_test_loadout": dict(self.virtual_test_loadout) if self.virtual_test_loadout is not None else None,
                 "breaches": self.breaches,
                 "enemies": enemies,
+                "enemy_motion": {"contract": "photon.enemy-motion", "version": 1, "horizon_s": 1.2},
                 "towers": towers,
                 "companions": [self._public_tower(unit, link_state) for unit in self._sync_companions()],
                 "companion_policy": dict(companions.POLICY),
@@ -4526,6 +4645,7 @@ class DefenseEngine(RowBarrierRuntime):
                 "ring_status": self._ring_status_snapshot(),
                 "core_sequence": self._core_sequence_snapshot(),
                 "activation_order": list(self.activation_order),
+                "movable_piece_codes": {side: [code for code, owner in self.atom_owners.items() if owner == side] for side in ("green", "purple")},
                 "loadout": {str(key): value for key, value in self.loadout.items()},
                 "settings": dict(self.settings),
                 "physical_input_error": self.physical_input_error,

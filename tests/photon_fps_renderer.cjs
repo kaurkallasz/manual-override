@@ -1,7 +1,7 @@
 // Measure completed draws in the real renderer with a deterministic browser clock.
 const assert = require('node:assert/strict');
 let now = 0, scheduled = null;
-const listeners = new Map(), samples = [];
+const listeners = new Map(), samples = [], diagnostics = [];
 global.performance = {now: () => now};
 global.requestAnimationFrame = callback => { scheduled = callback; return 1; };
 global.cancelAnimationFrame = () => { scheduled = null; };
@@ -22,6 +22,7 @@ global.document = {
 require('../sandboxes/gamemaster/prototypes/laser-tag-y/tower-defence-view.js');
 const view = global.TowerDefenceView.create({
   mapCanvas: canvas(), gameCanvas: canvas(), onFps: fps => samples.push(fps),
+  onDiagnostics: value => diagnostics.push(value),
 });
 function tick(ms) {
   now += ms;
@@ -46,10 +47,13 @@ function visibility(hidden) {
   assert.equal(samples.at(-1), null, 'wait for a full second before showing FPS');
   tick(100);
   assert.equal(samples.at(-1), 10, 'slow rendering reports measured FPS, not the 60 FPS target');
+  assert.equal(diagnostics.at(-1).peakFrameMs, 100);
+  assert.ok(diagnostics.at(-1).frameSpikes >= 9, 'report stutters hidden by an average FPS number');
   const count = samples.length;
   for (let i = 0; i < 100; i++) tick(10);
   assert.equal(samples.length, count + 1, 'publish once per second');
   assert.equal(samples.at(-1), 60, '100 callbacks preserve a 60 FPS cadence');
+  assert.equal(diagnostics.at(-1).frameSpikes, 0, 'frame spikes reset each reporting window');
   // Direct diagnostic draws must not inflate the presented-frame counter.
   for (let i = 0; i < 3; i++) view.renderGame();
   for (let i = 0; i < 10; i++) tick(100);
@@ -60,6 +64,7 @@ function visibility(hidden) {
   assert.equal(samples.length, hiddenCount, 'hidden tabs must not publish stale samples');
   visibility(false);
   assert.equal(samples.at(-1), null);
+  assert.equal(diagnostics.at(-1), null, 'background/resume clears stale diagnostics');
   for (let i = 0; i < 10; i++) tick(100);
   assert.equal(samples.at(-1), 10, 'resuming starts a fresh measurement window');
   view.destroy();

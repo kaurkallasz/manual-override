@@ -151,6 +151,15 @@
 <script>
 const tabsEl = document.getElementById('tabs');
 const frame = document.getElementById('frame');
+// A player presentation can expand its own iframe without changing other tabs.
+window.addEventListener('message', event => {
+  if (event.origin !== location.origin || event.source !== frame.contentWindow ||
+      event.data?.type !== 'mobile-ltz:expand' ||
+      !new URL(frame.src, location.href).pathname.endsWith('/p/mobile-ltz/')) return;
+  frame.style.cssText = event.data.expanded
+    ? 'position:fixed;inset:0;width:100vw;height:100dvh;z-index:10000' : '';
+});
+frame.addEventListener('load', () => { frame.style.cssText = ''; });
 const descEl = document.getElementById('desc');
 const pageLinksEl = document.getElementById('pageLinks');
 const openTab = document.getElementById('openTab');
@@ -472,7 +481,8 @@ async function load() {
   }
   renderTabs();
   // restore last-viewed tab across reloads; prefer an enabled one
-  const remembered = protos.find(p => p.slug === localStorage.getItem(K('lastProto')));
+  const requested = protos.find(p => p.slug === location.hash.slice(1));
+  const remembered = requested || protos.find(p => p.slug === localStorage.getItem(K('lastProto')));
   let want = remembered || protos.find(p => p.enabled) || protos[0];
   if (!showOrder && want && !want.enabled) want = protos.find(p => p.enabled) || want;
   selectProto(want);

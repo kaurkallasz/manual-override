@@ -74,7 +74,7 @@ class LiveState:
             self._ver += 1
             self._cond.notify_all()
 
-    def stream(self, snapshot, interval=15.0, *, shared=False, static_fields=()):
+    def stream(self, snapshot, interval=15.0, *, shared=False, static_fields=(), identity_fields=(), envelope=False):
         """Return a Flask SSE `Response` that pushes `snapshot()` on every change.
 
         `snapshot` is a no-arg callable returning a JSON-serialisable dict. It is
@@ -89,22 +89,30 @@ class LiveState:
         `update` events omitting those fields while unchanged. First delivery,
         reconnect and changes to static fields always receive a full message.
         Default streams retain their original full-snapshot behavior.
+        `identity_fields` participate in snapshot changes and remain in every
+        update. `envelope` opts into hub.live version 1 JSON with kind/state,
+        so clients need not rely on the transport's event label for merging.
         """
         cond = self._cond
         state = self
-        fields = tuple(static_fields)
+        identities = tuple(identity_fields)
+        fields = tuple(dict.fromkeys((*static_fields, *identities)))
 
         def prepare():
             value = snapshot()
-            if not fields:
+            if not fields and not envelope:
                 payload = json.dumps(value, default=str)
                 return payload, payload, None
             static = {key: value[key] for key in fields if key in value}
-            dynamic = {key: item for key, item in value.items() if key not in fields}
+            dynamic = {key: item for key, item in value.items() if key not in fields or key in identities}
             compact = {"default": str, "separators": (",", ":")}
+            def encode(item, kind):
+                if envelope:
+                    item = {"contract": "hub.live", "version": 1, "kind": kind, "state": item}
+                return json.dumps(item, **compact)
             return (
-                json.dumps(value, **compact),
-                json.dumps(dynamic, **compact),
+                encode(value, "snapshot"),
+                encode(dynamic, "update"),
                 json.dumps(static, sort_keys=True, **compact),
             )
 
@@ -115,7 +123,7 @@ class LiveState:
             # taking their own locks. Retain only one bounded cache entry.
             with state._shared_lock:
                 cached = state._shared
-                key = (snapshot, fields, version)
+                key = (snapshot, fields, identities, envelope, version)
                 if cached is None or cached[0] != key or time.monotonic() >= cached[1]:
                     payloads = prepare()
                     state._shared = (key, time.monotonic() + interval, payloads)

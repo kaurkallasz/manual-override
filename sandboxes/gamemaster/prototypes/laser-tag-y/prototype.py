@@ -95,6 +95,15 @@ def renderer():
     return send_from_directory(HERE, "tower-defence-view.js")
 
 
+def renderer_contract():
+    return {"contract": "photon.renderer", "version": 1}
+
+
+def renderer_response():
+    """Owned renderer shared with authenticated player presentations."""
+    return send_from_directory(HERE, "tower-defence-view.js")
+
+
 @bp.route("/data-flow.js")
 def data_flow_script():
     return send_from_directory(HERE, "data-flow.js")
