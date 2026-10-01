@@ -8,7 +8,7 @@
     files: ["Image files", "URLs supplied by Game", "Level-owned terrain, sprites, effects and marker images."],
     camera: ["Physical camera", "Ultimate source · sensor", "Captured pixels of the real board and its tags."],
     webcam: ["Webcam", "Camera acquisition", "Frames, detected tag IDs, corners and frame time."],
-    preview: ["Board video preview", "Display-only branch", "Corrected video → Board tab only."],
+    preview: ["Board video preview", "Display-only branch", "Corrected video → Board and Y operator camera."],
     lens: ["Lens calibration", "Ultimate source · saved data", "Measured camera matrix and distortion coefficients."],
     correction: ["Camera Calibration", "Lens correction", "Corrected tag coordinates and corrected video."],
     board: ["Photon Board", "Physical observation owner", "Corrected tags + arm state; optional calibrated diagnostics."],
@@ -47,6 +47,8 @@
     ["settings","game","reported",["Validated","settings"]],
     ["game","y","live",["Snapshot + SSE","live state"]],
     ["files","y","image",["Image files","on demand"],"images"],
+    ["preview","y","reported",["Live camera","physical view"]],
+    ["board","y","reported",["ArUco overlays","diagnostics only"],"marker-display"],
   ];
   function model(state, telemetry, now) {
     const compatible = state?.contract === "photon.game" && state.version === 2;
@@ -78,7 +80,7 @@
       authored:origin,camera:origin,lens:origin,robots:origin,cal2:origin,players:origin,
       webcam:inputStatus('webcam'),correction:inputStatus('camera_calibration'),relay:inputStatus('relay'),
       pickup:inputStatus('cal2_projection',true),
-      preview:{text:"Route only · feed not opened here",tone:"muted"},
+      preview:telemetry.camera || {text:"Camera not connected",tone:"muted"},
       settings:{text:state?.configuration?.status==='ready'&&recent?"Game reports: ready":"Not reported / last-known",tone:recent&&state?.configuration?.status==='ready'?"good":"muted"},
       health: streaming ? "SSE receiving" : recent ? "Snapshot received · SSE not live" : "Feed unavailable / stale",
       game: {text:!compatible ? "Waiting for compatible Game output" : !recent ? "Last-known state only" : state.status === "ready" ? `${state.paused?"Paused":state.phase || "Ready"} · wave ${state.wave ?? "—"}` : state.error || "Game unavailable", tone:ready?"good":"warn"},
@@ -165,16 +167,16 @@
         `Board → Game → Y · Game read Board ${m.reportAge.toFixed(1)} s ago. ${m.reportRecent?'Last reported status, not an independent hardware check.':'Historical report; not live.'}${state?.virtual_play?' Virtual play does not use physical Board input.':''}`;
       const rows={
         authored:[['Origin','Photon Level owns the editable TMJ/TSJ map, authored waves, terrain, static decorations, sprites and ArUco images.'],['Route','Authored files → Level runtime bundle → Game; Level serves static images at the URLs forwarded by Game.'],['Boundary','Y receives a display projection and URLs. It never parses map files or reads the repository.']],
-        camera:[['Origin','The configured physical camera observes the real playfield and printed tags. Webcam acquires its frames and detects ArUco IDs/corners.'],['Two branches','Tag observations → Camera Calibration → Board → Game → Y. Pixels → corrected video → Board preview only.'],['Health','Device identity and live camera connection are not supplied to Y. Webcam health is only the forwarded Board input report.']],
+        camera:[['Origin','The configured physical camera observes the real playfield and printed tags. Webcam acquires its frames and detects ArUco IDs/corners.'],['Two branches','Tag observations → Camera Calibration → Board → Game → Y. Pixels → corrected video → Board preview and Y operator view. Board diagnostic SSE → Y ArUco labels and detection indicators.'],['Health','Device identity and live camera connection are not supplied to Y. Webcam health is only the forwarded Board input report.']],
         webcam:[['Source','Physical camera frames → Webcam acquisition and ArUco detector.'],['Output','tag_snapshot() · hhh.webcam.tags v1: tags, detections, visible_ids, width, height, frame_at. Board passes tags into lens correction; raw IDs and timing remain Board inputs.'],['Report',report('webcam')],['Provenance',provenance]],
         lens:[['Origin','Calibration pattern captures produce the camera matrix and distortion coefficients saved by Camera Calibration in its own calibration.json.'],['Use','Corrects image pixels and marker coordinates. This is lens calibration, not arm millimetre calibration.'],['Boundary','Only the owning module reads these coefficients; they are not copied to Board, Game or Y.']],
-        correction:[['Inputs','Webcam frames/detections + the module-owned lens calibration. Board supplies tag sets to the correction function.'],['Output','corrected_tag_snapshot(tags, detections) · hhh.camera-correction v1. Corrected pixel/normalized positions, corners, rotation and dimensions.'],['Video branch','The existing corrected-stream endpoint is consumed by Board’s preview. No video bytes enter Game or Y.'],['Report',report('camera_calibration')],['Provenance',provenance]],
+        correction:[['Inputs','Webcam frames/detections + the module-owned lens calibration. Board supplies tag sets to the correction function.'],['Output','corrected_tag_snapshot(tags, detections) · hhh.camera-correction v1. Corrected pixel/normalized positions, corners, rotation and dimensions.'],['Video branch','The existing corrected-stream endpoint is consumed by Board’s preview. Video is displayed in the operator view; no video bytes enter Game.'],['Report',report('camera_calibration')],['Provenance',provenance]],
         robots:[['Origin','The green and purple Dobot MG400 arms supply measured pose, enabled/connection and feedback state to the existing relay.'],['Important distinction','A commanded target is intent; a feedback pose is observation. Pump state alone does not prove a tag was picked up.'],['Health','Y does not connect to a robot or infer that both arms are connected from a ready relay API.']],
         relay:[['Inputs','MG400 hardware feedback plus existing authenticated player/gamemaster commands. This diagram never sends commands.'],['Output','arms_snapshot() · hhh.relay.arms v1: per-side pose, target, control_mode, pump_mode, connected, enabled and feedback_at.'],['Route','Relay → Board → Game. Only the relay owns robot actuation; Board reads observations and Y draws Game output.'],['Report',report('relay')],['Provenance',provenance]],
         cal2:[['Origin','Auto PP Cal 2 measurements are saved by Auto Pickup in its own auto-calibration-2.json.'],['Information','Six-point camera/arm mapping and raised-tag height/parallax calibration. Camera lens coefficients are a separate dataset.'],['Boundary','The Auto Pickup owner performs the projection. No calibration file or transform is copied to Game or Y.']],
         pickup:[['Inputs','Board supplies corrected tags and arm poses to tracking_projection(tags, arms); Auto Pickup applies its own saved Cal 2 measurements.'],['Projection output','hhh.cal2.projection v1 → Board: camera ↔ each arm’s millimetre frame, projected TCP/base and distance evidence. Used by Board diagnostics, not combat decisions.'],['Separate intent output','tracking_intent_snapshot() · hhh.controller.intent v1: authenticated Player LTX stage/operation/tag/target reports. Intent is not observed completion.'],['Projection report',report('cal2_projection',true)],['Intent report',report('controller_intent',true)],['Provenance',provenance]],
         players:[['Origin','The existing Player LTX controller reports its stages/operations through Auto Pickup and sends robot intent through the existing relay path; gamemaster takeover uses that relay too.'],['Two routes','Stage reports → Auto Pickup → Board diagnostics. Control intent → Dobot Relay; observed arm feedback returns through Board.'],['Y commands','Virtual placement, aiming, Start and pause from Y go to Game validation instead; they are not robot commands.']],
-        preview:[['Route','Physical camera → Webcam → Camera Calibration corrected video → Board tab preview.'],['Information','Read-only corrected MJPEG pixels, aligned with Board overlays. Board resolves the existing preview_snapshot() / hhh.camera-preview v1 route.'],['Not a Game input','The preview is an on-demand display branch. This window does not open it, measure its frames, or claim it is connected. Simulation does not display live video.']],
+        preview:[['Route','Physical camera → Webcam → Camera Calibration corrected video → Board preview → Y operator view.'],['Information','Read-only corrected MJPEG pixels, aligned with Board overlays. Board resolves the existing preview_snapshot() / hhh.camera-preview v1 route.'],['Not a Game input','The preview is an on-demand display branch. Y displays this feed in physical mode. Preview status comes from the image load/error events and Game input health; it is not a video frame-rate measurement. Simulation does not display live video.']],
         settings:[['Origin','Game-owned data/settings.json plus built-in defaults and operator changes from the Photon Game settings tab.'],['Output','photon.game.settings v1 in configuration; Game validates changes and freezes active-run settings.'],['Virtual alternative','Y’s operator commands can provide virtual placement/aiming instead of physical Board observations. Board can separately provide explicitly simulated observations.'],['Boundary','Y receives configuration, not a settings file. This diagnostic window edits nothing.']],
         level:[
           ["Connection","Level → Game → Y. Upstream status is reported by Game, not independently inspected."],
@@ -183,16 +185,16 @@
           ["Status",state?.inputs?.level?.error || (state?.inputs?.level?.pending_revision ? `Revision ${state.inputs.level.revision}; revision ${state.inputs.level.pending_revision} waits for reset` : m.level.text)],
         ],
         board:[
-          ["Connection","Board → Game. Y receives the resulting gameplay and inputs.board status, not raw tracking or camera video."],
-          ["Information","Normalized tags and arm observations feed physical play. Cal 2 projections and LTX intent feed Board’s optional diagnostics; raw tracking, calibration values and camera video stay out of Game/Y."],
+          ["Connection","Board → Game supplies gameplay and inputs.board health. Board tracking_snapshot() separately supplies Y’s display-only marker diagnostics through named markers events on the same browser stream."],
+          ["Information","Normalized tags and arm observations feed physical play. Cal 2 projections and LTX intent feed Board’s optional diagnostics. Y’s marker projection contains only corrected marker positions, corners, visibility, frame/sample times and errors; arm projections and calibration values stay in their owners."],
           ["Source health","The bounded upstream input-health summary is forwarded through Game, from its existing Board read. No extra sampling."],
           ["Provenance",provenance],
           ["Last report",board?`Status: ${board.status} · source: ${board.source || "not supplied"} · revision: ${board.revision ?? "not supplied"}`:"No Board report in Game output"],
           ["Status",board?.error || (state?.virtual_play?"Virtual play does not require Board. Upstream report may describe its last read.":m.board.text)],
         ],
         game:[
-          ["Browser input",`${endpoint("/api/state")}\n${endpoint("/api/events")}`],
-          ["Server source","Y’s server adapter forwards Game.game_snapshot() and Game.game_events(). No extra diagnostic requests."],
+          ["Browser input",`${endpoint("/api/state")}\n${endpoint("/api/events?markers=1")}`],
+          ["Server source","Y’s server adapter forwards Game.game_snapshot() and unchanged Game.game_events(). Display-only Board marker events share that connection; they do not enter Game’s simulation or add a browser request."],
           ["Information","phase, paused, wave, enemies, towers, projectiles, effects, core_sequence, level, configuration, presentation and input health (including inputs.board.upstream)"],
           ["Observed feed",`${telemetry.events} SSE messages this page session · latest input: ${telemetry.via}${m.age===null?"":` · ${m.age.toFixed(1)} s ago`}`],
           ["Status",telemetry.error || state?.error || m.health],
@@ -248,6 +250,7 @@
         render();
       },
       connection(status,error=null){telemetry.connection=status;telemetry.error=error;if(status!=="open")telemetry.eventAt=null;render();},
+      camera(value){telemetry.camera={...value};render();},
       assets(value){telemetry.assets={...value};telemetry.assetAt=performance.now();render();},
       focus:focusNode,
       destroy(){destroyed=true;clearInterval(timer);observer.disconnect();dialog.removeEventListener("close",closed);if(dialog.open)dialog.close();},

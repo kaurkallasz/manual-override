@@ -41,7 +41,7 @@ class MobileCue:
         for i, row in enumerate(rows):
             if not isinstance(row, dict) or set(row) != {'piece', 'destination'} or any(type(v) is not int for v in row.values()):
                 raise ValueError(f'Row {i+1}: select a piece and destination code.')
-            if row['piece'] not in arm.tags or engine.atom_owners.get(row['piece']) != 'green':
+            if row['piece'] not in arm.tags or engine.atom_owners.get(row['piece']) != arm.side:
                 raise ValueError(f'Row {i+1}: piece is unavailable or belongs to another team.')
             if row['destination'] not in destinations:
                 raise ValueError(f'Row {i+1}: destination marker is unavailable.')

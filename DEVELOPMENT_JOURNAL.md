@@ -1,6 +1,6 @@
 # HHH Gamemaster development journal
 
-Last updated: 2026-09-22, through commit `cd00d97` plus the current uncommitted mobile LTZ, Photon Game, shared renderer, and camera-presentation changes. This continuation covers developments since the last dated entry, 2026-09-08. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
+Last updated: 2026-10-01, including the approved mobile progression/calibration implementation in the working tree after `2ea92b5`. Earlier entries preserve their original evidence and attribution. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
 
 This journal explains how the repository reached its current design: what changed, what was learned, why the next decision followed, and whether the repository records the work as human-only or AI-assisted. The reconstruction is based on commit history and messages, the current README and specifications, implementation diffs, calibration files, and local Laser Tag X run and score logs.
 
@@ -1586,3 +1586,653 @@ dependencies. No live game run ID applies: these were isolated deterministic
 checks, not a physical trial. No hub restart, deployment, saved-player mutation,
 or new implementation commit was performed. This continuation explains existing
 code and specifications; it does not introduce new required behavior.
+
+## 2026-10-01 — Complete both-player control progression and mobile calibration
+
+**Trigger and human decision:** the user approved implementation of the control
+progression/calibration plan and explicitly required Game Master test unlocks to
+work for both players at every selected tier. The user specified mandatory tiers
+until advancement, three XYZ wins before calibration, Green first on the unified
+field, a shared 30-second upgrade interval with extended calibration waiting,
+saved rig bounds, player-owned upgrades, combined scores, graphs and adjustable
+per-level settings. The approval plan and implementation/verification report are
+saved in `docs/CONTROL_PROGRESSION_CALIBRATION_PLAN.md` and
+`docs/CONTROL_PROGRESSION_IMPLEMENTATION.md`.
+
+**Implementation choices and ownership:** Green and Purple share the mobile
+presentation and controller assets. Progress v2 owns profiles, mandatory current
+tiers, transactionally saved rewards/purchases/history, and roster reservations.
+Game owns the shared timer, journey, immutable selected presets, and practice
+grants. Auto Pickup owns fresh six-point and raised-Atom calibration evidence,
+rig commits, leases and movement bounds; Playfield owns exclusive field display
+and green saved-marker glows. Board remains the physical placement authority,
+and the existing LTX/Relay route remains the only physical command path.
+Calibration uses preview followed by explicit Move, with independent height and
+pump commands, measured pickup/lift and stable placement evidence.
+
+Touched legacy boundary violations were repaired: both teams consume owned
+shared presentation assets, calibration/display state uses public versioned
+contracts, Camera Calibration no longer reads Webcam's private manager/tracker,
+and Relay's watchdog is hub-lifecycle owned. Camera and lens files use atomic
+replacement. Safety rejects unavailable, stale or malformed prerequisite data;
+missing stop acknowledgement retains the active side's field reservation.
+Retries and restarts reconcile durable result/lesson receipts without duplicate
+rewards or repeating an already completed Green turn.
+
+**Balance evidence and limitation:** the supplied pickup CSV contains 38 June
+results for 17 display names and no tier/settings/loadout metadata. The requested
+August window is absent. No pooled median or inferred measured method gains were
+used. Explicit provisional tier count/pace factors 1.00/1.08/1.16/1.24 were tested
+with the actual engine and the same assumed placement trace at base and maximum
+upgrades. All eight tier/loadout cases and a slower-Purple case won; the base
+Joint run took 1,414.4 active seconds. `docs/CONTROL_BALANCE_REPORT.json` preserves
+the CSV rows/hash, settings, seed, actions, and results. Physical accuracy,
+human completion rates, and maximum-upgrade ease require the documented pilot.
+
+**Verification:** 402 Python tests, 36 JavaScript tests, both-team fake-relay
+bridge checks, and a Chrome fixture passed. The browser verified actual GM
+selection of Joint, XYZ, Targeting and Cue for each team, plus mobile score/time
+graphs, comparable-cohort means, keyboard details, purchases, filters, marker
+glows and waiting screens. Camera public-contract, failed-persistence, roster,
+exclusive-field and cross-owner recovery tests passed. The hosted export bundles
+the journey UI inside the established client allowlist. Static syntax/whitespace
+checks passed. These were isolated fixtures with temporary stores and synthetic
+camera evidence; no live hub, robots, deployment or human game was run.
+
+**Human decision owner:** the requesting user; their approval is explicit in the
+current task. No identity is inferred from historical gameplay names.
+
+**AI participation:** OpenAI Codex implemented this continuation and performed
+the recorded checks. Pre-existing working-tree changes were preserved and are
+not attributed retroactively to this task.
+
+**Implementation commit or PR:** uncommitted after `2ea92b5`; no PR created.
+
+### 2026-10-01 — Correct unlock propagation in ordinary player windows
+
+**Trigger:** the user reported that Game Master control unlocks did not reach
+players and that the joint schematic appeared only in Mobile LTZ.
+
+**Finding:** ordinary `ltx/?ltz=1` controls still subscribed to Progress's earned
+tiers; Game's practice override was absent from that input. The default LTX tab
+also selected the older Laser Tag X view. The previous ordinary-controller smoke
+script read a legacy controller copy, while the newer checks exercised the
+mobile adapter. Consequently the earlier passing tests did not establish this
+ordinary-window behavior.
+
+**Correction:** both LTX tabs default to LTZ controls and retain a separate
+Laser Tag X link. Ordinary and embedded LTZ controls consume the same scoped
+Game facade and SSE messages, stop superseded intentions, restore mandatory
+saved tiers when practice ends, and retain calibration exclusivity. Game's
+small preview stream now publishes its named v1 contract and practice tier;
+both LTZ Score windows display practice access without persisting it as earned
+progress. Purple is also included in the hub's default Mobile LTZ API sharing.
+
+Both player windows reuse the pure mobile joint schematic, contained inside
+their joint panel. Its gestures update existing sliders and the same guarded
+joint queue; white selected targets remain separate from red measured feedback.
+Stale/disconnected feedback and unavailable game scopes disable gestures. The
+mobile schematic's existing framing is preserved. Old Auto Pickup name prompts
+and Laser Tag X reset watching no longer interfere with LTZ player controls.
+
+**Verification:** 402 Python tests and 36 JavaScript tests passed. The corrected
+ordinary-controller smoke reads the actual served shared source and covers both
+teams in ordinary and embedded modes, all four practice tiers, restoration and
+calibration waiting. A new Chrome regression clicks the actual Game Master
+unlock button and verifies both ordinary controllers and both score windows,
+schematic keyboard commands through a fake transport, complete arm framing,
+and override removal. The existing mobile progression browser regression and
+both-team physical bridge smokes also passed. Screenshots were inspected.
+Fixtures use temporary profiles, synthetic imagery, and fake robot routes;
+no hardware was moved or live hub restarted.
+
+**Decision owner / implementation:** the requesting user authorized diagnosis
+and correction; OpenAI Codex implemented and verified it. Changes remain
+uncommitted after `2ea92b5`.
+
+## 2026-10-01 — HTTP profile creation and selectable test players
+
+**Trigger:** user reported `crypto.randomUUID` undefined when Green creates a
+player and requested a selectable profile whose testing does not affect later
+statistics. Both Score pages and the mobile creation/purchase handlers depended
+on the missing method.
+
+**Change:** shared receipt helper supports native UUID, random bytes and a
+timestamp/counter/random fallback. Both launch bundles and hosted exports include
+it. Profile creation can select the authenticated side atomically; failed roster
+selection rolls back the new profile. Added a mobile menu entry for the profile,
+upgrade and statistics panel during Game Master practice.
+
+Progress owns two stable built-in test profiles, one named for each team. Their
+classification is based on owned IDs, not client input or display names. Game
+and Progress force any mixed or all-test roster to practice. No participant
+earns score, currency, attempts, wins or tiers from it; default Scored history
+and difficulty cohorts exclude these results. Separate Practice history retains
+them. Test progress stays at baseline and testing uses existing Game Master
+control/loadout overrides. Backups preserve classification. Browser switching
+uses Practice history and prevents old profile/filter responses from appearing
+after a selection change.
+
+**Architecture:** Progress retains sole ownership of profiles and eligibility;
+Game reads its validated public v2 roster and owns gameplay/delivery. Shared
+JavaScript generates receipts and presents state only. Existing side auth,
+server input validation, SQLite transactions, SSE and robot paths are retained.
+
+**Validation:** full 410-test Python suite passed; two added side-authenticated
+API tests and affected bundle/export checks passed. All 39 JavaScript tests
+passed. Chrome exercised all four Green/Purple Score/mobile creation and test
+selection flows with UUID disabled, plus the no-Web-Crypto Score fallback.
+Existing both-team Game Master tier matrix, ordinary controls, mobile history
+and calibration/waiting regressions passed without page errors. Temporary
+stores/synthetic imagery/fake robot transport only; screenshots inspected.
+No live hub restart or hardware movement. User authorized this correction;
+OpenAI Codex implemented it in the existing uncommitted worktree.
+
+## 2026-10-01 — Progression review: target display, live control changes and Start
+
+User requested review against the mobile progression/calibration approval plan,
+a compact player-name box, repairs to Game Master mode switching/Start, and the
+actual Auto PP Cal 2 targets during calibration. OpenAI Codex implemented these
+corrections in the existing dirty worktree, preserving unrelated edits.
+
+The most direct calibration failure was the ID-less fixed Auto PP Cal 2 template
+being passed to Playfield's ID-requiring replacement API. The lesson now adapts
+that owner-held template, preserves target geometry and camera settings, and
+shows it in both Y views before waiting for measured readiness. Captures use
+visible green surrounds with crisp ArUcos. Mobile clears combat overlays and
+reframes corrected video. Reservations without a completed lesson can be safely
+cancelled after stopped-motion acknowledgement; pre-activation frames cannot
+be captured.
+
+Continuous physical telemetry no longer suppresses mode synchronization. Y
+retains edited test selections and rejects old stream snapshots. Both players
+receive all four GM practice tiers. Practice Start uses the proper scoring mode,
+reuses an existing frozen roster, enters the playing journey, and closes the
+lobby; calibration remains exclusive. The live recovery conflict was reproduced
+in an isolated database and repaired through monotonic owner reconciliation,
+without manual edits to venue scores. Journey maintenance is independent of
+score delivery failure.
+
+A pre-existing calibration test left AREAS_PATH unisolated and overwrote the
+saved Playfield file. Tests now redirect every persistence path. The original
+six-target file was restored from the running owner's read-only snapshot, with
+both copies retained in /tmp. No calibration model or player database was changed
+for that repair. No live movement or venue restart was performed.
+
+Verification and honest remaining gaps are recorded in
+`docs/CONTROL_PROGRESSION_IMPLEMENTATION.md`: 422 Python tests, 39 JavaScript
+tests, both fake-relay bridge smokes, actual-button Chrome checks, and visual
+inspection. Physical alignment/pickup trials, hosted physical parity, complete
+intro/pre-Start presentation, and human balance acceptance remain open. A normal
+hub restart and both-player refresh are required to load the updated code;
+stale camera input continues to block physical Start with a visible reason.
+
+### 2026-10-01 — XYZ arrows and physical mode-switch connection repair
+
+The shared mobile UI now has X/Y ±10 arrows and Z ±1 arrows; Targeting and Cue
+share the height arrows. Height uses measured robot XY through the existing LTX
+planner and is disabled during cue execution/pause. Fixed steps, clamping,
+delayed feedback and short landscape layout are covered by regression checks.
+
+Reproduced the mode switch clearing a healthy mobile connection. The bridge now
+invalidates old movement, confirms Stop and preserves the session; movement is
+disabled during the handoff and a failed Stop still disconnects. Known Cartesian
+boundary rejections retain a held session, while unknown faults fail closed.
+The live read-only snapshot showed Green connected/enabled with fresh feedback
+but the game overrun; ended-game reconnect now gives an explicit Reset message.
+No live motion or venue restart was performed. Module ownership, Game admission,
+Cal 2 validation and the one existing relay delivery path are preserved.
+
+Validation passed: 61 mobile Python tests, 39 JavaScript tests, both team bridge
+smokes, arrow/physical/base/limit smokes, and the complete physical/virtual Chrome
+matrix with fake hardware. Screenshots checked at 390×844, 844×390 and 667×320.
+Reload the hub normally and refresh both player pages to pick up the frozen
+client bundles. No physical accuracy trial was performed.
+
+### 2026-10-01 — Cartesian boundary recovery and tenfold Fine tune arrows
+
+The user confirmed that refreshing the phone resolved the missing arrows seen
+in QuickTime. The shared mobile layout was left intact. Fine tune now divides
+X/Y arrow steps from 10 to 1 and height from 1 to 0.1, including Targeting/Cue,
+with matching visible numbers and accessibility labels.
+
+Cartesian path validation previously rejected the measured starting pose after
+a boundary overshoot, preventing recovery even after reconnect. The planner and
+relay now allow only a bounded (up to 10 mm), monotonic retreat to a valid target.
+The planner uses the same captured robot-space hull as the calibration owner's
+relay envelope. Known geometry rejections preserve a held session; missing
+calibration, failed holds, feedback faults and unknown failures remain fatal.
+XYZ/height use direct-path holds; Targeting/Cue retain calibrated detours. Mobile
+watchdog holds cannot start a competing recovery move, and preflight/planning
+cannot move the arm before the route has been checked. Matching fresh bridge
+progress extends long XYZ replies only up to a three-minute absolute deadline.
+
+Validation: 61 mobile Python tests, four relay Cartesian recovery tests, one
+reservation test, 45 JavaScript tests, both team bridge smokes and focused step/
+physical/recovery smokes passed. Actual mobile/LTX browser flows exercised both
+teams' normal/fine increments, mode changes, XYZ reconnect, boundary retreat,
+Targeting detours and fatal fault handling with no page errors. All robots and
+movement were simulated; fixture data was temporary. No venue restart or live
+robot motion. Module ownership and the single existing relay path are preserved.
+Normal hub restart and phone refresh are required for the frozen mobile bundle.
+
+### 2026-10-01 — Targeting Go button and preset-column precision
+
+Replaced the wrapping Move to preview label with Go beside the Suck/Blow stack.
+Go matches the stack's width and combined height, remains dim until a new preview
+can be submitted, and glows green when ready. Submission clears readiness at
+once; active gestures, pending XYZ, mode switches and unavailable controls keep
+it disabled. The existing command, calibration and relay path are unchanged.
+
+In Targeting, the same Fine tune control moves below preset 3 in the numbered
+column, retaining its event handling and tenfold precision. Compact landscape
+spacing keeps it above Go and the pump controls; XYZ/Cue retain their own dock.
+Updated the player hints to say Go and describe the current fine arrow steps.
+
+Green and Purple passed touch preview/submission, glow state, fine drag, preset,
+pinch/cancellation and five portrait/landscape layout checks in the isolated
+virtual fixture. Screenshots were inspected, including the short landscape
+layout. Client bundle tests (4), XYZ arrow smoke, syntax and whitespace checks
+passed. No live robot motion or venue restart; normal hub restart and refresh
+are needed to load the frozen mobile bundle.
+
+### 2026-10-01 — XYZ directions follow the player's viewport
+
+Purple defaults to a 180° playfield rotation, but XYZ sliders and arrows were
+still applying unrotated map directions. The shared mobile UI now maps X/Y range
+values and arrow deltas through the viewport direction. Slider bounds, fills,
+actual-position markers and off-range indicators use the same transform, in
+normal and fine modes. Rotating the view refreshes the controls without sending
+a move. Height remains upright; readouts and command targets keep canonical map
+coordinates. Calibration, safety validation, module ownership and the existing
+serialized robot-control path are unchanged.
+
+Validation: native touch drags moved the virtual arm in the displayed direction
+for both players at 0°/180°, with normal/fine ranges, aligned measured markers,
+preserved sessions and no movement caused by rotation or rendering. The real
+mobile/LTX browser suite with fake six-point calibration and fake robot feedback
+passed both players' increments, GM mode changes, layouts, XYZ reconnects and
+virtual controls. Arrow and viewport smokes, four frozen-client bundle tests,
+syntax and whitespace checks passed; browser suites had no page errors. A
+portrait screenshot was inspected. No live robot motion or venue restart.
+Normal hub restart and phone refresh load the new frozen bundle.
+
+### 2026-10-01 — Purple calibration placement and orientation audit
+
+The lesson loader copied the fixed Auto PP Cal 2 targets without the standalone
+loader's orientation adjustment. Purple now receives the 180°-rotated physical
+target positions; Green receives the normal layout. The saved template's view
+is accounted for exactly once. Marker IDs, green capture glows, camera settings
+and the single Playfield display reservation are retained. Drafts record their
+display orientation, preserve raw corrected-camera measurements, and refuse to
+resume old captures after their target orientation changes. Previously committed
+rig calibration is retained until a replacement draft validates.
+
+The audit also corrected ordinary LTZ's Purple camera default and isolated its
+manual view preference from commissioning settings. The hidden mobile bridge
+stays in canonical coordinates. Cue marker-label placement now follows the
+rotated marker edge while keeping text upright. Targeting, Cue waypoints, turret
+aiming, reach/exclusion geometry and raised-Atom correction already use matching
+forward/inverse transformations. Height, joints and menus stay upright.
+
+Validation: 41 Python checks (display, journey, capture and frozen client), 13
+JavaScript geometry/viewport checks, Purple bridge and LTZ/XYZ smokes passed.
+Isolated browser flows passed GM calibration for either/both teams, target
+rotation, durable glow and restoration; ordinary player tiers/view overrides;
+and Purple Targeting, Cue waypoints, label positioning and turret control. No
+page errors; projected Green/Purple screenshots were inspected. Sensors and
+robot transport were fake, with no venue restart or physical robot movement.
+The full audit is recorded in docs/CONTROL_PROGRESSION_IMPLEMENTATION.md.
+Restart the hub, refresh player pages and reopen an old captured Purple lesson
+before recapturing its six targets.
+
+### 2026-10-01 — Restore the GM camera during calibration
+
+Removed the target-renderer overlay from the GM stage: calibration now uses the
+existing corrected Board camera preview at full frame, including outer points.
+Only the external Y screen projects Auto PP Cal 2 targets, using a read-only
+Playfield presentation mode so wheel, drag and keyboard events cannot alter the
+projection. Camera failure shows the existing retry state instead of a synthetic
+target image. The regular Playfield editor keeps its controls.
+
+Fixed restart recovery where a persisted Green display reservation appeared to
+be an active lesson despite its revoked process epoch. The owner explicitly
+requires fresh activation; Game retries the same draft only with current
+camera/arm evidence. GM practice calibration selection can safely switch to
+another side through the existing stopped-motion release. Earned Green-first
+progression is unchanged. Test failures now appear beside the GM controls.
+
+Validation: 40 Python tests and the full isolated progression browser flow
+passed. Browser checks covered both players/all control overrides, practice
+Start, Green/Purple/Both calibration, full-frame GM camera, Purple target
+rotation, captured glows, locked projection, practice switching and restoration.
+Screenshots were inspected; no page errors. Syntax/whitespace checks passed.
+Tests used temporary data and fake camera/robot feedback. No live hub restart or
+physical robot motion. Restart the hub and refresh GM/external display pages to
+load the backend and presentation changes.
+
+### 2026-10-01 — Game-first loading and offline screen navigation
+
+The prior Green practice session persisted on page load, and selecting another
+side or cancelling still required live arm Stop feedback. With the arm offline,
+that trapped the external projection on Green. The controls were also buried
+below the large camera/turret panels. Moved Game screen, Green, Purple and Both
+above the camera, with visible selection/errors. Loading the Y operator page
+now requests Game's game-screen transition; the external projector remains a
+follower. Earned lessons pause without losing their draft or granting progress,
+and Resume player calibration restores the saved sequence.
+
+Added owner-managed deferred display release: revoke lesson access, persist any
+unconfirmed arm stop, then restore projection. The durable pending-stop gate
+blocks both arms, heartbeat renewal, new lesson activation and physical Start
+until Relay confirms stopped motion. Display-only previews require no arm
+connection. Operator Connect remains usable to restore feedback without enabling
+or moving an arm. The existing worker handles stop recovery in the lobby, too.
+Normal earned handoff still requires measured Stop before advancing.
+
+Validation: 93 Python tests passed plus the isolated browser progression flow,
+including offline Green → reload → game, Purple/Green target switching, exit,
+retained motion blocking, feedback recovery, both-player control overrides and
+Start. No browser errors; toolbar screenshot inspected; whitespace checks pass.
+No live robot motion or venue restart. Restart the hub and refresh the GM page
+to load these Python changes; the page then selects the game screen itself.
+
+### 2026-10-01 — Repair stale lesson ID and verify calibration buttons live
+
+Reproduced the reported Green button failure on the live GM page. Journey entered
+calibration, but maintenance raised `hhh.relay.stop v1 unavailable` before loading
+targets. Restart had cleared the lesson's active side while retaining its old
+active ID; idempotent cancellation left that historical paused draft eligible
+for maintenance. Restart now clears both fields, release cleans an orphaned ID,
+and maintenance handles only a turn with an active side. Durable deferred stop
+requirements remain independent. The GM status now distinguishes target readiness
+from selecting a side and no longer masks display errors with a hardware notice.
+
+Validation: 45 targeted Python tests and the isolated browser progression flow
+passed, including the actual restart-before-cancellation ordering and legacy ID.
+Both live relay arms reported disconnected. Restarted the hub using its existing
+Python runtime, refreshed the existing operator and external pages, and clicked
+Green → Purple → Game. All six live targets appeared; Purple was rotated 180°;
+Game restored successfully. The old external tab had loaded the earlier inline
+renderer and needed that refresh. Screenshots saved under /private/tmp. No arm
+movement or calibration captures were sent. Left the live projection on the game
+screen; its pending Green stop inhibit is preserved until feedback confirms it.
+# 2026-10-01 — Mobile calibration selection and partner upgrades
+
+Fixed the phone routing bug where a selected calibration with no active arm
+grant showed both players a blocking "Waiting for calibration to finish
+calibration" dialog. Game now exposes the selected queue side separately from
+motion authority; Mobile LTZ API returns its matching draft and explicit capture
+readiness. The selected player sees the six-point Auto PP Cal 2 lesson with
+XYZ presentation, readiness errors and a Hide/Show steps control. The partner
+sees Upgrades and a named waiting message. Capture stays disabled until the
+existing owner grant is live. No robot-control or stop checks were relaxed.
+
+57 targeted Python tests and both browser suites passed; the final phone layout
+also passed the full route regression. Verified offline/restart cold opening,
+both sides, capture recovery, glows, collapse/expand, and upgrades with/without
+a selected profile. Restarted the live hub after confirming both arms were
+disconnected, checked real Green/Purple lesson and waiting screens, and left
+Green calibration selected. No live movement or capture was requested.
+
+# 2026-10-01 — Mobile calibration setup, marker labels and saved measurements
+
+Separated connection commissioning from the active calibration movement grant.
+The selected player can use the existing Relay connect/acquire/enable sequence;
+initial XYZ captures use robot millimetres before a camera fit exists. Movement
+still needs the same exclusive, fresh, unpaused owner grant, validated Relay path,
+radial/workspace/Z limits and pending-stop recovery. No sibling file writes,
+second driver or browser-owned progression were introduced. GM and earned
+calibration both use the same Game/Cal 2 session pathway.
+
+Y now suppresses cached 40–59 overlay geometry and controls during calibration,
+preserving the cache for gameplay. The phone shows fresh green marker numbers;
+Playfield presentation adds upright white numbers outside each code. Moved the
+collapsible lesson to the upper right, left of Y. Added side-scoped, read-only
+saved calibration history and immutable archives, including a rig before it is
+replaced. Owner contract and hosted gateway allowlists were documented/updated.
+
+The user confirmed four outer samples at 3 cm, matching Auto PP Cal 2. Capturing
+an outer point records the ground view; selecting 31/35/33/34 then tapping the
+raised physical tag in video records the corrected-camera position. Pan/pinch do
+not capture; Purple rotation is inverted once. Old raised samples invalidate on
+recapture, and commit still validates the six-point and four-point transforms.
+
+Validation: 80 targeted Python tests passed, both arm-bridge smoke tests passed,
+and the real-route browser regression passed all four GM control overrides for
+both players, Start, projector orientation/glows, transitions, pending stops and
+safe cancellation. New fake-hardware browser coverage passes offline Connect,
+raw XYZ and 10x Fine tune, all six captures, all four 3 cm video taps, commit and
+per-arm history for both players. Visual inspection corrected two problems the
+initial assertions missed: CSS still hiding numbers, and sprite height failing
+to inherit the projected marker size. The final screenshots show both fixes.
+
+The live hub was restarted after confirming both real arms disconnected. Y opens
+the game first, then Green calibration was restored; the live phone shows the
+existing saved rig in its dropdown. Multiple desktop live streams saturated the
+browser's same-origin connection pool during further live phone verification;
+all movement tests used the isolated fixture, never real hardware. Phones need
+a refresh to load the newly versioned bundle.
+
+# 2026-10-01 — Covered calibration-marker capture
+
+Fixed the requirement that marker 30 still be detected after the arm was placed
+on top of it. Cal 2 now proactively caches the six static target positions using
+the existing Game maintenance tick. Capture uses the last valid optical position
+from this activation with a fresh measured arm pose. Cache entries are ephemeral
+and scoped to side/session/epoch, layout, projection settings, camera correction
+and image size; camera outages and scope changes invalidate them. The phone shows
+how many positions are located and retains cached target labels during occlusion.
+Raw live arm/camera freshness, exclusive turns and movement checks remain intact.
+
+Tests cover complete occlusion for Green and Purple, current pose vs old optical
+timestamp, fresh reobservation, perspective ground samples, glow preservation,
+never-observed/malformed detections, stale hardware, camera outage, changed lens,
+resolution/layout/reservation, restart and reactivation. The real-route browser
+fixture now runs the actual measurement/cache code with fake sensors: both phone
+flows pass with marker 30 hidden after all six targets are located, followed by
+six captures, four raised samples, commit and saved history. No live capture,
+robot move or enable command was used during validation.
+
+Validation completed with 75 targeted Python tests plus the complete two-player
+calibration and GM progression browser regressions. Before reload, both real arm
+followers were stopped with no controller lease; Green was in backdrive. Restarted
+the verified hub in its existing Python runtime to load the fix, without replacing
+any saved capture data. The temporary fake-hardware server was stopped. Refresh
+and reconnect the phone, let every target be seen once (6/6 located), then the arm
+may cover a cached marker during capture.
+
+# 2026-10-01 — Identify calibration markers before connecting the arm
+
+Corrected two causes of missing marker 30: optical memory previously began only
+after fresh arm feedback activated a lesson, and it required exactly zero marker
+age although Webcam reports elapsed polling time for visible detections. Cal 2
+now prepares its runtime cache when the display is reserved and uses Webcam's
+latest-frame visible IDs with Camera Calibration's corrected coordinates through
+validated public contracts. Game's existing maintenance tick accumulates all six
+positions while disconnected. Same-display activation/reconnection preserves
+them; offline retries no longer reload the targets. Release, restart, camera
+outage and optical/layout changes still invalidate the runtime cache.
+
+The owner exposes side-scoped marker preparation independently of the live lesson
+grant. Mobile shows each identified number in green before Connect and says
+"Ready to capture" at 6/6. The API also carries cached overlay labels before a
+motion session exists. Backend captures require all six positions plus the
+existing fresh camera, enabled-arm feedback and live lesson permission. No robot
+driver, motion endpoint or sibling file access was added.
+
+Validation: 79 targeted Python tests passed, including offline preparation for
+both players, nonzero polling age, held detections, all-six gating and cache
+preservation. Both real-route mobile browser flows passed: partial green glow,
+all-six readiness while disconnected, marker 30 hidden before Connect, successful
+six-point captures, four raised samples and saved history. The shared progression
+browser regression also passed for all four control methods on both phones.
+After confirming idle/stopped followers without controller leases, restarted the
+local hub using its existing Python runtime. The live Green page shows all six
+real markers identified, green glows and "Ready to capture" before connection.
+No live robot move, enable or capture was used for verification. Phones need a
+refresh and reconnect to use the update.
+
+# 2026-10-01 — Compact calibration captures and optical crosshair
+
+The shared phone UI now hides X/Y adjustment controls during six-point and raised
+tag calibration, retaining height and its fine-tune switch beside the saved
+height buttons. The six point-capture buttons remain visible with instructions
+folded. After the sixth arm capture, they are replaced by the four raised
+reference buttons (31, 35, 33, 34) and an independent calibration crosshair.
+
+As clarified by the user, this crosshair only records optical sample locations:
+place a physical 100-series ArUco tag 3 cm above a ground reference, tap the image
+to position the crosshair, then tap the reference number to save the existing
+`raised` command. A tap alone never saves a sample or moves the arm. Each saved
+sample gains a checkmark; the next requires another explicit camera tap. The
+four reference buttons remain accessible while instructions are folded, with a
+completion hint directing the player back to height capture and final save.
+Purple uses the existing viewport inversion once for both crosshair display and
+recorded coordinates. Backend capture and motion authorization are unchanged.
+
+Validation: 34 targeted Python contract/client tests and syntax checks passed.
+Both real-route phone flows passed with all six captures and all four raised
+samples performed while folded, hidden XY controls, retained 0.1 mm height fine
+tune, correct visible crosshair alignment in both orientations, no robot move
+requests from image taps or raised capture, and saved history. The shared
+progression browser test also passed for both players, all four control modes,
+upgrades, graphs and the partner waiting screen. All movement testing used the
+isolated fixture and fake hardware.
+
+Loaded the UI by restarting the verified local hub with its existing runtime,
+after checking both followers stopped and no controller lease. Live Green kept
+its six completed arm points and displayed the new four-reference crosshair UI;
+folding the instructions retained all four buttons. Its camera was on Camera 0
+and showing a person instead of the playfield, so no live sample was recorded or
+camera selection changed. Reported that the playfield camera must be selected
+before continuing. Temporary browser checks and the fake-arm server were closed.
+
+# 2026-10-01 — Game Master saved calibration preview and restore
+
+Laser Tag Y now offers per-arm saved calibration selection, a live-camera overlay
+preview and explicit Apply. The newest complete calibration is the default;
+applying an older capture preserves its original timestamp, and an explicit
+choice survives restart. Completing a fresh mobile lesson installs the new rig
+and resets that arm to the latest default. Six numbered ground squares and four
+dashed 3 cm perspective samples share the corrected camera image rectangle;
+Purple uses canonical camera coordinates without a second rotation. Preview is
+read-only and its camera/overlay pause on stale Board evidence from the existing
+SSE stream, including when a video connection leaves a last decoded frame.
+
+The Game Master facade reads Cal 2 history through its enabled public contract.
+Apply is serialized through Photon Game/Journey, rejects running games, and
+returns from calibration without awarding or bypassing required lesson credit.
+Cal 2 alone validates and persists measurements. It checks the source revision,
+finite complete geometry/heights, known camera/robot bindings and fresh Relay
+connection states. Both connected arms must confirm Stop because transport Z is
+shared; durable stop gates inhibit new motion during atomic replacement. Prior
+source records remain immutable. The existing mobile rig revision path reloads
+measurements, with reconnection required after controller lease revocation.
+
+Validation: 76 targeted Python tests passed, including history restoration,
+restart persistence, both arms, invalid/stale inputs, failed stops, shared-height
+archival and preservation of earned progression. The real-route Game Master
+browser test passed for Green and Purple: latest default, read-only preview,
+correct camera coordinates, older/latest Apply, camera loss/recovery, exit from
+practice calibration and running-game rejection. The full mobile six-point plus
+four-raised-sample browser flow passed for both players and confirmed fresh
+commits become the latest applied rig. All movement/capture tests used temporary
+files and fake arms. Existing real Green and Purple saved rigs also pass restore
+validation. JavaScript syntax and git whitespace checks passed.
+
+Deployment: verified both physical arms disconnected, followers stopped, pumps
+off and no controller leases, then gracefully restarted the exact existing hub
+runtime (new PID 83955). Reloaded the real Game Master page and verified Green
+and Purple each list their existing saved rig, default to Latest and render
+six ground plus four raised overlays over the current corrected camera. No real
+Apply, capture, enable or move was sent. Returned the UI to Game screen with
+Green/Latest selected. An existing Green pending calibration-stop hold remains
+visible and requires reconnecting Green before an Apply can proceed; reported
+this instead of weakening the durable stop requirement.
+
+# 2026-10-02 — Draggable calibration crosshair and explicit completion
+
+Raised-sample calibration now supports dragging the optical crosshair with
+Targeting's 32 px grab radius, retained grab offset and tenfold Fine tune scale.
+The same viewport inversion handles Green/Purple and zoom. Coordinates clamp
+to the image. A second finger hands off to camera navigation; removing it does
+not restart a drag. Optical cancellation clears its own gesture without
+suspending the arm connection. Tap/drag still requires a separate numbered
+reference press to save and never creates robot movement commands.
+
+The previous Validate and save action committed the rig but left completion
+behind mandatory guided arrivals/pickup/placement. Added Complete calibration
+in the persistent quick controls, including with instructions folded and for
+already validated tutorial sessions. Missing targets/heights are listed and
+completion enables only after six arm captures, four raised samples and both
+height captures. The guided movement exercise remains available as optional
+practice. Height capture remains accessible in that optional stage.
+
+The new Game command asks the Cal 2 owner to validate/commit measurements and
+create an explicit measured-target completion receipt. It uses the existing
+progression/turn path and strict Relay stop before handoff: Green to Purple, then
+the existing upgrade/ready deadline; GM practice returns without score credit.
+Old saved rigs cannot supply fresh lesson completion. Receipts are idempotent,
+and measurement fingerprints ensure edits after optional save are installed
+before completing. No module ownership or robot-control boundary was changed.
+
+Validation: 92 targeted Python tests passed, including measured completion,
+incomplete rejection, repeated commits, changed heights, Green-first handoff,
+shared deadline, score preservation and failed-stop retry. Both mobile browser
+flows passed real routes with fake arms: regular/fine drag, off-centre grabs,
+Purple inversion, touch cancellation, pinch handoff, saving all samples, visible
+completion while folded and exit from both direct and already validated flows.
+Existing Targeting browser regressions passed for both teams across five
+layouts. No real arm movement or calibration capture was used in verification.
+JavaScript syntax and git whitespace checks passed.
+
+## 2026-10-02 — Publish progression/calibration work and audit with Ponytail
+
+User requested the development-log update, GitHub push and a codebase/Mobile LTZ
+audit against Ponytail, supplying `DietrichGebert/ponytail` when no local skill
+was available. Read its audit, review and base rules at reference commit
+`e3ba2aa6f1e6f0bc4d69eb09c9f0d0a93af56156`, without installing its plugin/hooks.
+The report is [PONYTAIL_AUDIT_2026-10-02.md](docs/PONYTAIL_AUDIT_2026-10-02.md).
+
+The structural scan covered 287 source/test files and 109,393 physical lines
+before adding this audit's regression. The main opportunity is duplicate
+presentation/controller code: about 12,000 lines could be removed through the
+listed consolidations and confirmed unserved-page removal, with no demonstrated
+dependency removal. These are estimates, not applied changes. Mobile LTZ's
+shared frontend and owner boundaries compare well; legacy player Playfield
+Areas still starts saver threads on import and writes non-atomic JSON, and
+older Auto Pickup/Cal 2 presenters still read sibling files. Those outstanding
+violations prevent a whole-repository compliance claim.
+
+Normal correctness review found one remaining issue in the preceding completion
+work: a transport-height update after the countdown expired was absent from the
+UI render signature, and a save response could leave the busy-disabled button
+rendered. Reproduced it with synthetic owner state, added the two measured
+heights to the signature, and rerendered after saves finish. The browser check
+now passes for both teams and for an update received while the save is busy.
+No Ponytail deletion/refactor was applied. Updated the implementation overview
+to reflect explicit measured completion and optional guided movement practice.
+
+Verification: full Python discovery passed 475 tests; Node's test runner passed
+46 tests. The new isolated completion browser regression passed for Green and
+Purple. The full both-player fake-arm calibration browser flow was rerun after
+the final fix and passed: six points, four raised samples, drag/Fine tune,
+folded completion and return to the game, including previously saved tutorials.
+Whitespace checks passed. No robot movement or physical calibration completion
+was performed in this audit.
+
+Operational note from the preceding continuation: hub PID 84651 loaded the
+initial completion/dragging update. Live Green retained its four raised samples
+but still needed pickup and transport height captures. The corrected camera was
+stale; Webcam reported `camera returned no frame`. Reselecting the existing
+camera was attempted before interruption, without verified recovery. This audit
+does not claim that hardware condition is resolved. The final render correction
+needs the normal hub restart and phone refresh because client bundles are frozen
+at startup; the live hub was not restarted during this audit.
+
+Publication scope: code, shared assets, tests and documentation on the existing
+`photon-engine-phase-4` branch, using its configured `fork` GitHub remote. Local
+hub credentials/settings, live calibration models, calibration session data,
+projection session state and the robot command log are deliberately retained
+locally and excluded from the commit.

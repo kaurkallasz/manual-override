@@ -16,6 +16,8 @@ no app.run() of its own — it only runs inside the hub server.
 """
 
 import json
+import math
+import copy
 import os
 import threading
 import time
@@ -55,7 +57,7 @@ bp = Blueprint("playfield_areas", __name__)
 # Coordinates are in scene units (1 unit ~= 10 cm); y is height above the
 # ground plane. `glow` scales the bloom emissive strength (0 = matte).
 _store = {}
-_lock = threading.Lock()
+_lock = threading.RLock()
 _rev = 0          # bumps on every mutation so clients can poll cheaply
 _next_id = 1
 _dirty = threading.Event()   # set on every mutation; a background thread flushes to disk
@@ -96,6 +98,8 @@ NUM_LIMITS = {
 
 
 def _clamp(v, lo, hi):
+    if not math.isfinite(v):
+        raise ValueError('finite numeric value required')
     return max(lo, min(hi, v))
 
 
@@ -138,10 +142,16 @@ def _touch():
 # These let another prototype drive the playfield in-process (same store the
 # REST routes use), so e.g. an animation can spawn and move areas. They mirror
 # the route handlers but take/return plain dicts and never touch Flask.
+def _check_display_access(session_id=None):
+    if _display_session and session_id != _display_session['id']:
+        raise ValueError('Calibration owns the playfield display')
+
+
 def create_area(**fields):
     """Create an area; `fields` may set any of name/x/y/z/size/color/glow/marker."""
     global _next_id
     with _lock:
+        _check_display_access()
         area = _new_area()
         area["id"] = f"a{_next_id}"
         area["name"] = f"Area {_next_id}"
@@ -156,6 +166,7 @@ def create_area(**fields):
 def update_area(area_id, **fields):
     """Set fields on an existing area; returns the area, or None if missing."""
     with _lock:
+        _check_display_access()
         area = _store.get(area_id)
         if area is None:
             return None
@@ -174,6 +185,7 @@ def _prune_links_to(area_id):
 def remove_area(area_id):
     """Delete an area and any links pointing to it; returns True if it existed."""
     with _lock:
+        _check_display_access()
         existed = _store.pop(area_id, None) is not None
         if existed:
             _prune_links_to(area_id)
@@ -186,7 +198,7 @@ def list_areas():
         return [dict(area) for area in _store.values()]
 
 
-def replace_areas(areas):
+def replace_areas(areas, *, _session_id=None):
     """Replace the whole playfield with a saved area list, preserving ids."""
     global _next_id
     if not isinstance(areas, list):
@@ -208,6 +220,7 @@ def replace_areas(areas):
     for area in next_store.values():
         area["links"] = [t for t in area.get("links", []) if t in next_store]
     with _lock:
+        _check_display_access(_session_id)
         _store.clear()
         _store.update(next_store)
         _next_id = max(_next_id, highest_num + 1)
@@ -218,6 +231,7 @@ def replace_areas(areas):
 def add_link(area_id, to):
     """Add a glowing link from `area_id` to area `to`. Returns the area or None."""
     with _lock:
+        _check_display_access()
         area = _store.get(area_id)
         if area is None or to not in _store or to == area_id:
             return None
@@ -229,6 +243,7 @@ def add_link(area_id, to):
 
 def remove_link(area_id, to):
     with _lock:
+        _check_display_access()
         area = _store.get(area_id)
         if area is None or to not in area.get("links", []):
             return None
@@ -280,24 +295,34 @@ def _load_settings():
     return settings
 
 
+def _atomic_write(path, value):
+    temp = path + '.tmp'
+    with open(temp, 'w') as handle:
+        json.dump(value,handle,allow_nan=False)
+        handle.flush();os.fsync(handle.fileno())
+    os.replace(temp,path)
+    fd=os.open(os.path.dirname(path) or '.',os.O_RDONLY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+
+
 def _save_settings():
-    try:
-        with open(SETTINGS_PATH, "w") as f:
-            json.dump(_settings, f, indent=2)
-    except OSError:
-        pass
+    _atomic_write(SETTINGS_PATH,_settings)
 
 
-_settings = _load_settings()
+_settings = json.loads(json.dumps(DEFAULT_SETTINGS))
 
 
-def set_view_settings(**fields):
+def set_view_settings(*, _session_id=None, **fields):
     """Programmatic settings update for sibling prototypes."""
-    global _srev
+    global _srev, _settings
     with _lock:
-        _coerce_settings(_settings, fields)
+        _check_display_access(_session_id)
+        candidate=copy.deepcopy(_settings)
+        _coerce_settings(candidate, fields)
+        _atomic_write(SETTINGS_PATH,candidate)
+        _settings=candidate
         _srev += 1
-        _save_settings()
         out = json.loads(json.dumps(_settings))
     _live.bump()
     return out
@@ -364,8 +389,8 @@ def _snapshot():
     """Everything a client needs to render, in one dict (areas + view settings)."""
     with _lock:
         return {
-            "rev": _rev, "areas": list(_store.values()),
-            "srev": _srev, "settings": _settings,
+            "rev": _rev, "areas": copy.deepcopy(list(_store.values())),
+            "srev": _srev, "settings": copy.deepcopy(_settings),
         }
 
 
@@ -504,11 +529,7 @@ AREAS_PATH = os.path.join(HERE, "areas.json")
 def _save_areas():
     with _lock:
         data = {"next_id": _next_id, "areas": list(_store.values())}
-    try:
-        with open(AREAS_PATH, "w") as f:
-            json.dump(data, f, indent=2)
-    except OSError:
-        pass
+    _atomic_write(AREAS_PATH,data)
 
 
 def save_areas_now():
@@ -541,14 +562,93 @@ def _load_areas():
     return True
 
 
+_stop_saver = threading.Event()
+_saver = None
+_display_session = None
+_storage_error = None
+
+
 def _saver_loop():
-    while True:
-        _dirty.wait()        # block until something changes
-        time.sleep(1.0)      # batch a burst of changes into one write
-        _dirty.clear()
+    global _storage_error
+    while not _stop_saver.wait(.2):
+        if _dirty.is_set():
+            try:
+                _save_areas()
+                _dirty.clear()
+                _storage_error = None
+            except Exception as exc:
+                _storage_error = str(exc)
+
+
+def hub_init(ctx):
+    global _settings, _saver, _display_session
+    try:
+        with open(os.path.join(HERE,"display-session.json")) as handle:
+            _display_session=json.load(handle)
+    except FileNotFoundError:
+        _display_session=None
+    _settings = _load_settings()
+    if not _load_areas():
+        _seed()
+    _stop_saver.clear()
+    _saver = threading.Thread(target=_saver_loop,name='playfield-saver',daemon=True)
+    _saver.start()
+
+
+def hub_stop():
+    global _saver
+    _stop_saver.set()
+    if _saver:
+        _saver.join(timeout=3)
+        _saver = None
+    if _dirty.is_set():
         _save_areas()
+        _dirty.clear()
 
 
-if not _load_areas():
-    _seed()
-threading.Thread(target=_saver_loop, name="playfield-saver", daemon=True).start()
+def display_snapshot():
+    return {'contract':'hhh.playfield','version':1,'status':'unavailable' if _storage_error else 'ready',
+            'screen_path':'/s/gamemaster/p/playfield-areas/screen','error':_storage_error, **_snapshot(), 'display_session':copy.deepcopy(_display_session)}
+
+
+def display_command(value):
+    global _display_session, _storage_error
+    action = value.get('action')
+    with _lock:
+        if action == 'begin':
+            if _display_session and _display_session['id'] != value['id']:
+                raise ValueError('another display session owns the field')
+            if not _display_session:
+                if value.get('side') not in ('green','purple'):
+                    raise ValueError('calibration display side required')
+                candidate={'id':value['id'],'side':value['side'],'previous':_snapshot()}
+                _atomic_write(os.path.join(HERE,'display-session.json'),candidate)
+                _display_session=candidate
+            replace_areas(value['areas'],_session_id=value['id'])
+            set_view_settings(_session_id=value['id'],**value.get('settings',{}))
+        elif action == 'capture':
+            if not _display_session or _display_session['id'] != value['id']:
+                raise ValueError('display session changed')
+            for area in _store.values():
+                if area['marker'] == value['marker']:
+                    area.update(color='#33ff88',glow=2.5,show_area=True)
+            _touch()
+        elif action == 'restore':
+            if _display_session and _display_session['id'] == value['id']:
+                previous = _display_session['previous']
+                replace_areas(previous['areas'],_session_id=value['id'])
+                set_view_settings(_session_id=value['id'],**previous['settings'])
+                _save_areas()
+                _atomic_write(os.path.join(HERE,'display-session.json'),None)
+                _display_session = None
+        else:
+            raise ValueError('unsupported display-session action')
+        _save_areas()
+        _storage_error=None
+    return display_snapshot()
+
+
+@bp.before_request
+def _display_reservation_guard():
+    if request.method in ('POST','PATCH','DELETE') and _display_session:
+        return jsonify(ok=False,error='Calibration owns the playfield display'),409

@@ -128,6 +128,7 @@ class MobileTests(unittest.TestCase):
             response.close()
         self.game.hub_stop()
     def test_mobile_routes_reject_other_teams_and_operator_actions(self):
+        self.engine.set_virtual_test_loadout(None,1)
         self.game._hub_ctx=FakeContext({'photon-level':self.level,'laser-tag-y':load('laser-tag-y')})
         facade=load('mobile-ltz-api');facade.hub_init(FakeContext({'photon-game':self.game,'photon-level':self.level,'laser-tag-y':load('laser-tag-y')}))
         app=Flask('mobile-test');app.register_blueprint(facade.bp,url_prefix='/game')

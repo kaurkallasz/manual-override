@@ -9,7 +9,7 @@ function inversePoint(h,u,v){
 }
 class TurretOverlay{
  constructor(options){
-  this.o=options;this.selected=null;this.known=new Map();this.confirmed=new Map();this.run=null;this.draft=null;this.drag=null;this.saving=false;this.epoch=0;this.imageAt=0;this.frameBusy=false;this.frameNext=0;
+  this.o=options;this.team=options.team||'green';this.selected=null;this.known=new Map();this.confirmed=new Map();this.run=null;this.draft=null;this.drag=null;this.saving=false;this.epoch=0;this.imageAt=0;this.frameRequest=null;this.frameNext=0;
   this.host=document.getElementById('turretOverlay');this.svg=this.host.querySelector('svg');this.panel=document.getElementById('turretAimPanel');
   this.image=document.getElementById('playfieldVideo');
   this.panel.querySelector('button').onclick=()=>this.close();
@@ -21,32 +21,33 @@ class TurretOverlay{
   map.addEventListener('pointerup',e=>this.up(e),true);
   map.addEventListener('pointercancel',e=>this.up(e,true),true);
   map.addEventListener('lostpointercapture',e=>{if(this.drag?.id===e.pointerId)this.up(e,true);},true);
-  document.addEventListener('visibilitychange',()=>{if(document.hidden){this.cancel();this.imageAt=0;}});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){this.cancel();this.stopVideo();}});
  }
  key(t){return t.aim_instance||`${t.atom_tag_id}:${t.activation_started_at}`;}
- tower(){return this.o.state()?.towers?.find(t=>t.socket_id===this.selected&&t.owner==='green'&&!t.destroyed);}
- cameraReady(){const c=this.o.state()?.mobile_camera;return c?.status==='ready'&&this.imageAt>0&&!this.image.hidden&&this.image.complete&&this.image.naturalWidth>0&&Date.now()/1000-c.frame_at<2&&performance.now()-this.imageAt<2000;}
- ready(){const s=this.o.state();return this.o.fresh()&&s&&!s.paused&&['setup','running'].includes(s.phase)&&(s.virtual_play||this.cameraReady());}
+ tower(){return this.o.state()?.towers?.find(t=>t.socket_id===this.selected&&t.owner===this.team&&!t.destroyed);}
+ cameraReady(){const c=this.o.state()?.mobile_camera;return c?.status==='ready'&&this.imageAt>0&&!this.image.hidden&&this.image.width>0&&this.image.height>0&&Date.now()/1000-c.frame_at<2&&performance.now()-this.imageAt<2000;}
+ ready(){const s=this.o.state();return this.o.fresh()&&s&&s.journey?.phase!=='calibration'&&!s.paused&&['setup','running'].includes(s.phase)&&(s.virtual_play||this.cameraReady());}
  sync(){
   const s=this.o.state();if(!s)return;
+  if(s.journey?.phase==='calibration'){this.close();this.refreshVideo();return;}
   const run=JSON.stringify([s.run_id,s.level_revision]);
   if(run!==this.run){this.close();this.known.clear();this.confirmed.clear();this.run=run;}
   for(const [i,t] of (s.towers||[]).entries()){const ack=this.confirmed.get(t.socket_id);if(ack&&this.key(ack)===this.key(t)&&ack.aim_revision>t.aim_revision)s.towers[i]=ack;}
-  const friendly=(s.towers||[]).filter(t=>t.owner==='green'&&!t.destroyed);
+  const friendly=(s.towers||[]).filter(t=>t.owner===this.team&&!t.destroyed);
   const added=friendly.filter(t=>this.known.get(t.socket_id)!==this.key(t));
   this.known=new Map(friendly.map(t=>[t.socket_id,this.key(t)]));
   if(added.length&&!this.drag&&!this.saving)this.select(added[added.length-1]);
   if(this.selected&&!this.tower())this.close();
   if(this.drag&&(!this.ready()||this.key(this.tower()||{})!==this.drag.key||this.tower()?.aim_revision!==this.drag.revision))this.cancel();
-  this.draw();this.video();
+  this.draw();this.refreshVideo();
  }
- select(t){this.cancel();this.selected=t.socket_id;this.drawKey=null;this.draft=null;this.notice='Drag square to aim and set range';this.draw();}
+ select(t){this.cancel();this.selected=t.socket_id;this.drawKey=null;this.draft=null;this.notice='Drag square to aim and set range';this.noticeImportant=false;this.draw();}
  close(){this.cancel();this.selected=null;this.drawKey=null;this.draft=null;this.draw();}
  cancel(){this.drag=null;this.draft=null;this.epoch++;}
  point(p){
   const s=this.o.state(),v=this.o.viewport;let q=p;
   if(!s.virtual_play){const c=s.mobile_camera;if(c?.status!=='ready')return null;const n=project(c.matrix,p.x/s.level.width,p.y/s.level.height);q={x:n.x*v.w,y:n.y*v.h};}
-  return {x:v.vw/2+(q.x-v.cx)*v.scale,y:v.vh/2+(q.y-v.cy)*v.scale};
+  return v.screen(q.x,q.y);
  }
  world(p){
   const s=this.o.state(),v=this.o.viewport,q=v.point(p.x,p.y);if(s.virtual_play)return q;
@@ -61,8 +62,8 @@ class TurretOverlay{
   let hit=null;
   if(!handle){
    const s=this.o.state();
-   if(s.virtual_play){const w=this.world(p);hit=this.o.hit?.(w.x,w.y);if(hit?.owner!=='green'||hit.destroyed)hit=null;}
-   if(!hit)hit=(s.towers||[]).filter(t=>t.owner==='green'&&!t.destroyed).map(t=>({t,p:this.point(t)})).filter(a=>a.p&&Math.hypot(a.p.x-p.x,a.p.y-p.y)<=24).sort((a,b)=>Math.hypot(a.p.x-p.x,a.p.y-p.y)-Math.hypot(b.p.x-p.x,b.p.y-p.y))[0]?.t;
+   if(s.virtual_play){const w=this.world(p);hit=this.o.hit?.(w.x,w.y);if(hit?.owner!==this.team||hit.destroyed)hit=null;}
+   if(!hit)hit=(s.towers||[]).filter(t=>t.owner===this.team&&!t.destroyed).map(t=>({t,p:this.point(t)})).filter(a=>a.p&&Math.hypot(a.p.x-p.x,a.p.y-p.y)<=24).sort((a,b)=>Math.hypot(a.p.x-p.x,a.p.y-p.y)-Math.hypot(b.p.x-p.x,b.p.y-p.y))[0]?.t;
   }
   if(!(handle&&t)&&!hit)return;
   e.preventDefault();e.stopImmediatePropagation();
@@ -90,7 +91,7 @@ class TurretOverlay{
   if(this.drag?.id!==e.pointerId)return;e.preventDefault();e.stopImmediatePropagation();
   const drag=this.drag,t=this.tower(),draft=this.draft;this.drag=null;
   if(cancelled||drag.kind==='select'||!t||!this.ready()){this.draft=null;this.draw();return;}
-  this.saving=true;this.notice='Saving…';this.draw();
+  this.saving=true;this.notice='Saving…';this.noticeImportant=false;this.draw();
   try{
    const result=await this.o.save({action:'turret_aim',socket_id:t.socket_id,atom_tag_id:t.atom_tag_id,
     activation_started_at:t.activation_started_at,aim_instance:t.aim_instance,aim_revision:drag.revision,run_id:drag.run,
@@ -98,7 +99,7 @@ class TurretOverlay{
    if(!result.ok)throw Error(result.error||'Could not save aim.');
    this.confirmed.set(result.tower.socket_id,result.tower);this.o.confirm(result.tower);
    if(drag.epoch===this.epoch)this.notice='Saved';
-  }catch(error){if(drag.epoch===this.epoch)this.notice=error.message;}
+  }catch(error){if(drag.epoch===this.epoch){this.notice=error.message;this.noticeImportant=true;}}
   finally{this.saving=false;this.draft=null;this.draw();}
  }
  safeBox(p,width,height,extra=[]){
@@ -117,10 +118,10 @@ class TurretOverlay{
   if(!this.svg)return;
   const s=this.o.state(),t=this.tower(),v=this.o.viewport;
   this.host.hidden=!t;this.panel.hidden=!t;if(!t)return;
-  const key=JSON.stringify([t.socket_id,t.x,t.y,t.targeting,this.draft,this.notice,this.saving,this.ready(),s.virtual_play,s.mobile_camera,v.vw,v.vh,v.cx,v.cy,v.scale]);
+  const key=JSON.stringify([t.socket_id,t.x,t.y,t.targeting,this.draft,this.notice,this.saving,this.ready(),s.virtual_play,s.mobile_camera,v.vw,v.vh,v.cx,v.cy,v.scale,v.rotation]);
   if(key===this.drawKey)return;this.drawKey=key;
   const stale=!this.ready();this.host.dataset.stale=String(stale);
-  const c=this.point(t);if(!c){this.svg.replaceChildren();this.panel.style.left='150px';this.panel.style.top='120px';this.status('Tracking unavailable');return;}
+  const c=this.point(t);if(!c){this.svg.replaceChildren();this.panel.style.left='150px';this.panel.style.top='120px';this.status('Tracking unavailable',null,true);return;}
   const d=this.draft||{angle:t.targeting.angle_degrees,spread:t.targeting.spread},g=t.targeting.control;
   const range=g.range_at_spread_0+(g.range_at_spread_1-g.range_at_spread_0)*d.spread,angle=d.angle*Math.PI/180;
   const at=(r,a)=>({x:t.x+r*Math.cos(a),y:t.y+r*Math.sin(a)}),points=[];
@@ -135,28 +136,61 @@ class TurretOverlay{
   const handleBoxes=[];
   const handle=(name,p,label)=>{const box=this.safeBox({x:p.x-24,y:p.y-24},48,48,handleBoxes);handleBoxes.push(box);const x=box.x+24,y=box.y+24;return `<path class="aimLine" stroke-dasharray="3 4" d="M${p.x} ${p.y}L${x} ${y}"/><g data-aim-handle="${name}" role="button" aria-label="${label}" transform="translate(${x} ${y})"><circle class="aimTouch" r="24"/><rect x="-15" y="-15" width="30" height="30" rx="2"/><text y="5">✥</text></g>`;};
   this.svg.innerHTML=`<path class="aimArea" d="${path}"/><path class="aimLine" d="M${c.x} ${c.y}L${end.x} ${end.y}"/><circle class="aimBase" cx="${c.x}" cy="${c.y}" r="22"/>${!stale&&!this.saving?handle('aim',end,g.directional?'Drag fire direction and range':'Drag firing range'):''}`;
-  const panel=this.safeBox({x:c.x-66,y:c.y+30},164,68,handleBoxes);
+  const panel=this.safeBox({x:c.x-66,y:c.y+30},164,38,handleBoxes);
   this.panel.style.left=panel.x+'px';this.panel.style.top=panel.y+'px';
-  this.status(stale?(s.virtual_play?'Controls unavailable':'Tracking unavailable'):this.notice||'Drag square to aim and set range',`${t.tower_type.replaceAll('_',' ')} · ${Math.round(range)}${g.directional?' · '+Math.round(d.angle)+'°':''}`);
+  this.status(stale?(s.virtual_play?'Controls unavailable':'Tracking unavailable'):this.notice||'Drag square to aim and set range',`${t.tower_type.replaceAll('_',' ')} · ${Math.round(range)}${g.directional?' · '+Math.round(d.angle)+'°':''}`,stale||!!this.noticeImportant);
  }
- status(message,title){document.getElementById('turretAimTitle').textContent=title||'Turret';document.getElementById('turretAimStatus').textContent=message;}
+ status(message,title,important=false){
+  document.getElementById('turretAimTitle').textContent=title||'Turret';
+  const key=JSON.stringify([message,important]);
+  if(key!==this.logNotice){this.logNotice=key;this.o.message?.(message,important);}
+ }
+ refreshVideo(){
+  const s=this.o.state();
+  this.image.hidden=!s||s.virtual_play||document.hidden||!this.imageAt;
+  this.o.videoChanged?.();
+ }
+ stopVideo(){
+  this.frameRequest?.abort();this.frameRequest=null;this.frameNext=0;this.imageAt=0;
+  this.image.hidden=true;
+  this.refreshVideo();
+ }
  async video(){
   const s=this.o.state(),physical=s&&!s.virtual_play;
   document.getElementById('app').dataset.playfield=physical?'video':'virtual';
-  if(!physical){this.image.hidden=true;this.imageAt=0;return;}
-  if(this.frameBusy||performance.now()<this.frameNext||document.hidden)return;
-  this.frameBusy=true;this.frameNext=performance.now()+150;
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);
+  if(!physical||document.hidden||this.o.videoActive?.()===false){this.stopVideo();return;}
+  this.refreshVideo();
+  if(this.frameRequest||performance.now()<this.frameNext)return;
+  const started=performance.now(),controller=new AbortController();
+  this.frameRequest=controller;this.frameNext=started+80;
+  const timeout=setTimeout(()=>controller.abort(),2000);let url,onAbort;
   try{
    const response=await fetch(this.o.frameURL(),{credentials:'same-origin',cache:'no-store',signal:controller.signal});
    if(!response.ok||!response.headers.get('content-type')?.startsWith('image/jpeg'))throw Error('Video unavailable');
-   const blob=await response.blob(),url=URL.createObjectURL(blob),old=this.frameURL;this.frameURL=url;
-   this.image.src=url;await this.image.decode();if(old)URL.revokeObjectURL(old);
-   this.imageAt=performance.now();this.image.hidden=!!this.o.state()?.virtual_play;
-  }catch{this.imageAt=0;this.image.hidden=true;this.frameNext=performance.now()+1500;}
-  finally{clearTimeout(timeout);this.frameBusy=false;this.draw();}
+   url=URL.createObjectURL(await response.blob());
+   // Keep one compositor surface for the lifetime of the page. Even swapping
+   // decoded <img> nodes can flash in Safari; draw a completed JPEG onto the
+   // existing canvas without clearing it between frames.
+   const next=new Image();next.src=url;
+   await Promise.race([next.decode(),new Promise((_,reject)=>{onAbort=()=>reject(Error('Video request cancelled'));controller.signal.addEventListener('abort',onAbort,{once:true});if(controller.signal.aborted)onAbort();})]);
+   if(controller.signal.aborted||this.frameRequest!==controller||document.hidden||!this.o.state()||this.o.state().virtual_play||performance.now()-started>=2000)return;
+   const context=this.image.getContext('2d');
+   if(!context||!next.naturalWidth||!next.naturalHeight)throw Error('Video decode unavailable');
+   if(this.image.width!==next.naturalWidth)this.image.width=next.naturalWidth;
+   if(this.image.height!==next.naturalHeight)this.image.height=next.naturalHeight;
+   context.drawImage(next,0,0);
+   this.imageAt=started;
+  }catch{
+   // Keep the last completed frame on screen during a transport gap.
+   // Freshness still expires after two seconds and disables camera aiming.
+   if(this.frameRequest===controller)this.frameNext=performance.now()+150;
+  }finally{
+   if(onAbort)controller.signal.removeEventListener('abort',onAbort);
+   if(url)URL.revokeObjectURL(url);clearTimeout(timeout);
+   if(this.frameRequest===controller){this.frameRequest=null;this.refreshVideo();this.draw();}
+  }
  }
 }
 root.MobileTurretOverlay=TurretOverlay;
-if(typeof module!=='undefined')module.exports={project,inversePoint};
+if(typeof module!=='undefined')module.exports={project,inversePoint,TurretOverlay};
 })(typeof window==='undefined'?globalThis:window);

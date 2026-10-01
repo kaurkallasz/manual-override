@@ -1,8 +1,10 @@
 """Gamemaster camera calibration using OpenCV's chessboard lens model."""
 
 import json
+import hashlib
 import os
 import threading
+import tempfile
 import time
 
 import cv2
@@ -31,6 +33,7 @@ MANIFEST = {
 bp = Blueprint("camera_calibration", __name__)
 
 _webcam = None
+_hub_ctx = None
 _lock = threading.Lock()
 _samples = []
 _image_size = None
@@ -79,25 +82,27 @@ def _wait_for_pattern(revision, timeout=2.0):
 
 
 def hub_init(ctx):
-    global _webcam
+    global _webcam, _hub_ctx
     _corrected_stop.clear()
-    _webcam = ctx.get_prototype("webcam")
-    if _webcam is not None and hasattr(_webcam, "set_tag_transformer"):
-        _webcam.set_tag_transformer(correct_tag_sets)
+    _hub_ctx = ctx
+    _webcam = ctx.get_prototype("webcam") if ctx.is_prototype_enabled("webcam") else None
+    _webcam_read("set_tag_transformer", "hhh.webcam.transformer", correct_tag_sets)
     _load_calibration()
 
 
 def hub_stop():
-    global _webcam, _corrected_thread, _corrected_jpeg, _corrected_frame_at
+    global _webcam, _hub_ctx, _corrected_thread, _corrected_jpeg, _corrected_frame_at
     _corrected_stop.set()
     thread = _corrected_thread
     if thread and thread.is_alive():
         thread.join(timeout=1)
+    _webcam_read("set_tag_transformer", "hhh.webcam.transformer", None)
     with _lock:
         _corrected_thread = None
         _corrected_jpeg = None
         _corrected_frame_at = 0
         _webcam = None
+        _hub_ctx = None
 
 
 def _load_calibration():
@@ -126,15 +131,64 @@ def _save_calibration(data):
         "aspect_constrained": bool(data.get("aspect_constrained", False)),
         "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
-    with open(CALIBRATION_PATH, "w") as f:
-        json.dump(serial, f, indent=2)
+    path = os.path.abspath(CALIBRATION_PATH)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(path), prefix=".lens-", delete=False) as handle:
+            temporary = handle.name
+            json.dump(serial, handle, indent=2, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        descriptor = os.open(os.path.dirname(path), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _webcam_read(method, contract, *args):
+    unavailable = {"contract": contract, "version": 1, "status": "unavailable", "ok": False,
+                   "error": "enabled Webcam contract is unavailable"}
+    try:
+        if _hub_ctx is None or not _hub_ctx.is_prototype_enabled("webcam"):
+            return unavailable
+        owner = _hub_ctx.get_prototype("webcam")
+        producer = getattr(owner, method, None)
+        if not callable(producer):
+            return unavailable
+        value = producer(*args)
+        if not isinstance(value, dict) or value.get("contract") != contract or type(value.get("version")) is not int or value["version"] != 1:
+            return unavailable
+        return value
+    except ValueError:
+        if method == "camera_command":
+            raise
+        return unavailable
+    except Exception:
+        return unavailable
+
+
+def _camera_status():
+    value = _webcam_read("camera_status_snapshot", "hhh.webcam.camera")
+    camera = value.get("camera")
+    if value.get("status") != "ready" or not isinstance(camera, dict):
+        return {}
+    if any(type(camera.get(key)) is not int or camera[key] <= 0 for key in ("width", "height")):
+        return {}
+    return camera
 
 
 def _frame():
-    if _webcam is None:
+    value = _webcam_read("raw_frame_snapshot", "hhh.webcam.frame")
+    stamp = value.get("frame_at")
+    if value.get("status") != "ready" or type(stamp) not in (float, int) or not np.isfinite(stamp) or not 0 <= time.time() - stamp <= 1.5:
         return None
-    manager = getattr(_webcam, "_mgr", None)
-    return manager.latest_frame() if manager is not None else None
+    frame = value.get("frame")
+    return frame if isinstance(frame, np.ndarray) and frame.ndim == 3 else None
 
 
 def _corners(frame, max_width=None):
@@ -406,8 +460,7 @@ def _correct_tag(tag, width, height, calibration):
 
 def correct_tag_sets(tags, detections):
     """Transform Webcam detections while preserving its reliable API route."""
-    manager = getattr(_webcam, "_mgr", None) if _webcam is not None else None
-    camera_status = manager.status() if manager is not None else {}
+    camera_status = _camera_status()
     width = int(camera_status.get("width") or 0)
     height = int(camera_status.get("height") or 0)
     with _lock:
@@ -426,8 +479,7 @@ def correct_tag_sets(tags, detections):
 
 def corrected_tag_snapshot(tags, detections):
     """Versioned corrected tag output for physical-observation adapters."""
-    manager = getattr(_webcam, "_mgr", None) if _webcam is not None else None
-    camera_status = manager.status() if manager is not None else {}
+    camera_status = _camera_status()
     width = int(camera_status.get("width") or 0)
     height = int(camera_status.get("height") or 0)
     corrected_tags, corrected_detections, corrected = correct_tag_sets(
@@ -439,6 +491,11 @@ def corrected_tag_snapshot(tags, detections):
         "status": "ready" if corrected else "unavailable",
         "error": None if corrected else "camera correction is not valid",
         "observed_at": time.time(),
+        "calibration_revision": hashlib.sha256(json.dumps({
+            "matrix": _calibration["camera_matrix"].tolist(),
+            "distortion": _calibration["dist_coeffs"].reshape(-1).tolist(),
+            "source_size": [width,height],
+        },sort_keys=True,allow_nan=False).encode()).hexdigest() if corrected and _calibration else None,
         "corrected": bool(corrected),
         "width": width,
         "height": height,
@@ -450,15 +507,11 @@ def corrected_tag_snapshot(tags, detections):
 @bp.route("/api/tags")
 def corrected_tags():
     """Webcam tag reads transformed into the corrected feed's coordinates."""
-    manager = getattr(_webcam, "_mgr", None) if _webcam is not None else None
-    tracker = getattr(_webcam, "_tracker", None) if _webcam is not None else None
-    if manager is None or tracker is None:
+    raw = _webcam_read("tag_snapshot", "hhh.webcam.tags")
+    if raw.get("status") != "ready":
         return jsonify({"tags": [], "detections": [], "corrected": False}), 503
-    now = time.monotonic()
-    tags = tracker.tags(now)
-    detections = manager.detections(now)
-    tags, detections, corrected = correct_tag_sets(tags, detections)
-    camera_status = manager.status()
+    tags, detections, corrected = correct_tag_sets(raw.get("tags", []), raw.get("detections", []))
+    camera_status = _camera_status()
     width = int(camera_status.get("width") or 0)
     height = int(camera_status.get("height") or 0)
     return jsonify({
@@ -489,71 +542,32 @@ def status():
 @bp.route("/api/focus", methods=["GET", "POST"])
 def focus():
     """Read or update UVC focus and exposure controls on the active webcam."""
-    manager = getattr(_webcam, "_mgr", None) if _webcam is not None else None
-    if manager is None or not hasattr(manager, "focus_controls"):
-        return jsonify({
-            "ok": False,
-            "error": "webcam focus controls are unavailable",
-        }), 503
-    if request.method == "GET":
-        return jsonify({"ok": True, **manager.focus_controls()})
     data = request.get_json(silent=True) or {}
-    autofocus = data.get("autofocus") if "autofocus" in data else None
-    if autofocus is not None and not isinstance(autofocus, bool):
-        return jsonify({"ok": False, "error": "autofocus must be true or false"}), 400
-    focus_value = data.get("focus") if "focus" in data else None
-    autoexposure = data.get("autoexposure") if "autoexposure" in data else None
-    if autoexposure is not None and not isinstance(autoexposure, bool):
-        return jsonify({
-            "ok": False, "error": "autoexposure must be true or false",
-        }), 400
-    exposure_value = data.get("exposure") if "exposure" in data else None
-    ok, error, controls = manager.set_focus_controls(
-        autofocus=autofocus, focus=focus_value,
-        autoexposure=autoexposure, exposure=exposure_value)
-    if not ok:
-        return jsonify({"ok": False, "error": error}), 409
-    return jsonify({"ok": True, **controls})
+    try:
+        result = _webcam_read("camera_command", "hhh.webcam.controls", {**data, "action": "focus_read" if request.method == "GET" else "focus_set"})
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify(result), 200 if result.get("ok") else 503
 
 
 @bp.route("/api/cameras")
 def cameras():
     """List webcams for the focus panel and identify the active selection."""
-    manager = getattr(_webcam, "_mgr", None) if _webcam is not None else None
-    probe = getattr(_webcam, "probe_cameras", None) if _webcam is not None else None
-    if manager is None or not callable(probe):
-        return jsonify({"ok": False, "error": "webcam controls are unavailable"}), 503
-    return jsonify({
-        "ok": True,
-        "cameras": probe(),
-        "active_index": manager.active_index(),
-    })
+    result = _webcam_read("camera_command", "hhh.webcam.controls", {"action": "list"})
+    return jsonify(result), 200 if result.get("ok") else 503
 
 
 @bp.route("/api/camera", methods=["POST"])
 def select_camera():
     """Select and remember the webcam whose focus is being adjusted."""
-    manager = getattr(_webcam, "_mgr", None) if _webcam is not None else None
-    load_settings = getattr(_webcam, "_load_settings", None) if _webcam is not None else None
-    if manager is None:
-        return jsonify({"ok": False, "error": "webcam controls are unavailable"}), 503
     data = request.get_json(silent=True) or {}
     try:
-        index = int(data["index"])
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"ok": False, "error": "expected integer camera index"}), 400
-    remembered = load_settings() if callable(load_settings) else None
-    remembered = remembered or {}
-    width = int(remembered.get("width") or 1920)
-    height = int(remembered.get("height") or 1080)
-    tracking_width = int(remembered.get("tracking_width") or width)
-    tracking_height = int(remembered.get("tracking_height") or height)
-    detection_fps = float(remembered.get("detection_fps") or 15)
-    ok, error = manager.open(index, width, height, tracking_width,
-                             tracking_height, detection_fps)
-    if not ok:
-        return jsonify({"ok": False, "error": error}), 502
-    return jsonify({"ok": True, "status": manager.status()})
+        result = _webcam_read("camera_command", "hhh.webcam.controls", {"action": "select", "index": data.get("index")})
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not result.get("ok"):
+        return jsonify(result), 502
+    return jsonify({"ok": True, "status": result["camera"]})
 
 
 @bp.route("/api/config", methods=["GET", "POST"])
@@ -712,8 +726,8 @@ def calibrate():
         "aspect_constrained": True,
     }
     with _lock:
-        _calibration = data
         _save_calibration(data)
+        _calibration = data
     return jsonify({"ok": True, "rms": float(rms)})
 
 

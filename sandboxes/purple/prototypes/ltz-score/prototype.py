@@ -1,10 +1,16 @@
 """Purple LTZ Score presentation; progress is owned by Photon Progress."""
 import os
+from pathlib import Path
 from flask import Blueprint, send_from_directory
 HERE = os.path.dirname(os.path.abspath(__file__))
 GAME_ART_DIR = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..', 'assets', 'game-art', 'z-pixel-v2', 'normalized'))
 MANIFEST = {'name': 'LTZ Score', 'description': 'Saved players, weapon upgrades, three-win control progression and performance history.', 'default_page': '', 'pages': [{'path': '', 'label': 'LTZ Score'}]}
 bp = Blueprint('purple_player_ltz_score', __name__)
+@bp.route('/operation-id.js')
+def operation_script():
+    response = send_from_directory(Path(__file__).resolve().parents[4] / 'shared/mobile_ltz', 'operation-id.js')
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 @bp.route('/')
 def index():
     response = send_from_directory(HERE, 'index.html')

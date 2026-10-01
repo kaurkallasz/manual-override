@@ -32,3 +32,9 @@ contains corrected tracked tags, corrected immediate detections, frame
 dimensions, and `corrected: true`. Missing or invalid calibration publishes an
 explicit unavailable output with empty tag arrays. It does not apply game rules
 or issue a robot command.
+
+Camera Calibration consumes Webcam's public `hhh.webcam.camera`,
+`hhh.webcam.frame`, `hhh.webcam.tags`, and `hhh.webcam.controls` v1 outputs through
+enabled hub discovery. Disabled, stale, or malformed inputs are unavailable;
+there is no private capture/tracker access. The correction callback is installed
+at `hub_init` and removed at `hub_stop`. Lens JSON uses atomic replacement.

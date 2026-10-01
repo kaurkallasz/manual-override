@@ -9,16 +9,18 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .engine import DEFAULT_SETTINGS, CONTROL_ORC_KEYS, PIECE_KEYS
+from .engine import DEFAULT_SETTINGS, CONTROL_ORC_KEYS, CONTROL_PACE_KEYS, PIECE_KEYS
 
 
 RULES = {
     **{key: (int, 0, 999) for key in PIECE_KEYS},
     "wave_count": (int, 1, 12),
     "wave_interval_s": (float, 2.0, 600.0),
+    "first_wave_delay_s": (float, 0.0, 1500.0),
+    "difficulty_offset": (float, -0.10, 0.10),
     "release_rate_multiplier": (float, 0.05, 20.0),
     "enemy_count_multiplier": (float, 0.1, 5.0),
-    **{key: (float, 0.1, 5.0) for key in CONTROL_ORC_KEYS},
+    **{key: (float, 0.1, 5.0) for key in (*CONTROL_ORC_KEYS,*CONTROL_PACE_KEYS)},
     "enemy_health_multiplier": (float, 0.1, 10.0),
     "enemy_speed_multiplier": (float, 0.1, 5.0),
     "enemy_core_damage_multiplier": (float, 0.0, 10.0),
@@ -97,13 +99,16 @@ def validate_settings(incoming: dict[str, Any]) -> tuple[dict[str, Any], dict[st
                 value = float(raw)
             if not math.isfinite(float(value)) or value < lower or value > upper:
                 raise ValueError
+            if key == 'difficulty_offset' and value not in (-.10,-.05,0,.05,.10):
+                raise ValueError
         except (TypeError, ValueError, OverflowError):
             errors[key] = f"must be between {lower:g} and {upper:g}"
             continue
         clean[key] = value
-    for previous, current in zip(CONTROL_ORC_KEYS, CONTROL_ORC_KEYS[1:]):
-        if previous in clean and current in clean and clean[current] <= clean[previous]:
-            errors[current] = 'must be greater than the preceding control method'
+    for keys in (CONTROL_ORC_KEYS,CONTROL_PACE_KEYS):
+        for previous,current in zip(keys,keys[1:]):
+            if previous in clean and current in clean and clean[current]<=clean[previous]:
+                errors[current]='must be greater than the preceding control method'
     codes = [clean.get(key) for key in PIECE_KEYS]
     if len(set(codes)) != len(codes):
         for key in PIECE_KEYS:
@@ -130,6 +135,10 @@ class SettingsStore:
                 raise ValueError("expected settings schema version 1")
             incoming = data.get("settings")
             legacy = set(incoming) - set(PIECE_KEYS) if isinstance(incoming, dict) else set()
+            if isinstance(incoming,dict):
+                for key in ('first_wave_delay_s','difficulty_offset',*CONTROL_PACE_KEYS):
+                    incoming.setdefault(key,DEFAULTS[key])
+                legacy = set(incoming)-set(PIECE_KEYS)
             if not isinstance(incoming, dict) or set(incoming) - set(RULES) or legacy not in (
                 set(RULES) - set(PIECE_KEYS), set(RULES) - set(PIECE_KEYS) - BRUTE_SETTING_KEYS,
                 set(RULES) - set(PIECE_KEYS) - set(CONTROL_ORC_KEYS),

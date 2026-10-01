@@ -5,7 +5,7 @@
 At an eligible Level anchor, an effective L4 weapon creates one same-type
 companion. It inherits the parent's owner, damage/link multipliers and aim/spread
 inputs, while targeting from its own origin with independent charge, cooldown,
-shots and projectiles. New pairs activate together. Promotion during virtual
+shots and projectiles. New pairs activate together. Promotion during practice
 testing gives the new companion its normal three-second activation and an empty
 weapon charge. Repeated overrides do not heal or reset the primary or fields.
 
@@ -250,7 +250,7 @@ separately from simulation tick frequency.
 
 ## LTZ players and rewards
 
-Game consumes `photon.progress` v1 through the enabled-module context, freezes
+Game consumes `photon.progress` v2 through the enabled-module context, freezes
 its roster at Start, and emits cumulative checkpoints and terminal results.
 `progress_link.py` performs disk and ledger I/O off the simulation tick. Terminal
 results go to `data/pending-result.json` before delivery and replay before
@@ -258,6 +258,12 @@ interruption recovery. The public `progress` object reports participants,
 eligibility, banked kills, save failures and the final attempt.
 
 `start` accepts a boolean `reward_enabled` (legacy callers default to practice).
+When Progress's validated roster contains a built-in test profile, Game forces
+practice before checking scored-only restrictions and freezes the test IDs in
+run metadata. Progress independently enforces eligibility using its owned IDs.
+The delivery adapter reports the eligibility returned by Progress. A mixed
+real/test roster is practice for both participants and cannot affect scored
+statistics or earned upgrades/control mastery.
 Scored Start requires ready progress, selected profiles, physical Board input,
 no virtual setup placements and a non-Training preset. Place, aim, loadout,
 virtual switching and core assistance are rejected during a scored attempt.
@@ -265,27 +271,32 @@ Reset finalizes an abort before clearing the engine. Run commands are serialized
 
 Four `control_orc_multiplier_*` settings default to 1/1.15/1.3/1.5. They must
 strictly increase, within 0.1–5; a scored Start also checks the actual rounded
-totals increase. Co-op uses the maximum selected tier. `/api/orc-preview` is a
-read-only POST for exact draft calculations. The existing `/api/events` route
-supports `view=configuration` for a small settings projection on LTZ Score pages.
+totals increase. Co-op uses the maximum mandatory current tier. `/api/orc-preview` is a
+read-only POST for exact draft calculations. `/api/events?view=configuration`
+publishes `photon.game.preview` v1: `status`, exact
+per-tier `previews`, and `virtual_test_control` (integer 1–4 or null). Player
+score presentations show this grant as practice access and never save it as
+earned progression. Disabled/unavailable input clears that presentation grant.
 The existing v2 snapshot and SSE contract remain compatible with additive fields.
 
 Weapon levels multiply health and damage by 1/1.1/1.2/1.3, with link bonuses
 composed once. Force-field capacity uses 1/1.2/1.4/1.6 and the minimum endpoint
 upgrade; its visual width is 8/9.5/11/12.5 px. Geometry remains authoritative.
 
-## Virtual test unlocks
+## Practice unlocks
 
 Gamemaster `POST /api/command` accepts `action: virtual_test_loadout` with a
 complete `levels` object keyed by the four `damage-*` tracks and `forcefield`.
 Turrets accept integers 0–4 (0 locks further placement); Force Field accepts
 1–4. `levels: null` restores saved-player levels. The command is permitted only
-in virtual setup or a virtual practice run, including while paused. It is
-rejected for physical/scored play and requires Gamemaster authorization.
+in setup or a practice run, virtual or physical, including while paused. It
+requires Gamemaster authorization. Active scored runs reject changes, and scored
+starts reject any active defense or mobile test override. The legacy command and
+snapshot field names are retained for client compatibility.
 
 The additive `virtual_test_loadout` snapshot field reports the selection. It is
-kept in memory across reset and ignored in physical play; restarting the module
-clears it. All virtual owners use the selected levels. Existing tower health
+kept in memory across reset and mode changes; restarting the module
+clears it. Both teams use the selected levels in virtual and physical practice. Existing tower health
 percentages are preserved when health/damage upgrades change; field capacity
 and art update without repairing broken fields or erasing absorbed hits.
 Locking a type blocks further placement and leaves already placed units intact;
@@ -304,7 +315,7 @@ to Joint, or disabling it, freezes pending XYZ motion and returns to Joint.
 
 The existing `mobile_command` input supports `control_mode` (`joint`, `xyz`, `targeting`, or `cue`) and
 `xyz` with an `xyz: {x,y,z}` target and integer `control_revision`. The server reads
-Green's saved unlock from the versioned Photon Progress output when no test
+the selected team's saved unlock from the versioned Photon Progress output when no test
 override is active. Missing or malformed progress grants only the default Joint
 control. Targeting requires tier 3 and reuses the validated `xyz` command. Cue autonomy requires tier 4 and uses the same movement and placement validation.
 The existing virtual-play, scored-attempt exclusion, session ownership, monotonic
@@ -343,7 +354,7 @@ Game snapshots publish `movable_piece_codes` for both teams.
 (`rows`, zero-based `index`, `status`, `stage`, `error`). Authenticated, sequenced
 `cue_set`, `cue_play`, `cue_pause`, and `cue_stop` require Cue mode/tier 4 and an
 exact integer control revision. Rows contain integer `piece` and `destination`
-IDs; 1–32 rows are allowed. Only this Green arm's configured pieces are eligible.
+IDs; 1–32 rows are allowed. Only the selected team's configured pieces are eligible.
 
 The module-local MobileCue advances inside MobileArm.step, never on a browser
 timer. It preflights each row's IK, retains held pieces on cue pause/stop, calls
@@ -370,11 +381,87 @@ waypoints wait for explicit Play.
 
 ### Mobile player turret aim
 
-Photon Game v2 exposes `mobile_turret_aim(data)` for the authenticated Green
+Photon Game v2 exposes `mobile_turret_aim(data)` for the authenticated team
 presentation. Required fields are `run_id`, `socket_id`, `atom_tag_id`,
 `activation_started_at`, `aim_instance`, `aim_revision`, `angle_degrees`, and `spread` (0–1).
 The opaque `aim_instance` changes for every placement/replacement, including setup resets.
-The selected live placement must belong to Green and match the supplied run,
+The selected live placement must belong to the command’s team and match the supplied run,
 activation and revision. Setup and unpaused running games accept the command
 in virtual or physical play, independently of robot sessions. The existing
 `set_tower_aim` rules remain authoritative and publish the resulting revision.
+
+Mobile commands accept `side: green|purple` (default Green for existing clients).
+Game owns a separate virtual `MobileArm` for each team, with independent sessions,
+leases, targets, cues and movable pieces. Purple's virtual arm faces the board
+from the opposite corner. Start preserves both controllers, while pause/reset
+and physical-mode transitions halt both. `mobile_arms` publishes both public
+snapshots; `mobile_arm` remains the existing Green compatibility field.
+The mobile facade selects only the authenticated team's arm and progress for
+`?side=green|purple`, with separate SSE producers. A role cannot read or command
+the other team's mobile endpoint or aim its turret.
+
+
+## Mobile co-op journey and level presets (2026-10-01)
+
+Game owns `journey.py` and `presets.py`; their data files live beside its run
+log. `journey_snapshot()` returns `photon.game.journey` v1. Its phases are
+lobby, playing, upgrades, calibration and ready. A scored terminal result starts
+one server deadline of 30 seconds. The third XYZ win immediately queues Green
+then Purple calibration. The partner waits with purchases and history; expiry
+never starts a second countdown after calibration. Ready binds both selected
+profile IDs/revisions and reserves their loadouts transactionally. A restarted
+scored run reads its canonical interrupted receipt and returns to upgrades.
+
+The journey's `calibration_side` identifies the queued turn for presentation,
+including while camera/arm feedback or a previous stop prevents activation.
+It is null outside calibration. `active_side` and `session_id` retain their
+motion-authority meaning; selecting a calibration screen never grants movement.
+Mobile LTZ API exposes only the selected side's matching saved draft and a
+`mobile_calibration_ready` flag for capture presentation. A blocked or restored
+draft can be displayed, but cannot capture until the live owner grant is ready.
+
+`mobile_journey_command(side, value)` accepts ready, calibration replay, lesson
+capture/ground/raised/height/commit/arrival/heartbeat, complete, and finish.
+Complete asks Cal 2 to validate and install all ten target measurements and both
+heights, then consumes its durable completion receipt through the existing
+turn/progression path. Green hands off to Purple; the last player proceeds to
+the existing shared upgrade/ready step without restarting its countdown.
+Practice returns to the preceding screen and awards no player progress.
+Both paths require a confirmed stopped arm before handing off the playfield.
+The optional guided exercise remains available: Finish consumes
+fresh Board stable placement evidence for the measured, picked-up Atom after
+both guided moves and measured lift. Browser reports cannot award completion;
+Cal 2 owns both measured-target and guided-exercise receipts.
+`motion_policy(side)` returns `photon.game.motion` v1: player, practice,
+tutorial or waiting. Waiting/expired transitions block motion. Operator
+`calibration_test` accepts Green/Purple/Both; `journey_cancel` requires no active
+run. `virtual_test_loadout` grants the selected test tier to BOTH arms in
+physical or virtual practice; it grants no saved mastery or credits.
+
+Operator `show_game` closes a saved practice calibration or pauses earned
+calibration, preserving its draft/sequence under `deferred_calibration`. Loading
+the Y operator page and its Game screen button use this command. Deferred earned
+work does not automatically reopen on the next tick/restart; `calibration_resume`
+or player replay restores the same operation and remaining sequence. Players
+still cannot mark Ready before completing their required lesson.
+
+`journey_cancel` and practice-side switches request the calibration owner's
+`defer_stop` release. Display restoration can finish with an offline arm while
+the owner retains a durable stop inhibit. Journey exposes `motion_blocked` and
+`motion_error`; physical Start and both teams' motion policies honor it even in
+the lobby with test overrides. The existing worker maintains the owner in the
+lobby too, so fresh stop confirmation can clear the inhibit without another
+lesson. No display selection or page load grants hardware access.
+
+The additive `level_presets` snapshot is `photon.game.presets` v1. Operator
+`level_preset` saves, loads, renames and restores immutable revisions by map and
+tier. Preserved venue settings remain a legacy family. Selected progression
+presets require increasing exact counts and release rates and decreasing wave
+gaps across all four tiers before scored Start. The highest participant tier
+selects one preset; control multipliers/difficulty offsets apply once.
+`first_wave_delay_s` pauses with active time, and `difficulty_offset` permits
+-10%, -5%, 0%, +5%, +10% enemy-count adjustments. The preview includes per-wave
+release windows, overlap and the scheduled release end. Saving a settings draft
+alone does not replace a selected level/tier preset. All run settings and preset
+metadata are frozen at Start. See `docs/CONTROL_BALANCE_REPORT.json` for the
+provisional simulator matrix; historical control-speed factors remain unknown.

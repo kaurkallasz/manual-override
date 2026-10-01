@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101715"><title>mobile ltz · Green</title>
+<link rel="stylesheet" href="mobile.css?v=20260917-touch-map">
+</head>
+<body>
+<main id="app">
+  <div id="battlefield" aria-label="Live battlefield. Use two fingers to zoom and pan.">
+    <div id="world"><canvas id="playfieldVideo" role="img" aria-label="Corrected live playground" hidden></canvas><svg id="armReach" aria-label="Calibrated arm reach and exclusion areas" hidden><defs><pattern id="reachHatch" width="12" height="12" patternUnits="userSpaceOnUse"><path d="M-3 3L3-3 M0 12L12 0 M9 15L15 9" stroke="#ff5353" stroke-width="1.5"/></pattern></defs><path data-reach-shade fill="url(#reachHatch)" fill-rule="evenodd"/><path data-reach-line fill="none" stroke="#ff6464" stroke-width="2" stroke-dasharray="8 5" vector-effect="non-scaling-stroke"/></svg><canvas id="mapCanvas"></canvas><canvas id="gameCanvas"></canvas><canvas id="armCanvas" width="1696" height="960"></canvas><div id="markerLabels" aria-label="Visible ArUco codes"></div><svg id="xyzBullseyes" viewBox="0 0 1696 960" aria-label="Arm XY positions" hidden><path id="cueWaypointGuides" class="xyzWaypoint xyzGuides" hidden/><g id="cueWaypointBullseye" class="xyzWaypoint" hidden><circle r="16"/><circle r="5"/><path d="M-24 0H-10 M10 0H24 M0-24V-10 M0 10V24"/></g><path id="xyzTargetGuides" class="xyzTarget xyzGuides"/><path id="xyzActualGuides" class="xyzActual xyzGuides"/><g id="xyzTargetBullseye" class="xyzTarget"><circle r="16"/><circle r="5"/><path d="M-24 0H-10 M10 0H24 M0-24V-10 M0 10V24"/></g><g id="xyzActualBullseye" class="xyzActual"><circle r="16"/><circle r="5"/><path d="M-24 0H-10 M10 0H24 M0-24V-10 M0 10V24"/></g></svg><svg id="calibrationCrosshair" viewBox="0 0 1696 960" role="img" aria-label="Raised-tag calibration crosshair; tap the image or drag to position it" hidden><g><circle r="16"/><circle r="3"/><path d="M-28 0H-8 M8 0H28 M0-28V-8 M0 8V28"/></g></svg></div>
+    <div id="turretOverlay" hidden><svg aria-label="Turret firing area"></svg></div>
+    <div id="turretAimPanel" class="glass" hidden><b id="turretAimTitle">Turret</b><button type="button" aria-label="Close turret targeting">×</button></div>
+  </div>
+  <header><div class="identity"><i></i><span id="teamName">Green</span><span class="divider">/</span><button id="levelsOpen" aria-haspopup="dialog">Joint <span class="muted">⌄</span></button></div>
+    <div class="telemetry">
+      <div class="facts"><span>Wave <b id="wave">—</b></span><span>Core <b id="core">—</b></span><span>Score <b id="score">0</b></span><span class="fps" title="Game frames drawn per second">FPS <b id="fps">—</b></span></div>
+      <div class="diagnostics" aria-label="Movement performance">
+        <span title="Received game updates per second over the last five seconds">Updates <b id="updateHz">—</b>/s</span>
+        <span title="Time since the latest received game update, not network ping">Age <b id="updateAge">—</b>ms</span>
+        <span title="Percentage of moving frames using prediction during the last sample">Pred <b id="prediction">—</b>%</span>
+        <span title="Current adaptive playback buffer">Buffer <b id="bufferMs">—</b>ms</span>
+        <span title="Longest interval between drawn frames in the last sample; amber indicates an interval above 34 ms">Peak <b id="framePeak">—</b>ms</span>
+      </div>
+    </div>
+    <div class="viewButtons"><button id="rotateView" type="button" aria-label="Rotate playfield 180 degrees" aria-pressed="false">↻ 180°</button><button id="expand" aria-label="Expand view">⤢ <span>Expand</span></button></div>
+  </header>
+  <aside class="connectionControls"><div class="connectionButtons"><button id="connect" class="glass primary" disabled><span class="connectIcon">◉</span> Connect</button><button id="enableArm" class="glass" hidden>Enable</button><button id="stop" class="glass stop"><span>■</span> Stop</button></div><div class="playerLog" aria-label="Player status log"><div class="mode"><span id="mode">Waiting</span><span id="connection">Offline</span></div><div id="feedback" role="status" aria-live="polite">Waiting for the live game.</div></div></aside>
+  <section class="leftControls" aria-label="Base and gripper controls">
+    <div class="baseDial">
+    <div id="wheel" class="wheel" role="slider" tabindex="0" aria-label="Base rotation" aria-valuemin="-160" aria-valuemax="160" aria-valuenow="-80" aria-disabled="true">
+      <svg viewBox="0 0 240 160" aria-hidden="true"><path class="dialBack" d="M22 136 A98 98 0 0 1 218 136"/><g id="ticks"></g><g id="baseSelector"><rect class="baseThumb" x="108" y="24" width="24" height="28" rx="4"/></g><g id="baseActual" class="baseActual" visibility="hidden"><path class="baseActualHalo" d="M120 27 L120 49"/><path class="baseActualCore" d="M120 27 L120 49"/></g></svg>
+      <div class="wheelLabel"><output id="j1Value">−80°</output></div>
+    </div>
+    <div id="pumpButtons" class="basePumpControls" role="group" aria-label="Base rotation and gripper pump">
+      <button id="baseLeft" class="angleStepButton baseStepButton baseStepLeft" type="button" aria-label="Rotate arm left by 1 degree" title="Rotate arm left by 1°" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M1 24 L9 1 L9 12 L23 12 L23 36 L9 36 L9 47 Z"/><text x="16" y="27">1°</text></svg></button>
+      <button id="pumpSuck" type="button" aria-pressed="false" disabled>Suck</button>
+      <button id="pumpBlow" type="button" aria-pressed="false" disabled>Blow</button>
+      <button id="baseRight" class="angleStepButton baseStepButton baseStepRight" type="button" aria-label="Rotate arm right by 1 degree" title="Rotate arm right by 1°" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M23 24 L15 1 L15 12 L1 12 L1 36 L15 36 L15 47 Z"/><text x="8" y="27">1°</text></svg></button>
+    </div>
+    </div>
+    <button id="targetMove" class="glass" type="button" aria-label="Go to previewed target" disabled hidden>Go</button>
+  </section>
+  <section id="jointRig" class="jointRig" aria-label="Arm illustration"></section>
+  <section class="jointControls glass" aria-label="Arm joint controls">
+    <div class="jointSliderStack">
+      <div class="jointSliderRow"><label for="j3">Elbow · J3 <output id="j3Value" for="j3">−5°</output></label><div class="jointStepControls">
+        <button id="j3Decrease" class="angleStepButton" type="button" aria-label="Decrease elbow J3 by 1 degree" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M1 24 L9 1 L9 12 L23 12 L23 36 L9 36 L9 47 Z"/><text x="16" y="27">1°</text></svg></button>
+        <div class="jointRange"><input id="j3" type="range" min="-25" max="105" step="0.5" value="-5" disabled aria-describedby="jointSliderHint"><span id="j3Actual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+        <button id="j3Increase" class="angleStepButton" type="button" aria-label="Increase elbow J3 by 1 degree" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M23 24 L15 1 L15 12 L1 12 L1 36 L15 36 L15 47 Z"/><text x="8" y="27">1°</text></svg></button>
+      </div></div>
+      <div class="jointSliderRow"><label for="j2">Shoulder · J2 <output id="j2Value" for="j2">−5°</output></label><div class="jointStepControls">
+        <button id="j2Decrease" class="angleStepButton" type="button" aria-label="Decrease shoulder J2 by 1 degree" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M1 24 L9 1 L9 12 L23 12 L23 36 L9 36 L9 47 Z"/><text x="16" y="27">1°</text></svg></button>
+        <div class="jointRange"><input id="j2" type="range" min="-25" max="85" step="0.5" value="-5" disabled aria-describedby="jointSliderHint"><span id="j2Actual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+        <button id="j2Increase" class="angleStepButton" type="button" aria-label="Increase shoulder J2 by 1 degree" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M23 24 L15 1 L15 12 L1 12 L1 36 L15 36 L15 47 Z"/><text x="8" y="27">1°</text></svg></button>
+      </div></div>
+    </div>
+    <button id="jointPrecision" role="switch" aria-checked="false" aria-label="Fine tune" title="10× slider zoom with 0.05° steps"><span class="fineTuneTrack" aria-hidden="true"></span><span>Fine tune</span><b>10×</b></button>
+    <p id="jointSliderHint" class="srOnly">Drag the sketch nozzle to adjust elbow J3, or drag the sketch elbow to adjust shoulder J2. The white sketch follows your selected target immediately, and the sliders stay synchronized with sketch drags. The red outline and slider indicators follow the arm's measured position as it moves. Arrow buttons beside the base controls and at each slider end change the target by 1 degree per press, or 0.1 degree with Fine tune on. Fine tune also reduces sketch movement tenfold and zooms each slider to one tenth of its range around the selected target, with 0.05 degree drag steps. Toggle off for the full range; toggle on again to center a new zoom. Red arrows at an edge mean the actual angle is outside the zoomed range.</p>
+  </section>
+  <section id="xyzHeightControl" class="xyzHeight glass" aria-label="Height control" hidden>
+    <label for="xyzZ">Height · Z <output id="xyzZValue" for="xyzZ">—</output></label>
+    <button id="xyzZIncrease" class="angleStepButton xyzVerticalStep" type="button" aria-label="Raise height by 1 unit" disabled><svg viewBox="0 0 48 24" aria-hidden="true"><path d="M24 1 L47 9 L36 9 L36 23 L12 23 L12 9 L1 9 Z"/><text x="24" y="18">1</text></svg></button>
+    <div class="xyzVerticalTrack jointSliderRow"><input id="xyzZ" type="range" min="0" max="400" step="1" value="60" disabled aria-describedby="xyzHint"><span id="xyzZActual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+    <button id="xyzZDecrease" class="angleStepButton xyzVerticalStep" type="button" aria-label="Lower height by 1 unit" disabled><svg viewBox="0 0 48 24" aria-hidden="true"><path d="M24 23 L47 15 L36 15 L36 1 L12 1 L12 15 L1 15 Z"/><text x="24" y="12">1</text></svg></button>
+    <svg id="zPresetGuides" aria-hidden="true"><g id="zPresetGuide1"><path class="zPresetMark"/><path class="zPresetLink"/></g><g id="zPresetGuide2"><path class="zPresetMark"/><path class="zPresetLink"/></g><g id="zPresetGuide3"><path class="zPresetMark"/><path class="zPresetLink"/></g></svg><div id="zPresetButtons" role="group" aria-label="Saved heights"><button id="zPreset1" type="button" class="zPresetButton" aria-describedby="zPresetHint" disabled>1</button><button id="zPreset2" type="button" class="zPresetButton" aria-describedby="zPresetHint" disabled>2</button><button id="zPreset3" type="button" class="zPresetButton" aria-describedby="zPresetHint" disabled>3</button></div><p id="zPresetHint" class="srOnly">Tap a saved preset to recall its height. Hold for 3 seconds to save or replace the selected Z height on this phone.</p>
+  </section>
+  <section class="xyzHeight xyzYControl glass" aria-label="Y position control" hidden>
+    <label for="xyzY">Y <output id="xyzYValue" for="xyzY">—</output></label>
+    <button id="xyzYDecrease" class="angleStepButton xyzVerticalStep" type="button" aria-label="Move up by 10 units" disabled><svg viewBox="0 0 48 24" aria-hidden="true"><path d="M24 1 L47 9 L36 9 L36 23 L12 23 L12 9 L1 9 Z"/><text x="24" y="18">10</text></svg></button>
+    <div class="xyzVerticalTrack jointSliderRow"><input id="xyzY" type="range" min="0" max="960" step="1" value="0" disabled aria-describedby="xyzHint"><span id="xyzYActual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+    <button id="xyzYIncrease" class="angleStepButton xyzVerticalStep" type="button" aria-label="Move down by 10 units" disabled><svg viewBox="0 0 48 24" aria-hidden="true"><path d="M24 23 L47 15 L36 15 L36 1 L12 1 L12 15 L1 15 Z"/><text x="24" y="12">10</text></svg></button>
+  </section>
+  <section class="xyzControls glass" aria-label="Cartesian XYZ controls" hidden>
+    <div class="jointSliderStack">
+      <div class="jointSliderRow"><label for="xyzX">X <output id="xyzXValue" for="xyzX">—</output></label><div class="jointStepControls">
+        <button id="xyzXDecrease" class="angleStepButton" type="button" aria-label="Move left by 10 units" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M1 24 L9 1 L9 12 L23 12 L23 36 L9 36 L9 47 Z"/><text x="16" y="27">10</text></svg></button>
+        <div class="jointRange"><input id="xyzX" type="range" min="0" max="1696" step="1" value="0" disabled aria-describedby="xyzHint"><span id="xyzXActual" class="jointActualMarker" aria-hidden="true" hidden></span></div>
+        <button id="xyzXIncrease" class="angleStepButton" type="button" aria-label="Move right by 10 units" disabled><svg viewBox="0 0 24 48" preserveAspectRatio="none" aria-hidden="true"><path d="M23 24 L15 1 L15 12 L1 12 L1 36 L15 36 L15 47 Z"/><text x="8" y="27">10</text></svg></button>
+      </div></div>
+    </div>
+    <button id="xyzPrecision" role="switch" aria-checked="false" aria-label="XYZ fine tune"><span class="fineTuneTrack" aria-hidden="true"></span><span>Fine tune</span><b>10×</b></button>
+    <p id="xyzHint" class="srOnly">In Targeting, tap to preview a destination or drag the green bullseye, then press Go; Fine tune reduces drag movement to one tenth. Use two fingers to pan and zoom. In XYZ, sliders select map coordinates; red markers show actual arm position. Green bullseye and dashed cross lines show your XY target; thin red bullseye and dashed cross lines show actual XY. The right vertical Y slider increases downward; the left height slider increases upward. Arrows move X and Y by 10 map units, and height by 1 unit (1 mm in physical play), or 1 map unit and 0.1 height unit with Fine tune enabled. Height stays available in Targeting and while Cue is stopped. Orange means XY aligned; height is separate. Virtual heights range from 0 to 400. Physical play uses calibrated camera coordinates, millimeter heights, and the displayed red reach limits. Fine tune zooms to one tenth of the range with 0.1 unit slider steps.</p>
+    <div class="xyzLegend"><span class="targetKey">⊕ Target</span><span class="actualKey">⊕ Actual</span><span id="xyzAlignment">XY aligned</span></div>
+  </section>
+  <aside id="cuePanel" class="cuePanel glass" aria-label="Cue sequence" hidden>
+    <div class="cueHeading"><b>Cue</b><button id="cueMinimize" aria-label="Minimize cue" aria-expanded="true">›</button></div>
+    <div id="cueRows" aria-label="Cue rows"><div id="cueWaypointRow" hidden><span id="cueWaypointLabel">Blue waypoint</span><button id="cueWaypointCancel" aria-label="Cancel blue waypoint">×</button></div></div>
+    <div class="cueTransport"><button id="cueAdd" aria-label="Add cue row">+</button><button id="cuePlay" aria-label="Play cue">▶</button><button id="cueStop" aria-label="Stop cue">■</button></div>
+    <p id="cueHint">Choose piece → marker. Tap the map to insert a blue waypoint.</p>
+  </aside>
+  <output id="height" class="srOnly"></output>
+  <a id="returnLink" href="/s/green/" hidden>← Player tabs</a>
+<iframe id="physicalRobotFrame" title="Calibrated Green control service" tabindex="-1" aria-hidden="true"></iframe>
+</main>
+
+<dialog id="levels"><div class="dialogHead"><div><p class="eyebrow">Your control path</p><h2>More ways to move.</h2></div><button id="levelsClose" aria-label="Close control path">×</button></div><p id="profileStatus">Checking saved progress…</p><button id="openPlayers" type="button">Players · Upgrades · Stats</button><label class="mobileControlLabel" for="mobileControl">Mobile controls<select id="mobileControl" disabled><option value="joint">Joint</option><option value="xyz" disabled>Cartesian XYZ · locked</option><option value="targeting" disabled>Targeting · locked</option><option value="cue" disabled>Cue autonomy · locked</option></select></label><div class="tierGrid">
+<article class="tier current" data-control="joint"><div class="tierNumber">01 <span>Live</span></div><div class="miniJoint">◜ ◝ <span>━━●━━</span></div><h3>Joint</h3><p>Drag the sketch or use the shoulder and elbow sliders. The white sketch shows your target immediately; the red outline follows the actual arm. Use the dial for base rotation.</p><strong>Available in this release</strong></article>
+<article class="tier" data-control="xyz"><div class="tierNumber">02 <span id="tier2">Preview</span></div><div class="miniXYZ">✛ <span>↕</span></div><h3>Cartesian XYZ</h3><p>X and Y sliders, a vertical height slider, and target / actual bullseyes.</p><strong>Available when unlocked</strong></article>
+<article class="tier" data-control="targeting"><div class="tierNumber">03 <span id="tier3">Preview</span></div><div class="miniTarget">⊕ <span>·····◎</span></div><h3>Targeting</h3><p>Tap to preview a target, then press Go. Keep height and presets; use Fine tune for 10× precision.</p><strong>Available when unlocked</strong></article>
+<article class="tier" data-control="cue"><div class="tierNumber">04 <span id="tier4">Preview</span></div><div class="miniCue">①─②─③ <span>▶</span></div><h3>Cue autonomy</h3><p>Queue piece → marker rows. Play, pause, or stop automatic pickup and placement.</p><strong>Available when unlocked</strong></article>
+</div><p class="muted">Three eligible wins unlock the next control level. Simulation is practice and does not award permanent progress.</p></dialog>
+<dialog id="login"><form id="loginForm"><p class="eyebrow">mobile ltz</p><h2>Join Green.</h2><p>Use your Green player password.</p><label for="password">Player password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit" class="primary">Sign in</button><p id="loginError" role="alert"></p></form></dialog>
+<script src="viewport.js?v=20260917-touch-map"></script><script src="live-game.js?v=20260917-touch-map"></script><script src="network.js?v=20260917-touch-map"></script><script src="mobile.js?v=20260918-rig-bundle"></script>
+</body></html>

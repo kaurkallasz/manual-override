@@ -17,7 +17,7 @@ class GatewayTests(unittest.TestCase):
             headers={'Content-Type':'application/json'}
         def upstream(request,**kwargs):
             self.assertEqual(request.get_header('Cookie'),'hhh_auth=fixture-player-cookie')
-            return Reply(b'{"status":"ready"}' if request.full_url.endswith('/state') else b'data: {}\n\n')
+            return Reply(b'{"status":"ready"}' if request.full_url.split('?')[0].endswith('/state') else b'data: {}\n\n')
         with patch.object(module,'build_opener') as make:
             make.return_value.open.side_effect=upstream
             client=module.create_app('fixture-bridge',public_url='https://example.test').test_client()

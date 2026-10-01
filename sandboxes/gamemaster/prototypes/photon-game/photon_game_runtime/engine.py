@@ -108,11 +108,17 @@ DEFAULT_SETTINGS = {
     **dict(zip(PIECE_KEYS, (100, 101, 102, 103))),
     "wave_count": 12,
     "wave_interval_s": 45.0,
+    "first_wave_delay_s": 0.0,
+    "difficulty_offset": 0.0,
     "enemy_health_multiplier": 1.0,
     "enemy_speed_multiplier": 1.0,
     "enemy_core_damage_multiplier": 1.0,
     "enemy_tower_damage_multiplier": 1.0,
     "enemy_count_multiplier": 1.0,
+    "control_pace_multiplier_joint": 1.0,
+    "control_pace_multiplier_xyz": 1.15,
+    "control_pace_multiplier_image": 1.30,
+    "control_pace_multiplier_cue": 1.50,
     "control_orc_multiplier_joint": 1.0,
     "control_orc_multiplier_xyz": 1.15,
     "control_orc_multiplier_image": 1.30,
@@ -799,6 +805,8 @@ class ContractLevelModel(LevelRuntime):
         self.row_barriers = validate_rows(runtime, self)
 
 
+CONTROL_PACE_KEYS = ('control_pace_multiplier_joint','control_pace_multiplier_xyz',
+                     'control_pace_multiplier_image','control_pace_multiplier_cue')
 CONTROL_ORC_KEYS = ('control_orc_multiplier_joint', 'control_orc_multiplier_xyz',
                     'control_orc_multiplier_image', 'control_orc_multiplier_cue')
 UPGRADE_TRACKS = {'machine_gun': 'damage-machine-gun', 'flamethrower': 'damage-flamethrower',
@@ -806,11 +814,23 @@ UPGRADE_TRACKS = {'machine_gun': 'damage-machine-gun', 'flamethrower': 'damage-f
 
 
 def orc_schedule(settings, waves, tier=1):
-    scale = float(settings['enemy_count_multiplier']) * float(settings.get(CONTROL_ORC_KEYS[tier - 1], (1, 1.15, 1.3, 1.5)[tier - 1]))
-    groups = [[max(1, round(int(g.get('count', 0)) * scale)) for g in wave.get('groups', [])]
-              for wave in waves[:int(settings['wave_count'])]]
-    return {'tier': tier, 'multiplier': scale, 'groups': groups,
-            'waves': [sum(g) for g in groups], 'total': sum(sum(g) for g in groups)}
+    tier_factor=float(settings.get(CONTROL_ORC_KEYS[tier-1],(1,1.15,1.3,1.5)[tier-1]))
+    scale=float(settings['enemy_count_multiplier'])*tier_factor*(1+float(settings.get('difficulty_offset',0)))
+    pace=float(settings.get(CONTROL_PACE_KEYS[tier-1],(1,1.15,1.3,1.5)[tier-1]))
+    rate=float(settings['release_rate_multiplier'])*pace
+    interval=float(settings['wave_interval_s'])/pace
+    delay=float(settings.get('first_wave_delay_s',0))
+    groups=[[max(1,round(int(g.get('count',0))*scale)) for g in wave.get('groups',[])]
+            for wave in waves[:int(settings['wave_count'])]]
+    timings=[]
+    for i,(wave,counts) in enumerate(zip(waves,groups)):
+        duration=max([max(.1,float(g.get('duration_s',1))/rate) for g in wave.get('groups',[])] or [0])
+        start=delay+i*interval
+        timings.append({'wave':i+1,'start_s':start,'release_end_s':start+duration,'duration_s':duration,
+                        'orcs_per_s':sum(counts)/duration if duration else 0,'overlap_s':max(0,duration-interval) if i<len(groups)-1 else 0})
+    return {'tier':tier,'multiplier':scale,'groups':groups,'waves':[sum(g) for g in groups],
+            'total':sum(sum(g) for g in groups),'release_rate_multiplier':rate,'wave_interval_s':interval,
+            'first_wave_delay_s':delay,'timings':timings,'scheduled_end_s':max((t['release_end_s'] for t in timings),default=delay)}
 
 
 class DefenseEngine(RowBarrierRuntime):
@@ -881,6 +901,10 @@ class DefenseEngine(RowBarrierRuntime):
             self.ring_rejected_evaluations: list[dict[str, Any]] = []
             self.ring_search_evaluated_count = 0
             self.field_immunity_until = 0.0
+            self.telemetry={'version':1,'first_placement_s':{'green':None,'purple':None},
+                            'placements':{'green':0,'purple':0},'pickup_to_placement_s':{'green':[],'purple':[]},
+                            'pause_count':0,'outcome_reason':None}
+            self.pickup_times={}
             self.core_stage = "locked"
             self.core_first_tag: int | None = None
             self.core_first_team: str | None = None
@@ -891,7 +915,8 @@ class DefenseEngine(RowBarrierRuntime):
             self._next_event_sequence = 1
             self._reset_rows()
             self._road_tracking_tick = 0
-            self.mobile_arm = MobileArm(self.level)
+            self.mobile_arms = {side:MobileArm(self.level, side) for side in ('green', 'purple')}
+            self.mobile_arm = self.mobile_arms['green']
 
     def set_wake(self, callback: Callable[[], None]) -> None:
         self._wake = callback
@@ -962,7 +987,7 @@ class DefenseEngine(RowBarrierRuntime):
 
     def start(self, settings: dict[str, Any] | None = None, *, progression=None) -> None:
         with self.lock:
-            mobile_arm = self.mobile_arm
+            mobile_arms = self.mobile_arms
             virtual_play = self.virtual_play
             runtime_time = self.runtime_time
             loadout = dict(self.loadout)
@@ -994,23 +1019,31 @@ class DefenseEngine(RowBarrierRuntime):
             self.reset()
             self.virtual_play = virtual_play
             self.player_progression = json.loads(json.dumps(progression or {}))
-            self.mobile_arm = mobile_arm
-            self.mobile_arm.targets = list(self.mobile_arm.joints)
-            self.contract_control_tier = max((p['control_tier'] for p in self.player_progression.values()), default=1)
+            self.mobile_arms = mobile_arms
+            self.mobile_arm = mobile_arms['green']
+            for arm in mobile_arms.values():
+                arm.targets = list(arm.joints)
+            self.contract_control_tier = self.virtual_test_control if self.virtual_test_control is not None else max((p['control_tier'] for p in self.player_progression.values()), default=1)
             self.runtime_time = runtime_time
             self.loadout = loadout
             self.placements = placements
+            for tower in placements.values():
+                side=tower.get('owner')
+                if side in self.telemetry['placements']:
+                    self.telemetry['placements'][side]+=1
+                    self.telemetry['first_placement_s'][side]=0.0
             self.activation_order = activation_order
             self.placement_link_attempts = placement_link_attempts
             if settings:
                 self.settings.update(settings)
             self.configure_piece_codes(self.settings)
-            self.mobile_arm.cue.stop(self.mobile_arm)
+            for arm in self.mobile_arms.values():
+                arm.cue.stop(arm)
             self.settings["max_active_enemies"] = min(MAX_ACTIVE_ENEMIES, int(self.settings["max_active_enemies"]))
             self.core_max_hp = self.core_hp = float(self.settings["core_hp"])
             for tower in self.placements.values():
                 tower.pop('companion', None)
-                if not (self.virtual_play and self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0):
+                if not (self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0):
                     tower['upgrade_level'] = self._unit_level(tower['owner'], tower['tower_type'])
                 tower['upgrade_multiplier'] = 1 + .1 * (tower['upgrade_level'] - 1)
                 tower_base_max_hp = self._tower_max_hp() * tower['upgrade_multiplier']
@@ -1041,14 +1074,18 @@ class DefenseEngine(RowBarrierRuntime):
                 )
             self._reconcile_connections(reason="run_started")
             self._evaluate_ring_topology()
-            self._launch_wave(1)
-            self._event("run_started", wave=1)
+            if float(self.settings.get('first_wave_delay_s',0)) > 0:
+                self.next_wave_at = float(self.settings['first_wave_delay_s'])
+            else:
+                self._launch_wave(1)
+            self._event("run_started", wave=self.current_wave)
         self._changed()
 
     def pause(self, paused: bool = True) -> None:
         with self.lock:
             if paused:
-                self.mobile_arm.halt('Game paused. Connect after resuming.')
+                for arm in self.mobile_arms.values():
+                    arm.halt('Game paused. Connect after resuming.')
             if self.phase == "running":
                 self.paused = bool(paused)
                 self._event("paused" if paused else "resumed")
@@ -1057,7 +1094,8 @@ class DefenseEngine(RowBarrierRuntime):
     def set_virtual_play(self, enabled: bool) -> None:
         with self.lock:
             if not enabled:
-                self.mobile_arm.halt('Physical mode selected.')
+                for arm in self.mobile_arms.values():
+                    arm.halt('Physical mode selected.')
             self.virtual_play = bool(enabled)
             self._refresh_upgrade_levels()
             self._event("input_mode", virtual_play=self.virtual_play)
@@ -1066,8 +1104,6 @@ class DefenseEngine(RowBarrierRuntime):
     def set_virtual_test_loadout(self, levels, control=...) -> None:
         """Practice-only overrides; no saved player or currency mutations."""
         with self.lock:
-            if not self.virtual_play:
-                raise ValueError('enable Virtual play before changing test unlocks')
             if self.phase not in ('setup', 'running'):
                 raise ValueError('reset the finished game before changing test unlocks')
             if control is not ... and control is not None and (type(control) is not int or not 1 <= control <= 4):
@@ -1082,7 +1118,8 @@ class DefenseEngine(RowBarrierRuntime):
                         raise ValueError(f'{track} must be an integer from {minimum} to 4')
             if control is not ...:
                 self.virtual_test_control = control
-                self.mobile_arm.refresh_control_unlock(control if control is not None else 1)
+                for arm in self.mobile_arms.values():
+                    arm.refresh_control_unlock(control if control is not None else 1)
             self.virtual_test_loadout = dict(levels) if levels is not None else None
             self._refresh_upgrade_levels()
             self._event('virtual_test_loadout', levels=self.virtual_test_loadout, control=self.virtual_test_control)
@@ -1091,7 +1128,7 @@ class DefenseEngine(RowBarrierRuntime):
     def _refresh_upgrade_levels(self) -> None:
         for tower in self.placements.values():
             # Unlocks govern placement. Locking a type does not remove its units.
-            if self.virtual_play and self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0:
+            if self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0:
                 continue
             level = self._unit_level(tower['owner'], tower['tower_type'])
             tower.update(upgrade_level=level, upgrade_multiplier=1 + .1 * (level - 1))
@@ -1115,9 +1152,10 @@ class DefenseEngine(RowBarrierRuntime):
         with self.lock:
             codes = self.validate_piece_codes(settings)
             owners = dict(zip(codes, ('green', 'green', 'purple', 'purple')))
-            if self.atom_owners == owners and list(self.mobile_arm.tags) == codes[:2]:
+            if self.atom_owners == owners and all(list(self.mobile_arms[side].tags) == codes[i:i+2] for side, i in (('green', 0), ('purple', 2))):
                 return
-            self.mobile_arm.configure_pieces(codes[:2])
+            for side, i in (('green', 0), ('purple', 2)):
+                self.mobile_arms[side].configure_pieces(codes[i:i+2])
             self.atom_owners = owners
             self.piece_roles = dict(zip(codes, DEFAULT_LOADOUT.values()))
             self.loadout = dict(self.piece_roles)
@@ -1148,7 +1186,7 @@ class DefenseEngine(RowBarrierRuntime):
                 if (unit := self._sync_companion(tower, create=create, installed=installed)) is not None]
 
     def _unit_level(self, owner, kind):
-        if self.virtual_play and self.virtual_test_loadout is not None:
+        if self.virtual_test_loadout is not None:
             return max(1, self.virtual_test_loadout[UPGRADE_TRACKS.get(kind, kind)])
         return int(self.player_progression.get(owner, {}).get('levels', {}).get(UPGRADE_TRACKS.get(kind, kind), 1))
 
@@ -1423,8 +1461,8 @@ class DefenseEngine(RowBarrierRuntime):
             if socket_id not in self.level.sockets:
                 raise ValueError("unknown socket")
             kind = self.piece_roles[atom_tag_id]
-            if source == 'virtual' and self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[kind]] == 0:
-                raise ValueError(f'{kind.replace("_", " ")} is locked in the virtual test loadout')
+            if self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[kind]] == 0:
+                raise ValueError(f'{kind.replace("_", " ")} is locked in the practice loadout')
             if tower_type not in (None, "", kind):
                 raise ValueError(
                     f"Atom {atom_tag_id} always activates {kind.replace('_', ' ')}"
@@ -1596,7 +1634,7 @@ class DefenseEngine(RowBarrierRuntime):
         for source_group in config.get("groups", []):
             count = max(1, round(int(source_group.get("count", 0)) *
                 float(self.settings["enemy_count_multiplier"]) *
-                float(self.settings[CONTROL_ORC_KEYS[self.contract_control_tier - 1]])))
+                float(self.settings[CONTROL_ORC_KEYS[self.contract_control_tier - 1]]) * (1+float(self.settings.get('difficulty_offset',0)))))
             group = {
                 **source_group, "count": count, "spawned": 0,
                 "spawn_offset": spawn_offset,
@@ -1610,7 +1648,7 @@ class DefenseEngine(RowBarrierRuntime):
             spawn_offset += count
         self.launched_waves.append({"wave": number, "started_at": self.sim_time, "groups": groups})
         self.current_wave = number
-        self.next_wave_at = self.sim_time + float(self.settings["wave_interval_s"])
+        self.next_wave_at = self.sim_time + float(self.settings["wave_interval_s"])/float(self.settings.get(CONTROL_PACE_KEYS[self.contract_control_tier-1],1))
         self._event("wave_started", wave=number)
 
     @staticmethod
@@ -1640,7 +1678,7 @@ class DefenseEngine(RowBarrierRuntime):
         for wave in self.launched_waves:
             elapsed = self.sim_time - wave["started_at"]
             for group in wave["groups"]:
-                duration = max(0.1, float(group.get("duration_s", 1.0)) / max(0.05, float(self.settings["release_rate_multiplier"])))
+                duration = max(0.1, float(group.get("duration_s", 1.0)) / max(0.05, float(self.settings["release_rate_multiplier"])*float(self.settings.get(CONTROL_PACE_KEYS[self.contract_control_tier-1],1))))
                 count = int(group["count"])
                 target = min(count, max(1 if count else 0, int(count * min(1.0, elapsed / duration))))
                 while group["spawned"] < target:
@@ -3854,7 +3892,8 @@ class DefenseEngine(RowBarrierRuntime):
     def step(self, dt: float) -> None:
         dt = max(0.0, min(float(dt), 0.1))
         with self.lock:
-            self.mobile_arm.step(dt, self)
+            for arm in self.mobile_arms.values():
+                arm.step(dt, self)
             if dt > 0:
                 self.runtime_time += dt
             self._refresh_row_barriers()
@@ -4587,6 +4626,7 @@ class DefenseEngine(RowBarrierRuntime):
                 "paused": self.paused,
                 "virtual_play": self.virtual_play,
                 "mobile_arm": self.mobile_arm.snapshot(),
+                "mobile_arms": {side:arm.snapshot() for side,arm in self.mobile_arms.items()},
                 "level_revision": self.level.layout_revision,
                 "aruco_code_footprint_px": self.level.aruco_code_footprint_px,
                 "core_aruco_code_footprint_px": (
@@ -4654,6 +4694,17 @@ class DefenseEngine(RowBarrierRuntime):
             }
 
     def _event(self, kind: str, **detail: Any) -> None:
+        if kind=='tower_placed' and self.phase=='running':
+            side=self.atom_owners.get(detail.get('atom_tag_id'))
+            if side in self.telemetry['placements']:
+                self.telemetry['placements'][side]+=1
+                if self.telemetry['first_placement_s'][side] is None:self.telemetry['first_placement_s'][side]=round(self.sim_time,3)
+                pickup=self.pickup_times.pop(detail.get('atom_tag_id'),None)
+                if pickup is not None:self.telemetry['pickup_to_placement_s'][side].append({'seconds':round(self.sim_time-pickup,3),'source':'virtual simulation','piece_id':detail['atom_tag_id']})
+        elif kind=='mobile_pickup':self.pickup_times[detail['atom_tag_id']]=self.sim_time
+        elif kind=='paused':self.telemetry['pause_count']+=1
+        elif kind in ('run_won','core_destroyed','core_detonation_complete'):
+            self.telemetry['outcome_reason']='core activation' if detail.get('reason')=='core_tag_detonation' or self.core_stage in ('detonating','complete') else ('all waves cleared' if kind=='run_won' else 'core destroyed')
         self.events.append({
             "sequence": self._next_event_sequence,
             "kind": kind,

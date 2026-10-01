@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {readJson}=require('../sandboxes/green/prototypes/mobile-ltz/network.js');
+const {readJson}=require('../shared/mobile_ltz/network.js');
 const response=(body,status=200)=>({status,ok:status<400,text:async()=>body,json(){throw Error('Do not use Safari Response.json');}});
 (async()=>{
   assert.deepEqual(await readJson(response('{"status":"ready"}')),{status:'ready'});

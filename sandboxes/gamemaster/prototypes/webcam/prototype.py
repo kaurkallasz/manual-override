@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 
 import cv2
@@ -108,7 +109,16 @@ SCREEN_NMARKERS = 6
 SCREEN_BITS = 3
 SCREEN_BASE = 100
 _screen_dict = cv2.aruco.extendDictionary(SCREEN_NMARKERS, SCREEN_BITS)
-_screen_detector = cv2.aruco.ArucoDetector(_screen_dict, cv2.aruco.DetectorParameters())
+# Nine data bits are easily aliased by map textures. Require intact borders and
+# exact codes; geometry/temporal checks below are specific to the Atom family.
+_screen_params = cv2.aruco.DetectorParameters()
+_screen_params.errorCorrectionRate = 0.0
+_screen_params.maxErroneousBitsInBorderRate = 0.1
+_screen_detector = cv2.aruco.ArucoDetector(_screen_dict, _screen_params)
+SCREEN_MAX_EDGE_RATIO = 2.0
+SCREEN_CONFIRM_SECS = 0.3
+SCREEN_CONFIRM_FRAMES = 3
+SCREEN_CONFIRM_GAP = 0.5
 
 
 def _usb_camera_devices():
@@ -219,6 +229,78 @@ def _collect(dets, corners, ids, scale, w, h, id_offset=0,
         }
 
 
+def _screen_shape(corners):
+    """Reject elongated map rectangles; allow moderate panel foreshortening."""
+    points = np.asarray(corners, dtype=np.float32).reshape(4, 2)
+    if not np.isfinite(points).all() or not cv2.isContourConvex(points):
+        return False
+    edges = np.roll(points, -1, axis=0) - points
+    lengths = np.linalg.norm(edges, axis=1)
+    if min(lengths) < 8 or max(lengths) / min(lengths) > SCREEN_MAX_EDGE_RATIO:
+        return False
+    # Acute/sliver quads are not plausible overhead views of an Atom screen.
+    for index in range(4):
+        cosine = np.dot(-edges[index-1], edges[index]) / (lengths[index-1] * lengths[index])
+        if abs(float(cosine)) > 0.75:
+            return False
+    return True
+
+
+def _collect_screens(dets, corners, ids, scale, width, height):
+    """Do not reinterpret a printed marker, or guess between duplicate IDs."""
+    if ids is None:
+        return
+    printed = [np.asarray(tag["corners"], np.float32) for tag in dets.values()]
+    candidates = {}
+    for corner, marker_id in zip(corners, ids.flatten()):
+        if not _screen_shape(corner):
+            continue
+        points = np.asarray(corner, np.float32).reshape(4, 2) / scale
+        area = abs(cv2.contourArea(points))
+        if any(cv2.intersectConvexConvex(points, other)[0] >=
+               0.5 * min(area, abs(cv2.contourArea(other))) for other in printed):
+            continue
+        candidates.setdefault(int(marker_id), []).append(corner)
+    for marker_id, matches in candidates.items():
+        if len(matches) == 1:
+            _collect(dets, matches, np.array([[marker_id]]), scale, width, height, SCREEN_BASE)
+
+
+class ScreenConfirmation:
+    """Confirm a spatially consistent Atom ID before *any* consumer sees it.
+
+    Missing frames, identity/position/size jumps and capture changes break the
+    streak. Printed markers keep their existing immediate detection behavior.
+    """
+    def __init__(self):
+        self.records = {}
+
+    def reset(self):
+        self.records.clear()
+
+    def update(self, detections, now):
+        output = {mid: tag for mid, tag in detections.items() if mid < SCREEN_BASE}
+        current = {}
+        for mid, tag in detections.items():
+            if not SCREEN_BASE <= mid < SCREEN_BASE + SCREEN_NMARKERS:
+                continue
+            points = np.asarray(tag["corners"], np.float32)
+            size = float(np.mean(np.linalg.norm(np.roll(points, -1, axis=0) - points, axis=1)))
+            old = self.records.get(mid)
+            consistent = (old is not None and 0 < now - old["last"] <= SCREEN_CONFIRM_GAP
+                          and 0.65 <= size / max(old["size"], 1) <= 1.55
+                          and math.hypot(tag["x"] - old["x"], tag["y"] - old["y"])
+                          <= 0.5 * min(size, old["size"]))
+            record = {"first": old["first"] if consistent else now,
+                      "count": old["count"] + 1 if consistent else 1,
+                      "last": now, "size": size, "x": tag["x"], "y": tag["y"]}
+            current[mid] = record
+            if record["count"] >= SCREEN_CONFIRM_FRAMES and now - record["first"] >= SCREEN_CONFIRM_SECS:
+                output[mid] = tag
+        self.records = current
+        return output
+
+
 def _detect(frame, target_width, target_height):
     """Detect markers from all supported dictionaries in full-res pixel coords.
 
@@ -236,7 +318,7 @@ def _detect(frame, target_width, target_height):
     _collect(dets, c, i, scale, w, h,
              id_min=TOWER_TAG_MIN, id_max=TOWER_TAG_MAX)    # fixed sockets 50-55
     c, i, _ = _screen_detector.detectMarkers(gray)
-    _collect(dets, c, i, scale, w, h, SCREEN_BASE)          # Atom-screen markers
+    _collect_screens(dets, c, i, scale, w, h)              # validated Atom geometry
     return dets
 
 
@@ -359,6 +441,9 @@ class CameraManager:
 
     def __init__(self):
         self._lock = threading.Lock()
+        # Stopping releases _lock while joining the grab thread. Keep capture
+        # replacement/probing serialized across that gap and concurrent viewers.
+        self._lifecycle_lock = threading.RLock()
         self._cap = None
         self._index = None
         self._device_info = None
@@ -369,6 +454,7 @@ class CameraManager:
         self._running = False
         self._latest = None        # latest JPEG bytes
         self._latest_raw = None    # unannotated BGR frame for calibration/vision clients
+        self._latest_raw_at = 0.0
         self._w = 0                # actual capture width
         self._h = 0                # actual capture height
         self._req_w = 0            # requested width
@@ -388,11 +474,30 @@ class CameraManager:
         self._last_detections = {}
         self._overlay_detections = {}
         self._last_detections_at = 0.0
+        self._screen_confirmation = ScreenConfirmation()
         self._no_signal = _placeholder("No camera selected")
 
     # -- lifecycle ------------------------------------------------------------
     def open(self, index, width=None, height=None, tracking_width=None,
              tracking_height=None, detection_fps=None):
+        with self._lifecycle_lock:
+            return self._open(index, width, height, tracking_width,
+                              tracking_height, detection_fps)
+
+    def ensure_open(self):
+        """Start the remembered camera once, shared by hub startup and viewers."""
+        with self._lifecycle_lock:
+            if self.active_index() is not None:
+                return True, None
+            remembered = _load_settings()
+            if remembered is None:
+                return False, "No camera selected; choose one in Webcam"
+            return self.open(remembered["index"], remembered["width"],
+                             remembered["height"], remembered["tracking_width"],
+                             remembered["tracking_height"], remembered["detection_fps"])
+
+    def _open(self, index, width=None, height=None, tracking_width=None,
+              tracking_height=None, detection_fps=None):
         """Open camera `index` at a requested resolution, replacing any current
         one. The camera picks the closest mode it supports; status reports what
         was actually achieved. Returns (ok, error)."""
@@ -491,6 +596,7 @@ class CameraManager:
             self._detection_fps = 0.0
             self._last_ts = 0.0
             self._last_detection_ts = 0.0
+            self._screen_confirmation.reset()
             self._running = True
             self._thread = threading.Thread(
                 target=self._grab_loop, name=f"webcam-grab-{index}", daemon=True
@@ -501,6 +607,10 @@ class CameraManager:
         return True, None
 
     def close(self):
+        with self._lifecycle_lock:
+            self._close()
+
+    def _close(self):
         with self._lock:
             self._stop_locked()
             self._index = None
@@ -548,6 +658,7 @@ class CameraManager:
                 continue
             with self._lock:
                 self._latest_raw = frame.copy()
+                self._latest_raw_at = time.time()
             capture_h, capture_w = frame.shape[:2]
             preview = self._process_frame(frame)
             ok, buf = cv2.imencode(
@@ -708,7 +819,8 @@ class CameraManager:
         now = time.monotonic()
         period = 1.0 / self._detection_fps_limit
         if not self._last_detection_ts or now - self._last_detection_ts >= period:
-            dets = _detect(frame, self._tracking_w, self._tracking_h)
+            dets = self._screen_confirmation.update(
+                _detect(frame, self._tracking_w, self._tracking_h), now)
             _tracker.update(dets, now)
             with self._lock:
                 if self._last_detection_ts:
@@ -858,10 +970,75 @@ _tag_transformer = None
 _live = live.LiveState()
 
 
+def hub_init(ctx):
+    """Physical consumers need frames even before a video page is opened."""
+    if ctx.is_enabled():
+        _mgr.ensure_open()
+
+
+def hub_stop():
+    _mgr.close()
+
+
 def set_tag_transformer(transformer):
     """Register an optional sibling-prototype transform for /api/tags."""
     global _tag_transformer
     _tag_transformer = transformer if callable(transformer) else None
+    return {"contract": "hhh.webcam.transformer", "version": 1,
+            "status": "ready", "registered": _tag_transformer is not None}
+
+
+def camera_status_snapshot():
+    """Public camera state; consumers never access the capture manager."""
+    value = _mgr.status()
+    return {"contract": "hhh.webcam.camera", "version": 1,
+            "status": "ready" if value.get("open") else "unavailable",
+            "observed_at": time.time(), "camera": value}
+
+
+def raw_frame_snapshot():
+    """Fresh, uncorrected BGR copy from the one owned camera capture."""
+    with _mgr._lock:
+        frame_at = _mgr._latest_raw_at
+        frame = None if _mgr._latest_raw is None else _mgr._latest_raw.copy()
+        ready = bool(_mgr._running and _mgr._cap is not None and frame is not None
+                     and 0 <= time.time() - frame_at <= 1.5)
+    return {"contract": "hhh.webcam.frame", "version": 1,
+            "status": "ready" if ready else "unavailable", "frame_at": frame_at,
+            "frame": frame if ready else None}
+
+
+def camera_command(value):
+    """Named command boundary for camera selection and UVC controls."""
+    if not isinstance(value, dict):
+        raise ValueError("expected camera command object")
+    action = value.get("action")
+    result = {"contract": "hhh.webcam.controls", "version": 1, "status": "ready", "ok": True}
+    if action == "focus_read":
+        return {**result, **_mgr.focus_controls()}
+    if action == "focus_set":
+        for key in ("autofocus", "autoexposure"):
+            if key in value and value[key] is not None and type(value[key]) is not bool:
+                raise ValueError(f"{key} must be true or false")
+        for key in ("focus", "exposure"):
+            if key in value and value[key] is not None and (type(value[key]) not in (int, float) or not math.isfinite(value[key])):
+                raise ValueError(f"{key} must be finite")
+        ok, error, controls = _mgr.set_focus_controls(**{key: value.get(key) for key in ("autofocus", "focus", "autoexposure", "exposure")})
+        return {**result, **(controls or {}), "ok": ok, "error": error, "status": "ready" if ok else "unavailable"}
+    if action == "list":
+        return {**result, "cameras": probe_cameras(), "active_index": _mgr.active_index()}
+    if action == "select":
+        index = value.get("index")
+        if type(index) is not int or index < 0:
+            raise ValueError("expected nonnegative integer camera index")
+        remembered = _load_settings() or {}
+        width, height = int(remembered.get("width") or 1920), int(remembered.get("height") or 1080)
+        ok, error = _mgr.open(index, width, height,
+                              int(remembered.get("tracking_width") or width),
+                              int(remembered.get("tracking_height") or height),
+                              float(remembered.get("detection_fps") or 15))
+        return {**result, "ok": ok, "error": error, "status": "ready" if ok else "unavailable", "camera": _mgr.status()}
+    raise ValueError("unknown camera command")
 
 
 def tag_snapshot():
@@ -893,6 +1070,11 @@ def tag_snapshot():
 
 # ---- camera enumeration ----------------------------------------------------
 def probe_cameras(max_index=PROBE_MAX):
+    with _mgr._lifecycle_lock:
+        return _probe_cameras(max_index)
+
+
+def _probe_cameras(max_index):
     """Probe indices 0..max_index-1 and report which ones open.
 
     The currently-active camera is reported from live state (not reopened, which
@@ -966,6 +1148,26 @@ def _load_settings():
         return None
 
 
+def _write_settings(value):
+    path = os.path.abspath(SETTINGS_PATH)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(path), prefix=".camera-", delete=False) as handle:
+            temporary = handle.name
+            json.dump(value, handle, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        descriptor = os.open(os.path.dirname(path), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def _save_settings(index=None, width=None, height=None, tracking_width=None,
                    tracking_height=None, detection_fps=None):
     """Merge the given fields into camera-settings.json."""
@@ -987,11 +1189,7 @@ def _save_settings(index=None, width=None, height=None, tracking_width=None,
         cur["tracking_height"] = tracking_height
     if detection_fps is not None:
         cur["detection_fps"] = detection_fps
-    try:
-        with open(SETTINGS_PATH, "w") as f:
-            json.dump(cur, f)
-    except OSError:
-        pass
+    _write_settings(cur)
 
 
 def _save_focus_settings(index, autofocus, focus,
@@ -1011,11 +1209,7 @@ def _save_focus_settings(index, autofocus, focus,
         cur["autoexposure"] = autoexposure
     if exposure is not None:
         cur["exposure"] = exposure
-    try:
-        with open(SETTINGS_PATH, "w") as f:
-            json.dump(cur, f)
-    except OSError:
-        pass
+    _write_settings(cur)
 
 
 # ---- pages -----------------------------------------------------------------
@@ -1150,11 +1344,6 @@ def api_stop():
 def api_stream():
     """Live MJPEG video. If a camera was remembered but none is open yet, open it
     so just viewing the page brings the feed up."""
-    if _mgr.active_index() is None:
-        remembered = _load_settings()
-        if remembered is not None:
-            _mgr.open(remembered["index"], remembered["width"],
-                      remembered["height"], remembered["tracking_width"],
-                      remembered["tracking_height"], remembered["detection_fps"])
+    _mgr.ensure_open()
     return Response(_mgr.mjpeg(),
                     mimetype="multipart/x-mixed-replace; boundary=frame")

@@ -179,3 +179,43 @@ invalidates that side's old token; any token mismatch on
 - **Shared following limits.** The operator controls both arms together. Defaults
   are 20 mm/s TCP XYZ, 9 deg/s TCP rotation, 12 deg/s joint-space path, and a
   0.50 s acceleration/braking ramp. Settings persist in `motion-settings.json`.
+
+
+## LTZ progression and calibration admission (2026-10-01)
+
+The existing motion path reads `photon.game.motion` v1 first. Explicit GM
+practice/tutorial grants work for both arms without selecting saved profiles.
+Normal play requires `photon.progress` v2 and its mandatory tier. The relay
+obtains `hhh.cal2.safety` v1 from its owner; browser calibration claims cannot
+replace it. Joint FK and Cartesian paths are checked before follower creation.
+During a calibration reservation, the inactive arm and expired session reject
+movement. Missing or malformed reservation state, nonfinite expiry times, and
+an old session epoch fail closed; Stop, release, disconnect and pump-off remain
+available. `stop_side`
+returns `hhh.relay.stop` v1 only after fresh finite settled feedback. The
+watchdog starts in `hub_init` and stops in `hub_stop`, never at import.
+
+Operator display exit can leave Cal 2's durable `pending_stops` populated. Relay
+then rejects both arms' motion/enable/acquire requests even when no target display
+is reserved. Stop, disconnect, release and pump-off remain available. Operator
+Connect is also available: it opens feedback sockets without enabling an arm or
+starting a follower, allowing measured stop confirmation to recover the existing
+gate. Screen navigation never clears this hardware requirement.
+
+Cartesian recovery from a measured boundary stop is bounded to 10 mm outside
+the owner-supplied Cal 2 envelope. The destination must be valid; sampled motion
+must never worsen a violated constraint or cross another boundary, and must
+remain inside after re-entry. Larger excursions and malformed geometry remain
+blocked. This uses the same admission, reservation, token and follower path as
+ordinary moves; reconnecting grants no additional reach. Regression:
+`python -m unittest discover -s tests -p test_cartesian_boundary_recovery.py`.
+
+
+Calibration connection setup permits the selected player to open its existing
+Relay sockets, acquire and enable while the display has `requires_activation`.
+Game then activates the lesson after fresh enabled-arm/camera evidence. Move and
+pump-on still require a live same-epoch lesson grant. Setup runs owner maintenance
+before acquire/enable; unresolved pending stops continue to block those actions.
+A side with a pending stop may open feedback sockets solely so the stop can be
+confirmed. Another side cannot use this exception to acquire or move. Player
+identity and the existing per-arm lease remain authoritative.

@@ -14,12 +14,12 @@
     {id:'damage-tesla-coil',name:'Tesla Coil',weapon:'photon-detonator',names:['Focused Coil','Dual Capacitor','Storm Core']},
     {id:'forcefield',name:'Force Field',names:['Expanded Arc','Dual-Layer Field','Bastion Barrier']}
   ];
-  let state = null, busy = false, revealing = null, previews = [], history = [], historyData = null, nextCursor = null, historyGeneration = 0, selectedId = null, toastTimer;
+  let state = null, busy = false, revealing = null, previews = [], history = [], historyData = null, nextCursor = null, historyGeneration = 0, selectedId = null, toastTimer, practiceTier = null;
   const esc = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const number = value => Number(value || 0).toLocaleString();
   const clock = value => value == null ? '—' : `${Math.floor(value/60)}:${(value%60).toFixed(1).padStart(4,'0')}`;
   const when = value => new Date(value*1000).toLocaleString();
-  const operation = () => crypto.randomUUID();
+  const operation = () => LtzOperationId();
   async function json(url, options) { const response=await fetch(url,options); const data=await response.json(); if(!response.ok||data.ok===false||data.status==='unavailable') throw Error(data.error||'Progress unavailable'); return data; }
   function status(text,error=false){$('saveStatus').textContent=text;$('saveStatus').classList.toggle('error',error);}
   function toast(text){clearTimeout(toastTimer);$('toast').textContent=text;$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2200);}
@@ -28,43 +28,46 @@
   function cost(track,level){return (track==='forcefield'?1000:250)*(level-1);}
   function apply(data){
     if(data.status!=='ready')throw Error(data.error||'Progress unavailable');
-    if(data.contract!=='photon.progress'||data.version!==1)throw Error('Progress contract mismatch');
+    if(data.contract!=='photon.progress'||data.version!==2)throw Error('Progress contract mismatch');
     if(state&&data.revision<state.revision)return;
     const changed=data.revision!==state?.revision,old=state?.player;
     state=data;
     if(old&&old.id===data.player?.id&&data.player.unlocked_control>old.unlocked_control){revealing=`control:${data.player.unlocked_control}`;toast(`${modes[data.player.unlocked_control-1]} unlocked`);setTimeout(()=>{revealing=null;render();},1100);}
     render();status('Saved on the game server');
-    if(changed){if(selectedId!==state.player?.id){selectedId=state.player?.id;$('cohort').value='';}loadHistory();}
+    if(changed){if(selectedId!==state.player?.id){selectedId=state.player?.id;$('cohort').value='';$('dataset').value=state.player?.is_test?'practice':'scored';}loadHistory();}
   }
   function render(){
     const p=state?.player,locked=busy||active();
     $('scoreValue').textContent=p?number(p.credits):'—';
     const currentChoice=$('playerSelect').value;
-    $('playerSelect').innerHTML='<option value="">Select a player</option>'+(state?.players||[]).map(x=>`<option value="${esc(x.id)}">${esc(x.name)} · ${esc(x.id.slice(0,6))}</option>`).join('');
+    $('playerSelect').innerHTML='<option value="">Select a player</option>'+(state?.players||[]).map(x=>`<option value="${esc(x.id)}">${esc(x.name)} · ${x.is_test?'Practice only':esc(x.id.slice(0,6))}</option>`).join('');
     $('playerSelect').value=p?.id||currentChoice;
-    $('controlSelect').innerHTML=modes.map((name,i)=>`<option value="${i+1}" ${!p||i+1>p.unlocked_control?'disabled':''}>${name}${!p||i+1>p.unlocked_control?' · locked':''}</option>`).join('');
-    $('controlSelect').value=p?.selected_control||1;$('controlSelect').disabled=!p||locked;
+    $('controlSelect').innerHTML=modes.map((name,i)=>`<option value="${i+1}" ${(!p&&practiceTier==null)||i+1>(practiceTier??p?.unlocked_control??0)?'disabled':''}>${name}${(!p&&practiceTier==null)||i+1>(practiceTier??p?.unlocked_control??0)?' · locked':''}</option>`).join('');
+    $('controlSelect').value=practiceTier??p?.selected_control??1;$('controlSelect').disabled=true;
     for(const id of ['loadPlayer','releasePlayer','createPlayer'])$(id).disabled=locked;
     const run=state?.active_attempts?.find(a=>a.participants.some(x=>x.player_id===p?.id));
     const roster=Object.values(state?.roster||{});const contractTier=Math.max(1,...roster.map(x=>x.selected_control));
     $('runStatus').textContent=run?`${run.reward_enabled?'Scored game':'Practice game'} in progress · ${run.banked_kills} kills checkpointed. Profiles and upgrades are fixed until this attempt ends.`:p?`Selected: ${modes[p.selected_control-1]} · Shared battlefield: ${modes[contractTier-1]}${previews[contractTier-1]?` · ${number(previews[contractTier-1].total)} scheduled orcs`:''}.`:'Load a saved player before joining a scored game.';
+    if(Object.values(state?.roster||{}).some(x=>x.is_test))$('runStatus').textContent+=' Test player: games are practice only and excluded from scored statistics for both players.';
+    if(practiceTier!=null)$('runStatus').textContent=`Game Master practice: ${modes[practiceTier-1]} for both players. Saved progression is unchanged. Open player controls to test.${p?.is_test?' Test player: excluded from scored statistics.':''}`;
     $('tracks').innerHTML=tracks.map((track,index)=>{
       const current=track.id==='control'?(p?.unlocked_control||1):(p?.levels[track.id]||1);
       const cards=[2,3,4].map(level=>{
-        const owned=current>=level,available=track.id==='control'?owned:current+1===level;
+        const testing=track.id==='control'&&practiceTier!=null&&practiceTier>=level;
+        const owned=current>=level||testing,available=track.id==='control'?owned:current+1===level;
         const cardState=owned?'unlocked':available?'available':'sealed';
         const credits=track.id==='control'?0:cost(track.id,level);
         const wins=p?.wins_by_tier[level-2]||0;
-        const button=track.id==='control'?(owned?(p?.selected_control===level?'Selected':'Select method'):`${Math.min(3,wins)}/3 wins with ${modes[level-2]}`):(owned?'Installed':available?`Upgrade · ${number(credits)}`:`Requires Level ${level-1}`);
+        const button=testing?'Practice access':track.id==='control'?(owned?(p?.selected_control===level?'Current tier':'Completed'):`${Math.min(3,wins)}/3 wins with ${modes[level-2]}`):(owned?'Installed':available?`Upgrade · ${number(credits)}`:`Requires Level ${level-1}`);
         const detail=track.id==='control'?`${previews[level-1]?Math.round(previews[level-1].multiplier*100)+'% of authored orcs':'More orcs at this tier'} · ${previews[level-1]?number(previews[level-1].total)+' scheduled':''}`:track.id==='forcefield'?`+${20*(level-1)}% hit capacity`:`+${10*(level-1)}% damage and unit health${level===4 ? " · Same-weapon companion with shared health and aim, except in the middle line" : ""}`;
         const sprite=track.sprites?.[level-2]||(track.weapon?`art/structures/upgrades/${track.weapon}-upgrade-l${level}-v1.png`:'assets/force-field-atlas.png');
-        const enabled=p&&!locked&&(track.id==='control'?owned&&p.selected_control!==level:!owned&&available&&p.credits>=credits);
-        return `<article class="upgrade-card ${track.weapon?'damage':track.id} level-${level} ${cardState} ${revealing===track.id+':'+level?'revealing':''}"><div class="card-topline"><span>${esc(track.name)} · L${level}</span><span>${owned?'Online':available?'Ready':'Path locked'}</span></div><div class="card-visual">${track.id==='forcefield'?`<span class="field-upgrade-art" role="img" aria-label="Force field level ${level}" style="background-position:center ${(level-2)*50}%"></span>`:`<img class="upgrade-sprite" src="${sprite}" alt="${esc(track.name)} level ${level}" draggable="false">`}</div><div class="card-copy"><h3>${esc(track.names[level-2])}</h3><p>${esc(detail)}</p></div>${owned?'':'<div class="shutters" aria-hidden="true"><i class="shutter-half shutter-half--left"></i><i class="shutter-half shutter-half--right"></i><img class="shutter-lock" src="assets/upgrade-lock-shutter-v1.png" alt=""></div>'}<div class="reveal-flash" aria-hidden="true"></div><button class="buy-button" data-track="${track.id}" data-level="${level}" ${enabled?'':'disabled'}>${esc(button)}</button></article>`;
+        const enabled=p&&!p.is_test&&!locked&&(track.id==='control'?false:!owned&&available&&p.credits>=credits);
+        return `<article class="upgrade-card ${track.weapon?'damage':track.id} level-${level} ${cardState} ${revealing===track.id+':'+level?'revealing':''}"><div class="card-topline"><span>${esc(track.name)} · L${level}</span><span>${testing?'Practice':owned?'Online':available?'Ready':'Path locked'}</span></div><div class="card-visual">${track.id==='forcefield'?`<span class="field-upgrade-art" role="img" aria-label="Force field level ${level}" style="background-position:center ${(level-2)*50}%"></span>`:`<img class="upgrade-sprite" src="${sprite}" alt="${esc(track.name)} level ${level}" draggable="false">`}</div><div class="card-copy"><h3>${esc(track.names[level-2])}</h3><p>${esc(detail)}</p></div>${owned?'':'<div class="shutters" aria-hidden="true"><i class="shutter-half shutter-half--left"></i><i class="shutter-half shutter-half--right"></i><img class="shutter-lock" src="assets/upgrade-lock-shutter-v1.png" alt=""></div>'}<div class="reveal-flash" aria-hidden="true"></div><button class="buy-button" data-track="${track.id}" data-level="${level}" ${enabled?'':'disabled'}>${esc(button)}</button></article>`;
       }).join('');
       return `<section class="track"><header class="track-label"><div class="track-label__index">SYS / 0${index+1}</div><h2>${esc(track.name)}</h2><div class="track-label__baseline"><strong>${esc(track.baseline||'Weapon system')}</strong>${track.id==='control'?'Three wins unlock each new method':'Saved upgrades apply on the next game map'}</div><div class="track-label__level"><div class="level-readout"><span>Installed tier</span><strong>L${current}</strong></div></div></header>${cards}`+'</section>';
     }).join('');
     $('tracks').querySelectorAll('[data-track]').forEach(button=>button.onclick=()=>mutate({action:button.dataset.track==='control'?'control':'purchase',track:button.dataset.track,level:Number(button.dataset.level)}));
-    $('statsPlayer').textContent=p?`${p.name} · Whole-profile totals across scored games`:'Choose a saved player to load their statistics.';
+    $('statsPlayer').textContent=p?.is_test?`${p.name} · Practice only; no scores, wins or upgrades are earned`:p?`${p.name} · Whole-profile totals across scored games`:'Choose a saved player to load their statistics.';
     $('statsTiles').innerHTML=[['Lifetime score / credited kills',number(p?.lifetime_score)],['Available credits',number(p?.credits)],['Attempts',number(p?.attempts)],['Wins',number(p?.wins)],['Win rate',p?.attempts?`${Math.round(100*p.wins/p.attempts)}%`:'—'],['Highest control',p?modes[p.unlocked_control-1]:'—']].map(x=>tile(...x)).join('');
     $('mastery').innerHTML=(p?.wins_by_tier.every(n=>n>=3)?'<strong>All four levels mastered</strong>':'')+modes.map((name,i)=>`<span>${name} · ${Math.min(3,p?.wins_by_tier[i]||0)}/3 wins</span>`).join('');
   }
@@ -72,7 +75,7 @@
   async function mutate(data){if(!state?.player||busy)return;busy=true;render();status('Saving…');try{apply(await post({...data,revision:state.player.revision,operation_id:operation()}));if(data.action==='purchase'){revealing=`${data.track}:${data.level}`;render();toast('Upgrade installed for your next game');setTimeout(()=>{revealing=null;render();},1100);}}catch(e){status(e.message,true);try{apply(await json(`${API}/state?side=${side}`));status(e.message,true);}catch(_) {}}finally{busy=false;render();}}
   $('loadPlayer').onclick=async()=>{try{apply(await post({action:'select',player_id:$('playerSelect').value||null}));}catch(e){status(e.message,true);}};
   $('releasePlayer').onclick=async()=>{try{apply(await post({action:'select',player_id:null}));}catch(e){status(e.message,true);}};
-  $('createPlayer').onclick=async()=>{if(busy)return;busy=true;render();try{const data=await post({action:'create',name:$('playerName').value,operation_id:operation()});apply(await post({action:'select',player_id:data.result.player_id}));$('playerName').value='';}catch(e){status(e.message,true);}finally{busy=false;render();}};
+  $('createPlayer').onclick=async()=>{if(busy)return;busy=true;render();try{const data=await post({action:'create',select:true,name:$('playerName').value,operation_id:operation()});apply(data);$('playerName').value='';}catch(e){status(e.message,true);}finally{busy=false;render();}};
   $('controlSelect').onchange=()=>mutate({action:'control',level:Number($('controlSelect').value)});
   function filters(){const q=new URLSearchParams({side,dataset:$('dataset').value});for(const [id,key]of[['tierFilter','tier'],['cohort','cohort']])if($(id).value)q.set(key,$(id).value);if($('fromDate').value)q.set('from',new Date($('fromDate').value+'T00:00:00').getTime()/1000);if($('toDate').value)q.set('to',new Date($('toDate').value+'T23:59:59').getTime()/1000);return q;}
   async function loadHistory(append=false){const generation=++historyGeneration;if(!state?.player){history=[];historyData=null;nextCursor=null;drawHistory();return;}if(!append){history=[];$('historyStatus').textContent='Loading performance history…';}try{const q=filters();if(append&&nextCursor!=null)q.set('cursor',nextCursor);const data=(await json(`${API}/history?${q}`)).history;if(generation!==historyGeneration)return;history=append?history.concat(data.rows):data.rows;historyData=data;nextCursor=data.next_cursor;const selected=$('cohort').value;$('cohort').innerHTML='<option value="">All configurations</option>'+data.cohorts.map((c,i)=>`<option value="${c.id}">${esc(modes[c.tier-1])} · ${c.metadata.orc_schedule?.total??'?'} orcs · ${c.count} games · ${c.id.slice(0,5)}</option>`).join('');$('cohort').value=selected;drawHistory();}catch(e){if(generation===historyGeneration){$('historyStatus').textContent=`Could not load history: ${e.message}`;$('historyChart').replaceChildren();$('historyRows').replaceChildren();}}}
@@ -105,6 +108,7 @@
   $('loadMore').onclick=()=>loadHistory(true);
   render();drawHistory();json(`${API}/state?side=${side}`).then(apply).catch(e=>status(e.message,true));
   const events=new EventSource(`${API}/events?side=${side}`);events.onmessage=e=>{try{apply(JSON.parse(e.data));}catch(error){status(error.message,true);}};events.onerror=()=>status('Connection lost. Reconnecting to saved progress…',true);
-  const gameEvents=new EventSource(`${GAME}/events?view=configuration`);gameEvents.onmessage=e=>{try{const data=JSON.parse(e.data);previews=data.previews||[];render();}catch(_){}};
+  const gameEvents=new EventSource(`${GAME}/events?view=configuration`);gameEvents.onmessage=e=>{try{const data=JSON.parse(e.data);if(data.contract!=='photon.game.preview'||data.version!==1)throw Error('Game preview contract mismatch');previews=data.previews||[];practiceTier=data.status==='ready'&&Number.isInteger(data.virtual_test_control)&&data.virtual_test_control>=1&&data.virtual_test_control<=4?data.virtual_test_control:null;render();}catch(_){}};
+  gameEvents.onerror=()=>{practiceTier=null;render();};
   window.addEventListener('pagehide',()=>{events.close();gameEvents.close();});
 })();

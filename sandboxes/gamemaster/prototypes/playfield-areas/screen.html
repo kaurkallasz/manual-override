@@ -40,6 +40,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 // wherever the hub mounts it (e.g. /p/playfield-areas/).
 const BASE = location.pathname.replace(/\/[^/]*$/, '/');
 const U = p => BASE + p.replace(/^\//, '');
+const PRESENTATION = new URLSearchParams(location.search).get('presentation') === '1';
 const DEG = Math.PI / 180, RAD = 180 / Math.PI;
 
 // ---- scene -----------------------------------------------------------------
@@ -97,12 +98,14 @@ composer.addPass(new OutputPass());
 
 // ---- controls --------------------------------------------------------------
 const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enabled = !PRESENTATION;
 orbit.enableDamping = true;
 orbit.target.set(0, 0.5, 0);
 
 const gizmo = new TransformControls(camera, renderer.domElement);
+gizmo.enabled = !PRESENTATION;
 gizmo.setMode('translate');
-gizmo.addEventListener('dragging-changed', e => { orbit.enabled = !e.value; });
+gizmo.addEventListener('dragging-changed', e => { orbit.enabled = !PRESENTATION && !e.value; });
 scene.add(gizmo);
 
 // ---- area meshes, keyed by id ---------------------------------------------
@@ -120,6 +123,15 @@ const MARKER_LAYER = 1;
 // filtering keeps the black/white cells crisp so a top camera can detect them.
 const texLoader = new THREE.TextureLoader();
 const markerTextures = new Map();
+const numberTextures = new Map();
+function numberTexture(mid){
+  if(!numberTextures.has(mid)){
+    const canvas=document.createElement('canvas');canvas.width=128;canvas.height=64;
+    const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.font='bold 50px monospace';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(mid),64,32);
+    const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;numberTextures.set(mid,texture);
+  }
+  return numberTextures.get(mid);
+}
 function markerTexture(mid) {
   let t = markerTextures.get(mid);
   if (!t) {
@@ -166,6 +178,9 @@ function makeMesh(area) {
   mesh.userData.markerMat = markerMat;
   mesh.userData.markers = [markerTop, markerBot];
   mesh.userData.markerId = -1;
+  const number=new THREE.Sprite(new THREE.SpriteMaterial({color:0xffffff,transparent:true,depthTest:false,depthWrite:false,toneMapped:false}));
+  number.layers.set(MARKER_LAYER);number.renderOrder=11;
+  number.position.set(.68,.13,0);number.scale.set(.5,.25,1);mesh.add(number);mesh.userData.number=number;
 
   scene.add(mesh);
   return mesh;
@@ -186,12 +201,14 @@ function setTarget(mesh, area) {
     mesh.userData.markerId = mid;
     mesh.userData.markerMat.map = markerTexture(mid);
     mesh.userData.markerMat.needsUpdate = true;
+    mesh.userData.number.material.map=numberTexture(mid);mesh.userData.number.material.needsUpdate=true;
   }
   // per-component visibility, configured per area in the controller
   const showArea = area.show_area !== false;
   mesh.material.visible = showArea;                 // box body
   mesh.userData.edges.visible = showArea;           // box outline
   for (const m of mesh.userData.markers) m.visible = area.show_aruco !== false;
+  mesh.userData.number.visible=PRESENTATION&&String(area.id).startsWith('cal2-')&&area.show_aruco!==false;
   mesh.userData.showLinks = area.show_links !== false;   // read by updateLinks()
   if (!mesh.userData.inited) { snapToTarget(mesh); mesh.userData.inited = true; }
 }
@@ -200,6 +217,7 @@ function snapToTarget(mesh) {
   const t = mesh.userData.target;
   mesh.position.set(t.x, t.y, t.z);
   mesh.scale.set(t.size, 1, t.size);
+  mesh.userData.number.scale.y=.25*t.size;
   mesh.material.color.copy(t.color);
   mesh.material.emissive.copy(t.color);
   mesh.material.emissiveIntensity = t.glow;
@@ -222,6 +240,7 @@ function syncAreas(areas) {
       scene.remove(mesh);
       mesh.geometry.dispose();
       mesh.material.dispose();
+      mesh.userData.number.material.dispose();
       meshes.delete(id);
     }
   }
@@ -239,6 +258,9 @@ function interpolate(dt) {
     mesh.position.z += (t.z - mesh.position.z) * k;
     const s = mesh.scale.x + (t.size - mesh.scale.x) * k;
     mesh.scale.set(s, 1, s);
+    // Sprites face the camera, so height inherits the box's unscaled Y axis.
+    // Match its X scaling explicitly to keep the number upright and legible.
+    mesh.userData.number.scale.y=.25*s;
     mesh.material.emissiveIntensity += (t.glow - mesh.material.emissiveIntensity) * k;
     mesh.material.color.lerp(t.color, k);
     mesh.material.emissive.lerp(t.color, k);
@@ -312,7 +334,7 @@ function deselect() {
 }
 
 renderer.domElement.addEventListener('pointerdown', e => {
-  if (gizmo.dragging) return;
+  if (PRESENTATION || gizmo.dragging) return;
   pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
   const hits = raycaster.intersectObjects([...meshes.values()], false);
@@ -321,7 +343,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
 });
 
 gizmo.addEventListener('dragging-changed', async e => {
-  if (e.value || !selectedId) return;          // only on drag-end
+  if (PRESENTATION || e.value || !selectedId) return; // only on editor drag-end
   const mesh = meshes.get(selectedId);
   if (!mesh) return;
   const body = { x: round(mesh.position.x), y: round(mesh.position.y - 0.09), z: round(mesh.position.z) };
@@ -333,6 +355,7 @@ gizmo.addEventListener('dragging-changed', async e => {
 });
 
 window.addEventListener('keydown', e => {
+  if (PRESENTATION) return;
   if (e.key === 'Escape') deselect();
   if (e.key === 'r') gizmo.setMode('rotate');
   if (e.key === 's') gizmo.setMode('scale');
@@ -406,11 +429,12 @@ orbit.addEventListener('change', () => {
 });
 
 function scheduleCamSave() {
-  if (perfNow() < suppressCamSaveUntil) return;
+  if (PRESENTATION || perfNow() < suppressCamSaveUntil) return;
   clearTimeout(camSaveTimer);
   camSaveTimer = setTimeout(saveCamera, 400);   // after movement settles
 }
 async function saveCamera() {
+  if (PRESENTATION) return;
   const body = {
     cam: { x: round(camera.position.x), y: round(camera.position.y), z: round(camera.position.z) },
     rot: { x: round(lastRx * RAD), y: round(lastRy * RAD), z: round(roll * RAD) },

@@ -7,11 +7,12 @@ import time
 
 
 class ProgressLink:
-    def __init__(self, module_reader, engine_reader, wake, path):
+    def __init__(self, module_reader, engine_reader, wake, path, result_listener=None, tick=None):
         self.module_reader = module_reader
         self.engine_reader = engine_reader
         self.wake = wake
         self.path = Path(path)
+        self.result_listener, self.tick = result_listener, tick
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread = None
@@ -36,8 +37,8 @@ class ProgressLink:
 
     @staticmethod
     def _check(value):
-        if not isinstance(value, dict) or value.get('contract') != 'photon.progress' or type(value.get('version')) is not int or value['version'] != 1:
-            raise ValueError('Photon Progress contract mismatch (expected photon.progress v1)')
+        if not isinstance(value, dict) or value.get('contract') != 'photon.progress' or type(value.get('version')) is not int or value['version'] != 2:
+            raise ValueError('Photon Progress contract mismatch (expected photon.progress v2)')
         if value.get('status') != 'ready':
             raise ValueError(value.get('error') or 'Photon Progress unavailable')
         return value
@@ -49,7 +50,9 @@ class ProgressLink:
         self._check(module.progress_snapshot())
         if self.path.exists():
             pending = json.loads(self.path.read_text())
-            self._check(module.finalize_attempt(pending))
+            result = self._check(module.finalize_attempt(pending))
+            if self.result_listener:
+                self.result_listener(result['attempt'])
             self.path.unlink()
         self._check(module.recover_attempts())
         self.recovered = True
@@ -69,7 +72,7 @@ class ProgressLink:
             self.sequence = self.attempt['sequence']
             self.last_checkpoint = time.monotonic()
             self._set(status='ready', error=None, result=None, run_id=value['run_id'],
-                      reward_enabled=value['reward_enabled'], banked_kills=0,
+                      reward_enabled=self.attempt['reward_enabled'], practice_reason=self.attempt.get('practice_reason'), banked_kills=0,
                       participants=self.attempt['participants'], metadata=self.attempt['metadata'])
             return self.attempt
 
@@ -98,6 +101,7 @@ class ProgressLink:
                 phase, kills = engine.phase, engine.kills
                 seconds = engine.sim_time
                 released = engine.next_enemy_id - 1
+                telemetry=json.loads(json.dumps(getattr(engine,'telemetry',{})))
             final = phase in ('won', 'overrun') or outcome is not None
             if not self.pending:
                 if not final and time.monotonic() - self.last_checkpoint < 30:
@@ -106,7 +110,7 @@ class ProgressLink:
                 value = {'run_id': self.attempt['run_id'], 'kills': kills, 'sequence': self.sequence}
                 if final:
                     value.update(outcome=phase if phase in ('won', 'overrun') else outcome,
-                                 active_seconds=seconds, finished_at=time.time(), released_orcs=released)
+                                 active_seconds=seconds, finished_at=time.time(), released_orcs=released,telemetry=telemetry)
                     self.pending = value
             else:
                 value = self.pending
@@ -120,6 +124,8 @@ class ProgressLink:
                 self._check(module.progress_snapshot())
                 if final:
                     result = self._check(module.finalize_attempt(value))
+                    if self.result_listener:
+                        self.result_listener(result['attempt'])
                     self.path.unlink()
                     self.pending = None
                     self.attempt = None
@@ -145,6 +151,14 @@ class ProgressLink:
             except Exception as exc:
                 with self.lock:
                     self._set(status='unavailable', error=str(exc))
+            # Display ownership and its safety lease must still be maintained
+            # when a pending score cannot yet be recovered.
+            if self.tick:
+                try:
+                    self.tick()
+                except Exception as exc:
+                    with self.lock:
+                        self._set(status='unavailable', error=f'Game journey: {exc}')
 
     def start(self):
         self.stop_event.clear()

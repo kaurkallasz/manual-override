@@ -128,7 +128,8 @@ class PhotonContractTests(unittest.TestCase):
         while time.time() < deadline and not (snapshot["wave"] and snapshot["towers"]):
             time.sleep(0.05)
             snapshot = self.game.game_snapshot()
-        self.assertEqual(snapshot["wave"], 1)
+        self.assertEqual(snapshot["wave"], 0)
+        self.assertGreater(snapshot["settings"]["first_wave_delay_s"],0)
         self.assertEqual(snapshot["towers"][0]["atom_tag_id"], 100)
         self.assertEqual(snapshot["level"]["name"], "z_pixel_first_map_01")
 
@@ -181,7 +182,7 @@ class PhotonContractTests(unittest.TestCase):
             (200, 200, 200, 200),
         )
         self.assertIn(b"Tower Defense settings", game.data)
-        self.assertIn(b"owned and validated by Photon Game", settings.data)
+        self.assertIn(b"save it as a level/control preset", settings.data)
         self.assertIn(b"photon.game.settings", settings.data)
         self.assertFalse((PROTOTYPES / "laser-tag-y/settings.html").exists())
         self.assertIn(b"Virtual Atom controls", game.data)
@@ -252,14 +253,19 @@ class PhotonContractTests(unittest.TestCase):
 
 
 class LaserTagYExtractionTests(unittest.TestCase):
-    def test_y_has_no_level_board_camera_or_editor_runtime_dependency(self):
+    def test_y_has_no_direct_sensor_or_board_gameplay_dependency(self):
         module_dir = PROTOTYPES / "laser-tag-y"
         runtime_source = "\n".join(
             (module_dir / name).read_text(encoding="utf-8")
             for name in ("prototype.py", "index.html", "screen.html", "tower-defence-view.js")
         ).lower()
+        # The operator may display Board video and versioned read-only diagnostics.
+        # Neither branch supplies gameplay evidence or commands.
+        for display_url in ('/p/photon-board/api/preview',):
+            self.assertEqual(runtime_source.count(display_url), 1)
+            runtime_source = runtime_source.replace(display_url, '')
         for forbidden in (
-            "photon-level", "photon-board", "webcam", "camera-calibration",
+            "photon-level", "webcam", "camera-calibration",
             ".tmj", "layout-edit", "loadlevel", "setsocket",
         ):
             self.assertNotIn(forbidden, runtime_source)
@@ -895,6 +901,8 @@ class PhotonGameExtractionTests(unittest.TestCase):
             arm = value.pop("mobile_arm", None)
             if arm is not None:
                 self.assertFalse(arm["connected"])
+            for arm in value.pop('mobile_arms', {}).values():
+                self.assertFalse(arm['connected'])
             # Older levels have no companion geometry; the additive fields
             # must not change their primary combat or topology behavior.
             self.assertEqual(value.pop('companions', []), [])
@@ -903,7 +911,7 @@ class PhotonGameExtractionTests(unittest.TestCase):
                 value.pop(key, None)
             value.pop("physical_input_error", None)
             # Brute tuning is additive in Game; this parity fixture runs Grunts.
-            for key in ("brute_first_wave", "brute_size_multiplier", "brute_health", "brute_damage_per_s", "control_orc_multiplier_joint", "control_orc_multiplier_xyz", "control_orc_multiplier_image", "control_orc_multiplier_cue", "green_piece_1", "green_piece_2", "purple_piece_1", "purple_piece_2"):
+            for key in ("brute_first_wave", "brute_size_multiplier", "brute_health", "brute_damage_per_s", "control_orc_multiplier_joint", "control_orc_multiplier_xyz", "control_orc_multiplier_image", "control_orc_multiplier_cue", "first_wave_delay_s", "difficulty_offset", "control_pace_multiplier_joint", "control_pace_multiplier_xyz", "control_pace_multiplier_image", "control_pace_multiplier_cue", "green_piece_1", "green_piece_2", "purple_piece_1", "purple_piece_2"):
                 value["settings"].pop(key, None)
             for tower in value["towers"]:
                 # Opaque mobile edit identity does not change combat behavior.
@@ -1166,7 +1174,7 @@ class PhotonGameExtractionTests(unittest.TestCase):
                     with client.get("/p/photon-game/") as page, client.get("/p/photon-game/settings") as alias:
                         self.assertEqual(page.status_code, 200)
                         self.assertEqual(page.data, alias.data)
-                        self.assertIn(b"owned and validated by Photon Game", page.data)
+                        self.assertIn(b"save it as a level/control preset", page.data)
                         self.assertIn(b"Input and storage diagnostics", page.data)
                         self.assertNotIn(b"laser-tag-y", page.data)
                         for key in game._settings.response()["limits"]:

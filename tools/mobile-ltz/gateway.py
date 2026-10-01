@@ -115,7 +115,7 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
     stream_tokens={}
     stream_lock=threading.Lock()
 
-    def stream_offer(cookie):
+    def stream_offer(cookie,side):
         try:
             url=public_url or json.loads(Path(public_url_file).read_text())['url']
             parsed=urlsplit(url)
@@ -127,11 +127,11 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
         with stream_lock:
             for token,entry in list(stream_tokens.items()):
                 if entry['expires_at']<=now: del stream_tokens[token]
-            found=next(((token,entry) for token,entry in stream_tokens.items() if entry['cookie']==cookie and entry['expires_at']>now+90),None)
+            found=next(((token,entry) for token,entry in stream_tokens.items() if entry['cookie']==cookie and entry['side']==side and entry['expires_at']>now+90),None)
             if found is None:
                 if len(stream_tokens)>=128: return None
                 token=secrets.token_urlsafe(32)
-                entry={'cookie':cookie,'expires_at':now+600}
+                entry={'cookie':cookie,'side':side,'expires_at':now+600}
                 stream_tokens[token]=entry
             else: token,entry=found
         return {'contract':'mobile.stream','version':1,'url':url.rstrip('/')+'/live/events?token='+token,'expires_at':entry['expires_at'],'ttl_s':max(0,entry['expires_at']-now)}
@@ -168,10 +168,12 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
     def relay(path):
         direct=request.environ.get('mobile.stream')
         if direct: path='events'
+        side=direct['side'] if direct else request.headers.get('X-Mobile-Team','green')
+        if side not in ('green','purple'):return jsonify(error='Invalid player team'),400
         client = re.fullmatch(r'client/(?:manifest|(?:[a-f0-9]{32}|latest)/(?:index\.html|mobile\.css|mobile\.js|viewport\.js|live-game\.js|network\.js|joint-rig\.js))', path)
-        if not client and path not in ('login', 'state', 'events', 'command', 'renderer.js') and not path.startswith('assets/'):
+        if not client and path not in ('login', 'state', 'events', 'command', 'player', 'journey', 'history', 'calibrations', 'renderer.js') and not path.startswith('assets/'):
             return jsonify(error='Not found'), 404
-        if request.method != ('POST' if path in ('login', 'command') else 'GET'):
+        if request.method != ('POST' if path in ('login', 'command', 'player', 'journey') else 'GET'):
             return jsonify(error='Method not allowed'), 405
         if '..' in path or '\\' in path or '?' in path or '#' in path:
             return jsonify(error='Invalid path'), 400
@@ -182,7 +184,7 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
                 if not re.fullmatch(r'[a-f0-9]{32}', token):
                     return jsonify(error='Mobile interface unavailable'), 503
                 headers['X-HHH-Auth'] = token
-                manifest_url = upstream + '/s/green/p/mobile-ltz/api/client/manifest'
+                manifest_url = upstream + '/s/'+side+'/p/mobile-ltz/api/client/manifest'
                 with opener.open(Request(manifest_url, headers=headers), timeout=10) as response:
                     manifest = json.load(response)
                 if not isinstance(manifest, dict) or manifest.get('contract') != 'mobile.client' or type(manifest.get('version')) is not int or manifest['version'] != 1 or manifest.get('status') != 'ready' or not re.fullmatch(r'[a-f0-9]{32}', str(manifest.get('build', ''))):
@@ -192,7 +194,7 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
             except (ValueError, URLError, TimeoutError, OSError):
                 return jsonify(error='Mobile interface unavailable. Check the local game server.'), 503
             data = None
-            url = upstream + '/s/green/p/mobile-ltz/api/' + path
+            url = upstream + '/s/'+side+'/p/mobile-ltz/api/' + path
         elif path == 'login':
             value = request.get_json(silent=True) or {}
             password = value.get('password')
@@ -200,16 +202,19 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
                 return jsonify(error='Player password required'), 400
             data = urlencode({'password': password}).encode()
             headers['Content-Type'] = 'application/x-www-form-urlencoded'
-            url = upstream + '/s/green/login'
+            url = upstream + '/s/'+side+'/login'
         else:
             cookie = direct['cookie'] if direct else request.headers.get('X-Mobile-Auth', '')
             if not cookie or len(cookie) > 2048 or any(c in cookie for c in '\r\n;'):
-                return jsonify(error='Sign in to Green'), 401
+                return jsonify(error='Sign in to your team'), 401
             headers['Cookie'] = 'hhh_auth=' + cookie
-            data = request.get_data() if path == 'command' else None
+            data = request.get_data() if path in ('command','player','journey') else None
             if data is not None:
                 headers['Content-Type'] = 'application/json'
-            url = upstream + '/s/gamemaster/p/mobile-ltz-api/api/' + quote(path, safe='/')
+            url = upstream + '/s/gamemaster/p/mobile-ltz-api/api/' + quote(path, safe='/')+'?side='+side
+            if path=='history':
+                query={key:value for key,value in request.args.items() if key in ('combined','dataset','tier','side_at_run','level','from','to','cursor','limit','cohort')}
+                if query:url+='&'+urlencode(query)
         try:
             try:
                 response = opener.open(Request(url, data=data, headers=headers), timeout=10)
@@ -221,17 +226,18 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
                     cookie.load(value)
                 response.close()
                 if 'hhh_auth' not in cookie:
-                    return jsonify(error='Wrong Green password'), 401
+                    return jsonify(error='Wrong player password'), 401
                 return jsonify(ok=True, auth=cookie['hhh_auth'].value)
             if response.code in (301, 302, 303, 307, 308):
                 response.close()
-                return jsonify(error='Sign in to Green'), 401
+                return jsonify(error='Sign in to your team'), 401
             status = response.code
             content_type = response.headers.get('Content-Type', 'application/octet-stream')
             if path=='state' and status==200:
                 try: value=json.load(response)
+                except (ValueError,TypeError): return jsonify(error='Invalid upstream game snapshot'),502
                 finally: response.close()
-                offer=stream_offer(cookie)
+                offer=stream_offer(cookie,side)
                 if offer: value['live_stream']=offer
                 result=jsonify(value);result.headers['Cache-Control']='no-store'
                 return result

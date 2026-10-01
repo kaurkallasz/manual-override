@@ -1,4 +1,4 @@
-"""Bounded practice-only Green arm. No hardware imports or network access."""
+"""Bounded practice-only team arm. No hardware imports or network access."""
 import math
 import re
 import secrets
@@ -14,7 +14,10 @@ class MobileArm:
     # Shared-host round trips can exceed two seconds. This lease is virtual only.
     LEASE_SECONDS = 5.0
 
-    def __init__(self, level):
+    def __init__(self, level, side='green'):
+        if side not in ('green', 'purple'):
+            raise ValueError('Unknown mobile arm team.')
+        self.side, self.label = side, side.title()
         self.cue = MobileCue()
         self.level = level
         self.width, self.height = level.width, level.height
@@ -24,10 +27,10 @@ class MobileArm:
         self.lengths = (reach/2, reach/2)
         self.joints = [-80.0, -5.0, -5.0]
         radius = self.width * .72 * math.cos(math.radians(5))
-        self.joints = self.solve_xyz({
+        self.joints = self.solve_xyz(self.orient({
             'x': min(self.width, .075*self.width + radius*math.cos(math.radians(10))),
             'y': max(0, .9*self.height - radius*math.sin(math.radians(10))),
-            'z': max(0, 60 - .25*self.width*.72*math.sin(math.radians(5)))})
+            'z': max(0, 60 - .25*self.width*.72*math.sin(math.radians(5)))}))
         self.targets = list(self.joints)
         self.unlocked_control = 1
         self.control_mode = 'joint'
@@ -42,9 +45,15 @@ class MobileArm:
         self.pump = 'off'
         self.held = None
         tip = self.pose()['tip']
-        self.tags = {100: {'x': tip['x'], 'y': tip['y']},
-                     101: {'x': tip['x'] - 80, 'y': tip['y'] - 65}}
-        self.message = 'Connect to control the simulated Green arm.'
+        codes = (100, 101) if side == 'green' else (102, 103)
+        direction = 1 if side == 'green' else -1
+        self.tags = {codes[0]: {'x': tip['x'], 'y': tip['y']},
+                     codes[1]: {'x': tip['x'] - direction*80, 'y': tip['y'] - direction*65}}
+        self.message = 'Connect to control the simulated '+self.label+' arm.'
+
+    def orient(self, point):
+        """Purple's virtual arm faces the same board from the opposite corner."""
+        return {**point, 'x':self.width-point['x'], 'y':self.height-point['y']} if self.side == 'purple' else point
 
     def configure_pieces(self, codes):
         points = list(self.tags.values())
@@ -67,7 +76,7 @@ class MobileArm:
         elbow = {'x': base['x'] + reach1 * math.cos(heading), 'y': base['y'] - reach1 * math.sin(heading)}
         tip = {'x': elbow['x'] + reach2 * math.cos(heading), 'y': elbow['y'] - reach2 * math.sin(heading),
                'z': 60 + .25 * (lengths[0] * math.sin(shoulder) + lengths[1] * math.sin(forearm))}
-        return {'base': base, 'elbow': elbow, 'tip': tip}
+        return {'base': self.orient(base), 'elbow': self.orient(elbow), 'tip': self.orient(tip)}
 
     def select_control(self, mode):
         self.cue.stop(self)
@@ -96,6 +105,7 @@ class MobileArm:
                not lo - 1e-7 <= point[k] <= hi + 1e-7
                for k, (lo, hi) in self.xyz_limits().items()):
             raise ValueError('XYZ target outside configured limits.')
+        point = self.orient(point)
         dx, dy = point['x'] - self.width * .075, self.height * .90 - point['y']
         radius, vertical = math.hypot(dx, dy), (point['z'] - 60) * 4
         l1, l2 = self.lengths
@@ -166,7 +176,7 @@ class MobileArm:
             return self.snapshot()
         if not engine.virtual_play or engine.paused or engine.phase not in ('setup', 'running'):
             self.halt('Waiting for a virtual game.')
-            raise ValueError('Green mobile control requires an unpaused virtual game.')
+            raise ValueError(self.label+' mobile control requires an unpaused virtual game.')
         unlocked = engine.virtual_test_control if engine.virtual_test_control is not None else saved_control
         if action == 'connect':
             owner, join_request = data.get('client_id'), data.get('request_id')
@@ -175,7 +185,7 @@ class MobileArm:
                     raise ValueError('Invalid virtual join identity.')
             abandoned = self.suspended and time.monotonic() >= self.deadline
             if self.token and (not owner or owner != self.owner) and not abandoned:
-                raise ValueError('Green already has a controller. Stop it before reconnecting.')
+                raise ValueError(self.label+' already has a controller. Stop it before reconnecting.')
             if self.token and join_request == self.join_request and not self.suspended:
                 # An ambiguous join response may be retried; never issue a
                 # second token or replay a movement as part of that retry.
@@ -190,7 +200,7 @@ class MobileArm:
             self.deadline = time.monotonic() + self.LEASE_SECONDS
             self.targets = list(self.joints)
             self.refresh_control_unlock(unlocked, default=True)
-            self.message = 'Lower the gripper over a Green tag, then tap Suction.'
+            self.message = 'Lower the gripper over a '+self.label+' tag, then tap Suction.'
             return {**self.snapshot(), 'session': self.token}
         token, sequence = data.get('session'), data.get('sequence')
         if not isinstance(token, str) or not self.token or not secrets.compare_digest(token, self.token):
@@ -209,6 +219,8 @@ class MobileArm:
             mode = data.get('mode')
             if mode not in ('joint', 'xyz', 'targeting', 'cue'):
                 raise ValueError('This control is a preview and cannot move the arm.')
+            if engine.virtual_test_control is None and mode != ('joint','xyz','targeting','cue')[unlocked-1]:
+                raise ValueError('Other controls are locked. Stay on your assigned control tier until three wins advance you.')
             if mode == 'xyz' and unlocked < 2:
                 raise ValueError('Cartesian XYZ is locked. Ask Gamemaster to unlock it for this virtual test.')
             if mode == 'targeting' and unlocked < 3:
@@ -271,11 +283,12 @@ class MobileArm:
         tip = self.pose()['tip']
         if mode == 'suction' and self.held is None:
             candidate = piece if piece is not None else min(self.tags, key=lambda tag: math.hypot(self.tags[tag]['x'] - tip['x'], self.tags[tag]['y'] - tip['y']))
-            if candidate not in self.tags or engine.atom_owners.get(candidate) != 'green':
+            if candidate not in self.tags or engine.atom_owners.get(candidate) != self.side:
                 raise ValueError('Movable piece is unavailable.')
             if tip['z'] > 80 or math.hypot(self.tags[candidate]['x'] - tip['x'], self.tags[candidate]['y'] - tip['y']) > 55:
-                raise ValueError('Lower the gripper over a Green tag before suction.')
+                raise ValueError('Lower the gripper over a '+self.label+' tag before suction.')
             self.held = candidate
+            engine._event('mobile_pickup',side=self.side,atom_tag_id=candidate,source='virtual')
             self.message = f'Tag {candidate} held. Move to a socket and lower to release.'
         if mode in ('blow', 'off') and self.held is not None:
             if tip['z'] > 80:
@@ -284,12 +297,12 @@ class MobileArm:
             distance = math.hypot(socket['x']-tip['x'], socket['y']-tip['y']) if socket else math.inf
             core = engine.level.core
             if destination in (None, 38) and math.hypot(core['x']-tip['x'], core['y']-tip['y']) <= 55:
-                engine.activate_core_tag(self.held, source='virtual', team='green')
-                self.message = 'Green core tag confirmed. Waiting for the other team.'
+                engine.activate_core_tag(self.held, source='virtual', team=self.side)
+                self.message = self.label+' core tag confirmed. Waiting for the other team.'
             elif socket and distance <= max(45, float(socket.get('size', 112)) / 2):
                 # place() owns all tower activation, loadout and field rules.
                 sid = next(key for key, value in engine.level.sockets.items() if value is socket)
-                engine.place(self.held, sid, source='virtual', team='green')
+                engine.place(self.held, sid, source='virtual', team=self.side)
                 self.message = f'Socket {sid} activated.'
             else:
                 if destination is not None:
@@ -303,7 +316,7 @@ class MobileArm:
 
     def snapshot(self):
         self.expire()
-        return {'contract': 'photon.mobile-arm', 'version': 1, 'source': 'virtual', 'side': 'green',
+        return {'contract': 'photon.mobile-arm', 'version': 1, 'source': 'virtual', 'side': self.side,
                 'connected': bool(self.token) and not self.suspended, 'suspended': self.suspended,
                 'controller_id': self.controller_id, 'joints': list(self.joints), 'targets': list(self.targets),
                 'limits': self.LIMITS, 'control_mode': self.control_mode,

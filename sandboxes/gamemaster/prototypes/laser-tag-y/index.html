@@ -6,7 +6,19 @@
 <title>Laser Tag Y · Tower Defense</title>
 <link rel="stylesheet" href="/theme.css">
 <link rel="stylesheet" href="data-flow.css?v=2">
+<link rel="stylesheet" href="calibration-history.css?v=1">
 <style>
+[hidden]{display:none!important}
+.camera-view{position:absolute;inset:0;transform:scale(1.15);transform-origin:center;pointer-events:none}
+.stage.calibration-camera .camera-view{transform:none}
+.stage.calibration-camera .top-hud{display:none}
+.stage.calibration-camera .camera-state{top:12px}
+.aruco-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.board-camera[hidden]+.aruco-overlay{visibility:hidden}
+.stage .board-camera{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.stage:not(.rendered) canvas{visibility:hidden}
+.camera-state{position:absolute;top:60px;left:12px;max-width:calc(100% - 24px);padding:8px 12px;background:#05080de8;border:1px solid #ffffff35;border-radius:8px;font-size:13px}
+
 :root{--green:#35d07f;--purple:#c084fc;--cyan:#36dfff;--orange:#ff9f43;--red:#ff5367;--ink:#f4f8ff;--muted:#98a7ba;--panel:#0d141eeb}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#05070a;color:var(--ink);font-family:system-ui,sans-serif}
 button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13px;border:1px solid #354153;border-radius:8px;background:#182231;color:#fff;font-weight:800}.button{text-decoration:none;display:inline-flex;align-items:center;justify-content:center}button{cursor:pointer}button.primary{background:#c9283f;border-color:#ff6478}button:disabled{opacity:.4;cursor:not-allowed}
@@ -14,11 +26,12 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
 .stage-shell{position:relative;width:min(100vw,1696px);margin:auto;background:#000;border-block:1px solid #263141}.stage{position:relative;width:100%;aspect-ratio:1696/960;overflow:hidden;background:radial-gradient(circle at 50% 50%,#111d24,#020407 66%)}.stage canvas{position:absolute;inset:0;width:100%;height:100%}.map-layer{pointer-events:none}.game-layer{pointer-events:none}.stage.virtual .game-layer{pointer-events:auto;cursor:crosshair;touch-action:none}.stage.aim-dragging .game-layer{cursor:grabbing}
 .top-hud{position:absolute;inset:12px 12px auto;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:start;gap:8px;pointer-events:none}.hud-group{display:flex;gap:7px;flex-wrap:wrap}.hud-group.end{justify-content:flex-end}.hud-center{display:flex;align-items:flex-start;justify-content:center}.badge{padding:7px 11px;border:1px solid #ffffff35;border-radius:8px;background:#05080dd9;backdrop-filter:blur(6px);font-weight:900;text-transform:uppercase;font-size:12px}.badge.good{border-color:#35d07f99;color:#7df0ad}.badge.warn{border-color:#ff9f4399;color:#ffc07e}.badge.bad{border-color:#ff536799;color:#ff9aaa}
 .mission{position:absolute;left:12px;right:12px;bottom:12px;padding:10px 13px;border:1px solid #ffffff2c;border-radius:8px;background:#05080de8;text-align:center;font-weight:800;pointer-events:none}.controls{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:12px;border:1px solid #2b3747;border-radius:10px;background:#0b111a}.switch{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:7px 11px;border:1px solid #354153;border-radius:8px;background:#070b11;font-weight:850}.switch input{width:19px;height:19px;accent-color:var(--cyan)}.status{flex:1;min-width:260px;color:#c7d1de;font-size:13px}
-.dashboard{display:grid;grid-template-columns:minmax(240px,.8fr) minmax(320px,1.45fr) minmax(240px,.8fr);gap:12px}.panel{min-width:0;padding:13px;border:1px solid #2a3748;border-radius:10px;background:var(--panel)}.panel h2{margin:0 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#d7e4f3}.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.metric{padding:9px;border:1px solid #29384b;border-radius:8px;background:#080d14}.metric b{display:block;font-size:20px}.metric span{color:var(--muted);font-size:11px;text-transform:uppercase}.tag-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.tag-chip{min-height:44px;padding:7px 4px;border:1px solid #33445a;border-radius:7px;background:#090f17;text-align:center;font:800 12px ui-monospace,monospace;cursor:pointer}.tag-chip.atom{border-color:#ff9f43;color:#ffc07e}.tag-chip.selected{border-color:var(--cyan);color:#fff;box-shadow:0 0 0 2px #36dfff55}.tag-chip.occupied{background:#10241d}.tag-chip.destroyed{border-color:var(--red);color:#ff9aaa}.tag-chip:disabled{opacity:.42;cursor:not-allowed}
+.dashboard{display:grid;align-items:start;grid-template-columns:minmax(240px,.8fr) minmax(320px,1.45fr) minmax(240px,.8fr);gap:12px}.panel{min-width:0;padding:13px;border:1px solid #2a3748;border-radius:10px;background:var(--panel)}.panel h2{margin:0 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#d7e4f3}.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.metric{padding:9px;border:1px solid #29384b;border-radius:8px;background:#080d14}.metric b{display:block;font-size:20px}.metric span{color:var(--muted);font-size:11px;text-transform:uppercase}.tag-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.tag-chip{min-height:44px;padding:7px 4px;border:1px solid #33445a;border-radius:7px;background:#090f17;text-align:center;font:800 12px ui-monospace,monospace;cursor:pointer}.tag-chip.atom{border-color:#ff9f43;color:#ffc07e}.tag-chip.selected{border-color:var(--cyan);color:#fff;box-shadow:0 0 0 2px #36dfff55}.tag-chip.occupied{background:#10241d}.tag-chip.destroyed{border-color:var(--red);color:#ff9aaa}.tag-chip:disabled{opacity:.42;cursor:not-allowed}.tag-chip.detected,.tag-chip.detected:disabled{opacity:1;border-color:#58ee99;color:#baffd4;background:#123b28;box-shadow:0 0 12px #35d07f44}.tag-chip.remembered,.tag-chip.remembered:disabled{opacity:1;border-style:dashed;border-color:#9e9471;color:#c6bea4;background:#22231f}.tag-chip.cached,.tag-chip.cached:disabled{opacity:1;border:1px dashed #4fbd84;color:#9ce9bc;background:#11291f}.tag-chip small{display:block;margin-top:4px;font:11px system-ui,sans-serif}.aruco-summary{margin:8px 0;color:#98cbb0;font-size:12px}
 .aim{margin-top:12px;padding:11px;border:1px solid #ffffff42;border-radius:9px;background:#080d14}.aim h3{margin:0 0 4px;font-size:13px}.aim-row{display:grid;grid-template-columns:110px 1fr 62px;gap:8px;align-items:center;margin-top:7px;font-size:12px}.aim-row input{width:100%;accent-color:var(--cyan)}.aim-value{text-align:right;font:800 12px ui-monospace}.health-line{height:7px;margin-top:6px;border:1px solid #ffffff42;background:#0005}.health-line>span{display:block;height:100%;background:var(--green)}pre{margin:0;max-height:190px;overflow:auto;white-space:pre-wrap;color:#aebbd0;font:11px/1.45 ui-monospace,monospace}
 @media(max-width:960px){.dashboard{grid-template-columns:1fr}.stage{min-height:360px}.top-hud{inset:7px 7px auto;grid-template-columns:1fr 1fr}.hud-center{position:absolute;top:38px;left:50%;transform:translateX(-50%)}.mission{left:7px;right:7px;bottom:7px;font-size:12px}}
 .virtual-controls{display:flex;align-items:center;gap:9px}.fps-monitor{min-width:78px;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--cyan)}
-.test-unlocks{margin-top:18px;padding-top:14px;border-top:1px solid #334354}.test-unlocks summary{font-weight:800;cursor:pointer}.test-upgrade-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;border:0;margin:12px 0;padding:0}.test-upgrade-grid label{display:grid;gap:6px;font-size:13px}.test-upgrade-grid select{width:100%;padding:8px;border:1px solid #405569;border-radius:6px;background:#111b28;color:#eef7ff}.test-control-label{display:grid;gap:6px;max-width:360px;font-size:13px}.test-control-label select{padding:8px;border:1px solid #405569;border-radius:6px;background:#111b28;color:#eef7ff}.test-unlocks .actions{flex-wrap:wrap}.test-unlocks [role=status]{margin-top:10px;font-size:13px;color:#93cfdd}
+.display-controls button[aria-pressed="true"]{border-color:var(--cyan);box-shadow:0 0 0 1px #36dfff55}.display-controls #calibrateGreen{color:#7df0ad}.display-controls #calibratePurple{color:#dcbaff}
+.control-panels{display:grid;gap:12px;min-width:0;align-content:start}.test-unlocks{margin:0}.test-unlocks summary{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#d7e4f3}.test-unlocks summary{font-weight:800;cursor:pointer}.test-upgrade-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;border:0;margin:12px 0;padding:0}.test-upgrade-grid label{display:grid;gap:6px;font-size:13px}.test-upgrade-grid select{width:100%;padding:8px;border:1px solid #405569;border-radius:6px;background:#111b28;color:#eef7ff}.test-control-label{display:grid;gap:6px;max-width:360px;font-size:13px}.test-control-label select{padding:8px;border:1px solid #405569;border-radius:6px;background:#111b28;color:#eef7ff}.test-unlocks .actions{flex-wrap:wrap}.test-unlocks [role=status]{margin-top:10px;font-size:13px;color:#93cfdd}
 </style>
 </head>
 <body>
@@ -26,8 +39,26 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
   <div><h1>Laser Tag Y</h1><div class="sub">Photon Game presentation · physical board or virtual controls</div></div>
   <div class="actions"><button id="dataFlowOpen" type="button" aria-haspopup="dialog">Data flow ↗</button><a id="settingsLink" class="button" title="Open settings owned by Photon Game">Tower Defense settings · Photon Game</a><a id="screenLink" class="button" target="_blank" rel="noopener">Open game screen ↗</a></div>
 </header>
+<section class="controls display-controls" aria-label="Screen and calibration">
+  <div class="actions"><button id="cancelCalibration" type="button" aria-pressed="true">Game screen</button><button id="calibrateGreen" type="button" aria-pressed="false">Green calibration</button><button id="calibratePurple" type="button" aria-pressed="false">Purple calibration</button><button id="calibrateBoth" type="button" aria-pressed="false">Calibrate both · Green first</button><button id="resumeCalibration" type="button" hidden>Resume player calibration</button></div>
+  <span id="calibrationStatus" class="status" role="status" aria-live="polite">Game screen · choose a calibration test when needed.</span>
+</section>
+<section id="calibrationHistory" class="controls calibration-history" aria-label="Saved calibrations">
+  <label>Saved calibration for<select data-history-side><option value="green">Green</option><option value="purple">Purple</option></select></label>
+  <label class="history-choice">Calibration<select data-history-select><option value="latest">Latest complete calibration · default</option></select></label>
+  <div class="actions"><button data-history-preview type="button" aria-pressed="false" disabled>Preview on camera</button><button data-history-apply type="button" disabled>Apply calibration</button><button data-history-refresh type="button">Refresh saved</button></div>
+  <div data-history-status role="status" aria-live="polite">Loading saved calibrations…</div>
+  <div data-history-camera role="status" hidden></div>
+  <p class="history-note">Preview overlays saved positions on the current camera. Apply restores this arm’s calibration and the shared transport height, stopping connected arms first. A new completed calibration becomes the default.</p>
+</section>
 <section class="stage-shell">
   <div id="stage" class="stage">
+    <div class="camera-view">
+      <img id="boardCamera" class="board-camera" alt="Live corrected camera from Photon Board" hidden>
+      <svg id="arucoOverlay" class="aruco-overlay" preserveAspectRatio="xMidYMid meet" aria-label="Detected ArUco codes" hidden></svg>
+      <svg id="savedCalibrationOverlay" class="saved-calibration-overlay" preserveAspectRatio="xMidYMid meet" aria-label="Saved calibration positions over the live camera" hidden></svg>
+    </div>
+    <div id="cameraState" class="camera-state" role="status">Waiting for live camera evidence…</div>
     <canvas id="mapCanvas" class="map-layer" width="1696" height="960" aria-label="Photon Game playfield"></canvas>
     <canvas id="gameCanvas" class="game-layer" width="1696" height="960" aria-label="Photon Game presentation"></canvas>
     <div class="top-hud">
@@ -40,9 +71,10 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
 </section>
 <section class="controls">
   <label class="switch"><input id="scoredPlay" type="checkbox" checked> Scored game</label>
-  <button id="start" class="primary" disabled>Start</button>
+  <button id="start" class="primary" disabled>Start</button><span id="startStatus" role="status" aria-live="polite"></span>
   <button id="pause" disabled>Pause</button>
   <button id="reset">Reset</button>
+  <button id="cameraRetry" type="button" hidden>Retry camera</button>
   <div class="virtual-controls">
     <label class="switch"><input id="virtualPlay" type="checkbox"> <span>Virtual play</span></label>
     <span id="fpsMonitor" class="badge fps-monitor" title="Playfield frames rendered per second">— FPS</span>
@@ -51,7 +83,8 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
 </section>
 <main class="dashboard">
   <section class="panel"><h2>Run</h2><div class="metrics"><div class="metric"><b id="coreMetric">100%</b><span>Core integrity</span></div><div class="metric"><b id="waveMetric">0</b><span>Wave</span></div><div class="metric"><b id="enemyMetric">0</b><span>Active orcs</span></div><div class="metric"><b id="towerMetric">0 / 0</b><span>Turrets + companions</span></div><div class="metric"><b id="killMetric">0</b><span>Kills</span></div><div class="metric"><b id="breachMetric">0</b><span>Breaches</span></div></div></section>
-  <section class="panel"><h2>Virtual Atom controls</h2><p class="sub">Select an Atom from Photon Game’s loadout, then click a numbered socket. In physical mode Photon Board supplies these inputs directly to Photon Game.</p><div id="atomTags" class="tag-grid"></div><div id="socketTags" class="tag-grid" style="margin-top:9px"></div><details id="testUnlocks" class="test-unlocks" hidden open><summary>Virtual test unlocks</summary><p class="sub">Choose turret availability and upgrade levels for both teams. Upgrades update existing defenses immediately. Locks prevent new placements; use Reset to clear placed turrets. L4 adds a same-weapon companion across the code, except in the middle line. Both share health and aim. Saved player progress is unaffected.</p><label class="switch"><input id="testOverride" type="checkbox"> Use test unlocks</label><fieldset id="testUpgradeFields" class="test-upgrade-grid" disabled><legend class="sub">Turrets and defense upgrades</legend></fieldset><label class="test-control-label" for="testMobileControl">Mobile control unlock<select id="testMobileControl"><option value="1">Joint · default</option><option value="2">Cartesian XYZ</option><option value="3">Targeting</option><option value="4">Cue autonomy</option></select></label><p class="sub">Unlocks through the selected control tier for Green mobile practice. Targeting enables finger dragging; Cue autonomy runs queued pickup and placement.</p><div class="actions"><button id="applyTestUnlocks" type="button">Apply test unlocks</button><button id="maxTestUnlocks" type="button">Unlock all L4</button><button id="baseTestUnlocks" type="button">All base levels</button></div><div id="testUnlockStatus" role="status">Using saved-player upgrades, or base levels without a player.</div></details><div id="aimControls" class="aim" hidden><h3 id="aimTitle">Selected defense</h3><div id="aimHealthText" class="sub"></div><div class="health-line"><span id="aimHealthBar"></span></div><label class="aim-row"><span>Direction</span><input id="aimDirection" type="range" min="0" max="359" step="1"><span id="aimDirectionValue" class="aim-value">0°</span></label><label class="aim-row"><span id="aimReachLabel">Wide / narrow</span><input id="aimReach" type="range" min="0" max="100" step="1"><span id="aimReachValue" class="aim-value">50%</span></label><p class="sub">Drag the circular handle on the dotted guide to aim. Moving it closer or farther changes width or reach.</p></div></section>
+  <div class="control-panels"><section class="panel"><h2 id="atomControlsTitle">Aruco MNGMNT</h2><p id="atomControlsHelp" class="sub"></p><div id="arucoSummary" class="aruco-summary" role="status">Waiting for marker detections…</div><div id="atomTags" class="tag-grid"></div><div id="socketTags" class="tag-grid" style="margin-top:9px"></div><div id="arucoCacheControls" style="margin-top:12px"><button id="resetArucoCache" type="button">Reset all cached locations</button><p id="arucoCacheStatus" class="sub" role="status"></p><p id="arucoCacheResetStatus" class="sub" role="status"></p></div><div id="coreTags" class="tag-grid" style="margin-top:9px" hidden></div><div id="aimControls" class="aim" hidden><h3 id="aimTitle">Selected defense</h3><div id="aimHealthText" class="sub"></div><div class="health-line"><span id="aimHealthBar"></span></div><label class="aim-row"><span>Direction</span><input id="aimDirection" type="range" min="0" max="359" step="1"><span id="aimDirectionValue" class="aim-value">0°</span></label><label class="aim-row"><span id="aimReachLabel">Wide / narrow</span><input id="aimReach" type="range" min="0" max="100" step="1"><span id="aimReachValue" class="aim-value">50%</span></label><p class="sub">Drag the circular handle on the dotted guide to aim. Moving it closer or farther changes width or reach.</p></div></section>
+  <details id="testUnlocks" class="panel test-unlocks" open><summary>Unlocks</summary><p id="testUnlockAvailability" class="sub" role="status"></p><p class="sub">Choose turret availability and upgrade levels for both teams. Upgrades update existing defenses immediately. Locks prevent new placements; use Reset to clear placed turrets. L4 adds a same-weapon companion across the code, except in the middle line. Both share health and aim. Available in virtual and physical practice. Disable test unlocks before starting a scored game. Saved player progress is unaffected.</p><label class="switch"><input id="testOverride" type="checkbox"> Use test unlocks</label><fieldset id="testUpgradeFields" class="test-upgrade-grid" disabled><legend class="sub">Turrets and defense upgrades</legend></fieldset><label class="test-control-label" for="testMobileControl">Mobile control unlock<select id="testMobileControl"><option value="1">Joint · default</option><option value="2">Cartesian XYZ</option><option value="3">Targeting</option><option value="4">Cue autonomy</option></select></label><p class="sub">Unlocks through the selected control tier for Green and Purple mobile practice. Physical play uses the calibrated robot controller. Targeting uses tap-preview and Move; Cue autonomy runs queued pickup and placement.</p><div class="actions"><button id="applyTestUnlocks" type="button">Apply test unlocks</button><button id="maxTestUnlocks" type="button">Unlock all L4</button><button id="baseTestUnlocks" type="button">All base levels</button></div><div id="testUnlockStatus" role="status">Using saved-player upgrades, or base levels without a player.</div></details></div>
   <section class="panel"><h2>Presentation log</h2><pre id="log">Y is display-only. Commands are validated by Photon Game.</pre></section>
 </main>
 <dialog id="dataFlow" class="data-flow" aria-labelledby="dataFlowTitle">
@@ -60,70 +93,239 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
     <p class="df-legend">Trace from sensors, saved calibration and authored files to Y. Scroll inside the tree to see every source; select any node for details.</p>
     <nav class="df-navigation" aria-label="Explore source branches"><span>Jump to</span><button id="dataFlowOrigins" type="button">Camera / files</button><button id="dataFlowGame" type="button">Board → Game → Y</button><button id="dataFlowArms" type="button">Arms / Cal 2 / LTX</button></nav>
     <div class="df-scroll" tabindex="0" role="region" aria-label="Full source tree; scroll to explore camera, robot and calibration branches"><div id="dataFlowGraph" class="df-graph" role="group" aria-label="Data-flow tree. Select a module for connection details."></div></div>
-    <p class="df-legend">Dotted lines = declared upstream routes, not monitored traffic. Module health is Board’s last report forwarded by Game. Moving dots = activity observed by Y, not packet speed. Camera video ends at Board’s preview, not Game/Y.</p>
+    <p class="df-legend">Dotted lines = declared upstream routes, not monitored traffic. Module health is Board’s last report forwarded by Game. Moving dots = activity observed by Y, not packet speed. Camera video and marker diagnostics reach Y through Board; gameplay reaches Y through Game.</p>
     <section id="dataFlowDetails" class="df-details" aria-label="Selected connection details"></section>
   </div>
 </dialog>
-<script src="data-flow.js?v=2"></script>
+<script src="data-flow.js?v=5"></script>
 <script src="tower-defence-view.js?v=14"></script>
+<script src="calibration-history.js?v=1"></script>
 <script>
 const $=id=>document.getElementById(id),ROOT=location.pathname.split('/p/')[0],SELF=`${ROOT}/p/laser-tag-y`;
-const ui={state:null,view:null,selectedAtom:null,selectedTower:null,aimTimer:null,aimDraft:null,aimPointer:null,suppressCanvasClick:false,busy:false,events:null};
+const ui={aruco:{ready:false,tags:[],error:"Waiting for marker detections…"},state:null,view:null,selectedAtom:null,selectedTower:null,aimTimer:null,aimDraft:null,aimPointer:null,suppressCanvasClick:false,busy:false,events:null};
 const dataFlow=YDataFlow.create({dialog:$('dataFlow'),openButton:$('dataFlowOpen'),closeButton:$('dataFlowClose'),motionButton:$('dataFlowMotion'),graph:$('dataFlowGraph'),health:$('dataFlowHealth'),received:$('dataFlowReceived'),details:$('dataFlowDetails'),self:SELF,sandboxRoot:ROOT});
 $('dataFlowOrigins').onclick=()=>dataFlow.focus('authored');$('dataFlowGame').onclick=()=>dataFlow.focus('game');$('dataFlowArms').onclick=()=>dataFlow.focus('pickup');
 $('settingsLink').href=`${SELF}/settings`;$('screenLink').href=`${SELF}/screen`;
 function log(message){$('log').textContent+=`\n[${new Date().toLocaleTimeString()}] ${message}`;$('log').scrollTop=$('log').scrollHeight}
+let calibrationBusy=false,calibrationError='';
+function renderCalibrationControls(){
+ const j=ui.state?.journey||{},active=j.phase==='calibration',side=j.active_side||j.queue?.[j.turn];
+ for(const id of ['cancelCalibration','calibrateGreen','calibratePurple','calibrateBoth','resumeCalibration'])$(id).disabled=calibrationBusy;
+ $('cancelCalibration').setAttribute('aria-pressed',String(!active));
+ for(const [id,value]of [['calibrateGreen','green'],['calibratePurple','purple']])$(id).setAttribute('aria-pressed',String(active&&side===value));
+ $('calibrateBoth').setAttribute('aria-pressed',String(active&&j.queue?.length===2));
+ $('resumeCalibration').hidden=!j.deferred_calibration;
+ const display=j.calibration_display,targetsReady=display?.contract==='hhh.playfield.display'&&display.version===1&&display.status==='ready';
+ const title=active?`${side==='purple'?'Purple':'Green'} calibration selected.`:'Game screen selected.';
+ const detail=active?(targetsReady?'Targets ready for the external screen. Game Master shows the camera.':display?.error||j.error||'Loading calibration targets…'):j.deferred_calibration?'Player calibration is paused; resume it before scored play.':'Choose Green, Purple or both to test calibration.';
+ $('calibrationStatus').textContent=calibrationError||[title,detail,j.motion_error].filter(Boolean).join(' ');
+}
+async function calibrationCommand(data){
+ if(calibrationBusy)return;
+ calibrationBusy=true;calibrationError='';renderCalibrationControls();
+ try{await command(data);}catch(error){calibrationError=error.message;log(error.message);}
+ finally{calibrationBusy=false;renderCalibrationControls();}
+}
+$('cancelCalibration').onclick=()=>calibrationCommand({action:'show_game'});
+$('resumeCalibration').onclick=()=>calibrationCommand({action:'calibration_resume'});
+for(const [id,side]of [['calibrateGreen','green'],['calibratePurple','purple'],['calibrateBoth','both']])$(id).onclick=()=>calibrationCommand({action:'calibration_test',side});
 async function json(url,options={}){const response=await fetch(url,options),text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch(_){}if(!response.ok)throw Error(data.error||text||`HTTP ${response.status}`);return data}
-async function command(data){const result=await json(`${SELF}/api/command`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(result.output)applyState(result.output);return result.output}
+async function command(data){const result=await json(`${SELF}/api/command`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(result.output?.contract==='photon.game')applyState(result.output);else applyState(await json(`${SELF}/api/state`));return result.output}
 function boardReady(state){return state?.inputs?.board?.status==='ready'}
+// Display-only pixel branch. Game remains the sole source of gameplay truth.
+function createOperatorCamera({stage,image,message,retry,fps,url,onStatus=()=>{},isPreview=()=>false,previewReady=()=>true}){
+  let state=null,requested=false,failed=false,connected=true,received=0;
+  function stop(){requested=false;image.hidden=true;image.removeAttribute('src')}
+  function notice(text,tone='muted'){message.textContent=text;onStatus({text,tone})}
+  function render(){
+    const source=state?.inputs?.board?.upstream?.source;
+    const calibrating=state?.journey?.phase==='calibration'||isPreview();
+    stage.classList.toggle('calibration-preview',isPreview());
+    const rendered=!calibrating&&(state?.virtual_play===true||source==='simulation');
+    stage.classList.toggle('calibration-camera',calibrating);
+    stage.classList.toggle('rendered',rendered);fps.hidden=!rendered;
+    message.hidden=rendered;retry.hidden=true;
+    if(rendered){stop();failed=false;onStatus({text:'Not used · rendered view',tone:'muted'});return}
+    if(!connected||!state||performance.now()-received>3000){stop();failed=false;notice('Camera paused · waiting for fresh Photon Game input','warn');return}
+    if(isPreview()&&!previewReady()){stop();failed=false;notice('Preview paused · waiting for fresh camera evidence','warn');return}
+    // Calibration replaces game markers, so gameplay registration may be
+    // unavailable. The existing preview endpoint validates the real camera.
+    if(state.status!=='ready'||!calibrating&&(state.inputs?.board?.status!=='ready'||source!=='camera')){
+      stop();failed=false;notice(`Camera unavailable · ${state.inputs?.board?.error||state.error||'waiting for physical Photon Board evidence'}`,'warn');return;
+    }
+    if(failed){image.hidden=true;retry.hidden=false;notice('Camera feed unavailable · Retry camera to reconnect','warn');return}
+    if(!requested){requested=true;image.hidden=true;notice('Connecting to Photon Board camera…');image.src=url}
+  }
+  image.onload=()=>{if(!requested)return;failed=false;image.hidden=false;notice('Live camera · Photon Board','good')};
+  image.onerror=()=>{if(!requested)return;failed=true;render()};
+  retry.onclick=()=>{stop();failed=false;render()};
+  return {
+    update(value){state=value;connected=true;received=performance.now();render()},
+    disconnect(){connected=false;render()},
+    check:render,
+    destroy(){stop();image.onload=image.onerror=retry.onclick=null},
+  };
+}
+// This monitor consumes only Board's public, versioned diagnostic projection.
+// It never supplies observations to gameplay or extends Board's marker memory.
+function createArucoMonitor({overlay,onChange,now=()=>Date.now()/1000,readCache=()=>null,writeCache=()=>{},isCalibration=()=>false}){
+  let enabled=false,data=null,received=0,error='Waiting for marker detections…',signature='';
+  const point=value=>Array.isArray(value)&&value.length===2&&value.every(v=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=1);
+  const tableId=id=>Number.isSafeInteger(id)&&id>=40&&id<=59;
+  let cache=new Map(),cacheWidth=0,cacheHeight=0,dirty=false,savedAt=-Infinity,resetAfter=-Infinity,cacheError='';
+  try{
+    const saved=readCache();
+    if(saved!=null){
+      if(saved.version!==1||!Number.isFinite(saved.width)||saved.width<=0||!Number.isFinite(saved.height)||saved.height<=0||!Array.isArray(saved.tags)||saved.tags.length>20)throw Error('Invalid saved table locations');
+      for(const tag of saved.tags){
+        if(!tableId(tag?.id)||!point(tag.camera)||!Number.isFinite(tag.last_seen)||tag.last_seen<0||tag.last_seen>now()+.25||!(tag.corners===null||Array.isArray(tag.corners)&&tag.corners.length===4&&tag.corners.every(point)))throw Error('Invalid saved table marker');
+        cache.set(tag.id,tag);
+      }
+      cacheWidth=saved.width;cacheHeight=saved.height;
+    }
+  }catch(failure){cache.clear();cacheError=`Saved locations unavailable: ${failure.message}`}
+  function save(force=false){
+    if(!dirty||!force&&now()-savedAt<1)return;
+    try{writeCache(cache.size?{version:1,width:cacheWidth,height:cacheHeight,tags:[...cache.values()]}:null);dirty=false;cacheError=''}
+    catch(failure){cacheError=`Locations kept for this visit only: ${failure.message}`}
+    savedAt=now();
+  }
+  function paint(){
+    const time=now(),fresh=(stamp,limit)=>Number.isFinite(stamp)&&time-stamp>=-.25&&time-stamp<=limit;
+    const ready=enabled&&data?.status==='ready'&&data.source==='camera'
+      &&data.coordinate_space==='corrected-camera-normalized'&&Number.isFinite(data.width)&&data.width>0
+      &&Number.isFinite(data.height)&&data.height>0&&Array.isArray(data.tags)
+      &&fresh(received,1.5)&&fresh(data.sampled_at,1.5)&&fresh(data.frame_at,Math.min(3,Number(data.limits?.stale_s)||1.5));
+    let tags=ready?data.tags.filter(tag=>Number.isSafeInteger(tag?.id)&&tag.id>=0&&point(tag.camera)&&fresh(tag.last_seen,tag.kind==='movable'?15:5)).map(tag=>({
+      id:tag.id,camera:tag.camera,corners:Array.isArray(tag.corners)&&tag.corners.length===4&&tag.corners.every(point)?tag.corners:null,
+      visible:tag.visible===true&&fresh(tag.last_seen,Math.min(3,Number(data.limits?.stale_s)||1.5)),
+      age:Math.max(0,time-tag.last_seen),last_seen:tag.last_seen,
+    })):[];
+    if(ready){
+      if(cacheWidth!==data.width||cacheHeight!==data.height){cache.clear();cacheWidth=data.width;cacheHeight=data.height;dirty=true}
+      tags=tags.filter(tag=>!tableId(tag.id)||tag.last_seen>resetAfter);
+      for(const tag of tags){
+        if(!tableId(tag.id)||!tag.visible)continue;
+        const stored={id:tag.id,camera:tag.camera,corners:tag.corners,last_seen:tag.last_seen};
+        if(JSON.stringify(cache.get(tag.id))!==JSON.stringify(stored)){cache.set(tag.id,stored);dirty=true}
+      }
+      const visible=new Set(tags.filter(tag=>tag.visible).map(tag=>tag.id));
+      tags=tags.filter(tag=>!cache.has(tag.id)||tag.visible);
+      for(const stored of cache.values())if(!visible.has(stored.id))tags.push({...stored,visible:false,cached:true,age:Math.max(0,time-stored.last_seen)});
+      tags.sort((a,b)=>a.id-b.id);save();
+    }
+    const value={ready,tags,cachedCount:cache.size,cacheError,width:data?.width,height:data?.height,error:ready?'':error||'Marker evidence stale or unavailable'};
+    // The same fitted full-frame rectangle and parent zoom are used by the video.
+    overlay.toggleAttribute('hidden',!ready);overlay.replaceChildren();
+    if(ready){
+      const w=data.width,h=data.height,size=Math.max(w,h)/100;
+      overlay.setAttribute('viewBox',`0 0 ${w} ${h}`);
+      const add=(name,attrs,text)=>{const node=document.createElementNS('http://www.w3.org/2000/svg',name);for(const[key,val]of Object.entries(attrs))node.setAttribute(key,String(val));if(text!=null)node.textContent=text;overlay.append(node)};
+      for(const tag of tags){
+        if(isCalibration()&&tableId(tag.id)&&tag.cached)continue;
+        const x=tag.camera[0]*w,y=tag.camera[1]*h,color=tag.visible?'#58ff9c':tag.cached?'#73c99b':'#b6ad8f';
+        const line={fill:'none',stroke:color,'stroke-width':2,'vector-effect':'non-scaling-stroke','stroke-dasharray':tag.visible?'none':'5 4'};
+        if(tag.corners)add('polygon',{...line,points:tag.corners.map(p=>`${p[0]*w},${p[1]*h}`).join(' ')});
+        else add('rect',{...line,x:x-size,y:y-size,width:size*2,height:size*2});
+        add('text',{x:Math.max(size,Math.min(w-size*10,x+size)),y:Math.max(size*2,y-size),fill:color,stroke:'#04120b','stroke-width':4,'paint-order':'stroke','stroke-linejoin':'round','font-size':size*1.5,'font-weight':800},`#${tag.id}${tag.visible?'':tag.cached?' · cached':` · ${tag.age.toFixed(1)}s ago`}`);
+      }
+    }
+    const next=JSON.stringify([ready,tags.map(t=>[t.id,t.visible,t.cached,Math.floor(t.age)]),value.error,cache.size,cacheError]);
+    if(next!==signature){signature=next;onChange(value)}
+  }
+  function clear(reason){data=null;error=reason;paint()}
+  return {
+    setEnabled(value){
+      value=Boolean(value);
+      if(enabled===value)return;enabled=value;
+      if(!enabled){clear('Marker detection unavailable');return}
+      if(!data)error='Waiting for marker diagnostics from Photon Game stream…';paint();
+    },
+    update(tracking){
+      try{
+        if(tracking?.contract!=='photon.board.tracking'||tracking.version!==1)throw Error('Incompatible marker diagnostics');
+        data=tracking;received=now();error=tracking.status==='ready'?'':(tracking.errors||[]).join('; ')||'Marker detection unavailable';paint();
+      }catch(failure){clear(`Marker detections unavailable · ${failure.message}`)}
+    },
+    disconnect(){clear('Marker stream disconnected · reconnecting…')},
+    resetCache(){cache.clear();resetAfter=now();dirty=true;save(true);paint();return !cacheError},
+    check:paint,
+    destroy(){save(true);enabled=false;clear('Marker detection stopped')},
+  };
+}
+const arucoMonitor=createArucoMonitor({isCalibration:()=>ui.state?.journey?.phase==='calibration',readCache:()=>JSON.parse(localStorage.getItem(`${SELF}:table-markers:v1`)||'null'),writeCache:value=>{if(value)localStorage.setItem(`${SELF}:table-markers:v1`,JSON.stringify(value));else localStorage.removeItem(`${SELF}:table-markers:v1`)},overlay:$('arucoOverlay'),onChange:value=>{ui.aruco=value;renderControls()}});
+$('resetArucoCache').onclick=()=>{const saved=arucoMonitor.resetCache();$('arucoCacheResetStatus').textContent=saved?'All cached table locations cleared. Visible codes are learned again from new camera frames.':'This visit’s cache was cleared, but browser storage could not be cleared. See the storage error above.'};
+function syncAruco(){arucoMonitor.setEnabled(!ui.state?.virtual_play&&ui.state?.status==='ready'&&ui.state?.inputs?.board?.status==='ready'&&ui.state?.inputs?.board?.upstream?.source==='camera'&&!$('boardCamera').hidden)}
+let savedCalibrations=null;
+const operatorCamera=createOperatorCamera({stage:$('stage'),image:$('boardCamera'),message:$('cameraState'),retry:$('cameraRetry'),fps:$('fpsMonitor'),url:`${ROOT}/p/photon-board/api/preview`,isPreview:()=>savedCalibrations?.isPreview(),previewReady:()=>savedCalibrations?.cameraFresh(),onStatus:value=>{dataFlow.camera(value);syncAruco();savedCalibrations?.render()}});
+savedCalibrations=CalibrationHistory.create({root:$('calibrationHistory'),overlay:$('savedCalibrationOverlay'),image:$('boardCamera'),read:side=>json(`${SELF}/api/calibrations?side=${side}`),apply:command,onPreview:()=>operatorCamera.check()});
+savedCalibrations.load();
+const cameraWatchdog=setInterval(()=>{operatorCamera.check();syncAruco();arucoMonitor.check();savedCalibrations.render()},500);
+
 function phaseText(state){return state.paused?'Paused':String(state.phase||'setup')}
 function facts(state){return TowerDefenceView.presentation.gameFacts(state)}
 function rangeLabel(minimum,maximum){if(minimum==null||maximum==null)return 'the required number of';return minimum===maximum?String(minimum):`${minimum}–${maximum}`}
 function atomLabel(gameFacts){return gameFacts.atom_ids.length?gameFacts.atom_ids.join(', '):'a configured Atom'}
-function updateMission(state){const sequence=state.core_sequence||{},stage=String(sequence.stage||'locked'),ringCount=Number(sequence.ring_candidate_count||0),gameFacts=facts(state);if(state.status!=='ready')return `Photon Game unavailable: ${state.error||'contract not ready'}`;if(state.phase==='setup')return state.virtual_play?'Virtual play ready. Select an Atom and click a numbered socket.':boardReady(state)?'Physical play ready. Atom tags placed on the board drive Photon Game.':'Physical mode is waiting for a ready Photon Board observation.';if(state.phase==='overrun')return 'The central point has fallen. Reset to prepare another run.';if(state.phase==='won')return stage==='complete'?'Core purge complete. Every on-screen orc was burned out.':'All configured waves cleared. The central point held.';if(state.paused)return 'Defense paused by the Gamemaster.';if(stage==='locked')return `Link ${rangeLabel(gameFacts.ring_min_turrets,gameFacts.ring_max_turrets)} defenses in one non-crossing ring (${ringCount} active).`;if(stage==='ring_ready')return `Ring complete: place ${atomLabel(gameFacts)} on the core.`;if(stage==='first_tag')return `Core green: place a ${sequence.first_team==='green'?'purple':'green'} team Atom on the core.`;return 'Core detonation active: the purge wave is burning every orc.'}
+function updateMission(state){const sequence=state.core_sequence||{},stage=String(sequence.stage||'locked'),ringCount=Number(sequence.ring_candidate_count||0),gameFacts=facts(state);if(state.status!=='ready')return `Photon Game unavailable: ${state.error||'contract not ready'}`;if(state.journey?.phase==='calibration'){const j=state.journey,side=j.active_side||j.queue?.[j.turn]||'player';return j.error||`${side[0].toUpperCase()+side.slice(1)} calibration · live camera view. Targets are on the external game screen.${j.practice?' Select a calibration test to switch players.':' The other player waits until this turn is complete.'}`;}if(state.phase==='setup')return state.virtual_play?'Virtual play ready. Select an Atom and click a numbered socket.':boardReady(state)?'Physical play ready. Atom tags placed on the board drive Photon Game.':'Physical mode is waiting for a ready Photon Board observation.';if(state.phase==='overrun')return 'The central point has fallen. Reset to prepare another run.';if(state.phase==='won')return stage==='complete'?'Core purge complete. Every on-screen orc was burned out.':'All configured waves cleared. The central point held.';if(state.paused)return 'Defense paused by the Gamemaster.';if(stage==='locked')return `Link ${rangeLabel(gameFacts.ring_min_turrets,gameFacts.ring_max_turrets)} defenses in one non-crossing ring (${ringCount} active).`;if(stage==='ring_ready')return `Ring complete: place ${atomLabel(gameFacts)} on the core.`;if(stage==='first_tag')return `Core green: place a ${sequence.first_team==='green'?'purple':'green'} team Atom on the core.`;return 'Core detonation active: the purge wave is burning every orc.'}
 function chip(container,key,id){let button=container.querySelector(`[data-${key}="${id}"]`);if(!button){button=document.createElement('button');button.type='button';button.dataset[key]=String(id);button.className='tag-chip';container.append(button)}return button}
 function removeStaleChips(container,key,ids){const current=new Set(ids.map(String));for(const button of container.querySelectorAll(`[data-${key}]`))if(!current.has(button.dataset[key]))button.remove()}
 function write(node,key,value){if(node[key]!==value)node[key]=value}
 let controlsSignature='',hudTimer=null,lastHudAt=0;
 const testTracks=[['damage-machine-gun','Machine Gun'],['damage-flamethrower','Flamethrower'],['damage-mortar','Mortar'],['damage-tesla-coil','Tesla Coil'],['forcefield','Force Field']];
-const testInputs=new Map();let testSignature=null,testBusy=false;
+const testInputs=new Map();let testSignature=null,testBusy=false,testDirty=false;
 for(const [track,name] of testTracks){
   const label=document.createElement('label');label.textContent=name;
   const select=document.createElement('select');select.dataset.testTrack=track;select.setAttribute('aria-label',name+' test upgrade');
   for(const level of (track==='forcefield'?[1,2,3,4]:[0,1,2,3,4])){const option=document.createElement('option');option.value=String(level);option.textContent=level===0?'Locked for placement':level===1?'L1 · Base':`L${level} · +${(level-1)*(track==='forcefield'?20:10)}% ${track==='forcefield'?'capacity':'damage / health'}`;select.append(option)}
   select.value='1';label.append(select);$('testUpgradeFields').append(label);testInputs.set(track,select);
-  select.onchange=()=>{$('testUnlockStatus').textContent='Selection changed. Apply to update this virtual test.'};
+  select.onchange=()=>{testDirty=true;$('testUnlockStatus').textContent='Selection changed. Apply to update this practice game.'};
 }
 function renderTestUnlocks(state){
-  const visible=Boolean(state.virtual_play)&&state.status==='ready',editable=visible&&['setup','running'].includes(state.phase)&&!(state.phase==='running'&&state.progress?.reward_enabled);
-  $('testUnlocks').hidden=!visible;
-  const signature=JSON.stringify([state.virtual_play,state.virtual_test_loadout??null,state.virtual_test_control??null]);
-  if(signature!==testSignature){testSignature=signature;const levels=state.virtual_test_loadout;$('testOverride').checked=levels!=null||state.virtual_test_control!=null;$('testMobileControl').value=String(state.virtual_test_control??1);for(const[track,input]of testInputs)input.value=String(levels?.[track]??1);$('testUnlockStatus').textContent=levels?'Test unlocks active for both teams. Practice only.':'Using saved-player upgrades, or base levels without a player.'}
+  const editable=state.status==='ready'&&['setup','running'].includes(state.phase)&&!(state.phase==='running'&&state.progress?.reward_enabled);
+  $('testUnlockAvailability').textContent=state.status!=='ready'?'Waiting for Photon Game.':!editable?'Unlocks are read-only for this run.':'';
+  $('testUnlockAvailability').hidden=!$('testUnlockAvailability').textContent;
+  const signature=JSON.stringify([state.virtual_test_loadout??null,state.virtual_test_control??null]);
+  if(signature!==testSignature&&!testDirty){testSignature=signature;const levels=state.virtual_test_loadout;$('testOverride').checked=levels!=null||state.virtual_test_control!=null;$('testMobileControl').value=String(state.virtual_test_control??1);for(const[track,input]of testInputs)input.value=String(levels?.[track]??1);$('testUnlockStatus').textContent=levels?'Test unlocks active for both teams. Practice only.':'Using saved-player upgrades, or base levels without a player.'}
   $('testOverride').disabled=!editable||testBusy;$('testUpgradeFields').disabled=!editable||testBusy||!$('testOverride').checked;
   $('testMobileControl').disabled=!editable||testBusy||!$('testOverride').checked;
   for(const id of ['applyTestUnlocks','maxTestUnlocks','baseTestUnlocks'])$(id).disabled=!editable||testBusy;
 }
 async function applyTestUnlocks(){
-  if(testBusy)return;testBusy=true;const levels=$('testOverride').checked?Object.fromEntries([...testInputs].map(([track,input])=>[track,Number(input.value)])):null;
+  if(testBusy)return;const control=$('testOverride').checked?Number($('testMobileControl').value):null;testBusy=true;const levels=$('testOverride').checked?Object.fromEntries([...testInputs].map(([track,input])=>[track,Number(input.value)])):null;
   renderTestUnlocks(ui.state||{});$('testUnlockStatus').textContent='Applying test unlocks…';
-  try{await command({action:'virtual_test_loadout',levels,control:$('testOverride').checked?Number($('testMobileControl').value):null});$('testUnlockStatus').textContent=levels?'Applied defense and mobile control unlocks. Practice only.':'Restored saved-player upgrade levels.';log('Virtual test unlocks updated.')}
+  try{await command({action:'virtual_test_loadout',levels,control});testDirty=false;testSignature=null;renderTestUnlocks(ui.state||{});$('testUnlockStatus').textContent=levels?'Applied defense and mobile control unlocks. Practice only.':'Restored saved-player upgrade levels.';log('Practice unlocks updated.')}
   catch(error){$('testUnlockStatus').textContent=`Test unlocks rejected: ${error.message}`}
   finally{testBusy=false;renderTestUnlocks(ui.state||{})}
 }
-$('testOverride').onchange=()=>{renderTestUnlocks(ui.state||{});$('testUnlockStatus').textContent='Selection changed. Apply to update this virtual test.'};
-$('testMobileControl').onchange=()=>{$('testUnlockStatus').textContent='Selection changed. Apply to update this virtual test.'};
+$('testOverride').onchange=()=>{testDirty=true;renderTestUnlocks(ui.state||{});$('testUnlockStatus').textContent='Selection changed. Apply to update this practice game.'};
+$('testMobileControl').onchange=()=>{testDirty=true;$('testUnlockStatus').textContent='Selection changed. Apply to update this practice game.'};
 $('applyTestUnlocks').onclick=applyTestUnlocks;
-for(const [id,level]of [['maxTestUnlocks',4],['baseTestUnlocks',1]])$(id).onclick=()=>{$('testOverride').checked=true;$('testMobileControl').value=String(level);for(const input of testInputs.values())input.value=String(level);applyTestUnlocks()};
+for(const [id,level]of [['maxTestUnlocks',4],['baseTestUnlocks',1]])$(id).onclick=()=>{testDirty=true;$('testOverride').checked=true;$('testMobileControl').value=String(level);for(const input of testInputs.values())input.value=String(level);applyTestUnlocks()};
 
+function detectionChip(button,id,virtual){
+  if(virtual)return;
+  const tag=ui.aruco.tags.find(item=>item.id===Number(id));
+  const label=tag?.visible?'✓ Found':tag?.cached?'Cached location':tag?`Seen ${Math.floor(tag.age)}s ago`:ui.aruco.ready?'Not seen':'Detection unavailable';
+  if(tag)button.classList.add(tag.visible?'detected':tag.cached?'cached':'remembered');
+  button.title=tag?.visible?'Detected in the current camera evidence':tag?.cached?`Saved table location · last seen ${new Date(tag.last_seen*1000).toLocaleString()}`:tag?'Last observed position; not a current detection':label;
+  const status=document.createElement('small');status.textContent=label;button.append(status);
+}
 function renderControls(){
   const state=ui.state||{},gameFacts=facts(state),virtual=Boolean(state.virtual_play);
   const towers=state.towers||[],sockets=state.level?.sockets||[],usable=virtual&&state.status==='ready';
+  write($('atomControlsTitle'),'textContent',virtual?'Virtual Atom controls':'Aruco MNGMNT');
+  write($('atomControlsHelp'),'textContent',virtual?'Select an Atom from Photon Game’s loadout, then click a numbered socket.':'Bright green = found now. Dashed green = cached table location (IDs 40–59). Reset locations after moving the camera or table. Camera zoom: 1.15×.');
+  $('arucoSummary').hidden=virtual;$('coreTags').hidden=virtual;$('arucoCacheControls').hidden=virtual||state.journey?.phase==='calibration';$('socketTags').hidden=state.journey?.phase==='calibration';
+  write($('arucoCacheStatus'),'textContent',ui.aruco.cacheError||`${ui.aruco.cachedCount||0} table locations cached · saved in this browser until reset`);
+  const targetIds=[...sockets.map(s=>Number(s.aruco_id)),gameFacts.core_marker_id].filter(id=>id!=null);
+  const found=targetIds.filter(id=>ui.aruco.tags.some(t=>t.id===id&&t.visible)).length;
+  write($('arucoSummary'),'textContent',ui.aruco.ready?`${found} / ${targetIds.length} screen targets found · ${ui.aruco.tags.filter(t=>t.visible).length} total codes visible`:ui.aruco.error);
   renderTestUnlocks(state);
-  const testLevels=virtual?state.virtual_test_loadout:null,trackForType={machine_gun:'damage-machine-gun',flamethrower:'damage-flamethrower',mortar:'damage-mortar',tesla_coil:'damage-tesla-coil'};
+  const testLevels=state.virtual_test_loadout,trackForType={machine_gun:'damage-machine-gun',flamethrower:'damage-flamethrower',mortar:'damage-mortar',tesla_coil:'damage-tesla-coil'};
   const locked=id=>testLevels?.[trackForType[gameFacts.loadout.find(role=>role.atom_tag_id===id)?.tower_type]]===0;
   if(ui.selectedAtom!=null&&locked(ui.selectedAtom))ui.selectedAtom=null;
   if(ui.selectedAtom!=null&&!gameFacts.atom_ids.includes(ui.selectedAtom))ui.selectedAtom=null;
-  const signature=JSON.stringify([virtual,state.status,ui.selectedAtom,gameFacts.loadout,testLevels,sockets.map(s=>[s.socket_id||s.id,s.aruco_id]),towers.map(t=>[t.socket_id,t.atom_tag_id,t.destroyed])]);
+  const signature=JSON.stringify([virtual,state.status,ui.aruco.ready,ui.aruco.tags.map(t=>[t.id,t.visible,t.cached,Math.floor(t.age)]),gameFacts.core_marker_id,ui.selectedAtom,gameFacts.loadout,testLevels,sockets.map(s=>[s.socket_id||s.id,s.aruco_id]),towers.map(t=>[t.socket_id,t.atom_tag_id,t.destroyed])]);
   if(signature===controlsSignature){updateAim();return}
   controlsSignature=signature;
   $('stage').classList.toggle('virtual',virtual);
@@ -136,21 +338,28 @@ function renderControls(){
     const id=role.atom_tag_id,button=chip($('atomTags'),'atom',id),count=counts.get(id)||0;
     write(button,'className',`tag-chip atom${ui.selectedAtom===id?' selected':''}`);
     write(button,'disabled',!usable||locked(id));
-    write(button,'textContent',`${id} · ${role.label}${locked(id)?' · Locked':testLevels?` · L${testLevels[trackForType[role.tower_type]]}`:''}${count?` · ${count}`:''}`);
+    button.textContent=`${id} · ${role.label}${locked(id)?' · Locked':testLevels?` · L${testLevels[trackForType[role.tower_type]]}`:''}${count?` · ${count}`:''}`;
+    detectionChip(button,id,virtual);
   }
   removeStaleChips($('socketTags'),'socket',sockets.map(socket=>socket.socket_id||socket.id));
   for(const socket of sockets){
     const id=String(socket.socket_id||socket.id),tower=bySocket.get(id),button=chip($('socketTags'),'socket',id);
     write(button,'className',`tag-chip${tower?' occupied':''}${tower?.destroyed?' destroyed':''}`);
     write(button,'disabled',!usable);
-    write(button,'textContent',`#${socket.aruco_id}${tower?` · ${tower.destroyed?'DOWN':tower.atom_tag_id}`:''}`);
+    button.textContent=`#${socket.aruco_id}${tower?` · ${tower.destroyed?'DOWN':tower.atom_tag_id}`:''}`;
+    detectionChip(button,socket.aruco_id,virtual);
   }
+  $('coreTags').replaceChildren();
+  if(!virtual&&gameFacts.core_marker_id!=null){const button=chip($('coreTags'),'core',gameFacts.core_marker_id);button.disabled=true;button.textContent=`#${gameFacts.core_marker_id} · Core`;detectionChip(button,gameFacts.core_marker_id,false)}
   updateAim();
 }
 function aimReachText(tower,spread){const distance=TowerDefenceView.geometry.towerAimDistance(tower.targeting,spread),percent=`${Math.round(spread*100)}%`;return Number.isFinite(distance)?`${Math.round(distance)}px · ${percent}`:percent}
 function updateAim(){const state=ui.state||{},tower=(state.towers||[]).find(item=>String(item.placement_id||item.socket_id)===String(ui.selectedTower));write($('aimControls'),'hidden',!tower);if(!tower)return;const id=String(tower.placement_id||tower.socket_id),draft=ui.aimDraft?.id===id?ui.aimDraft:null,health=Math.max(0,Math.round(100*Number(tower.hp)/Math.max(1,Number(tower.max_hp)))),tesla=tower.tower_type==='tesla_coil',angle=draft?.angle??Number(tower.targeting?.angle_degrees||0),spread=draft?.spread??Number(tower.targeting?.spread||0);write($('aimTitle'),'textContent',`#${tower.aruco_id} · Atom ${tower.atom_tag_id} · ${String(tower.tower_type).replaceAll('_',' ')}`);write($('aimHealthText'),'textContent',`Health ${Math.round(Number(tower.hp))} / ${Math.round(Number(tower.max_hp))} (${health}%)`);write($('aimHealthBar').style,'width',`${health}%`);write($('aimDirection'),'disabled',Boolean(tower.destroyed)||tesla);write($('aimReach'),'disabled',Boolean(tower.destroyed));write($('aimDirection'),'value',String(Math.round(angle)));write($('aimReach'),'value',String(Math.round(spread*100)));write($('aimDirectionValue'),'textContent',tesla?'Omnidirectional':`${Math.round(angle)}°`);write($('aimReachValue'),'textContent',aimReachText(tower,spread));$('aimReachLabel').textContent=tesla?'Reach / power':tower.tower_type==='mortar'?'Target distance':'Wide / narrow'}
-function paintHud(){const progress=ui.state?.progress||{};const people=progress.participants||[];write($('progressStatus'),'textContent',progress.error||`${progress.reward_enabled?'Scored game':'Practice'} · ${people.map(p=>p.name+' ('+p.side+')').join(' + ')||'Select players in their LTZ Score tabs'}${progress.result?' · '+progress.result.outcome+' · '+progress.result.kills+' kills saved':''}`);write($('scoredPlay'),'disabled',ui.state?.phase==='running'||ui.state?.virtual_play);write($('virtualPlay'),'disabled',ui.state?.phase==='running');clearTimeout(hudTimer);hudTimer=null;lastHudAt=performance.now();const state=ui.state;const gameFacts=facts(state),ready=state.status==='ready',physicalReady=boardReady(state),core=Math.max(0,Math.round(100*Number(state.core_hp||0)/Math.max(1,Number(state.core_max_hp||1)))),sequence=state.core_sequence||{},ringCount=Number(sequence.ring_candidate_count||0),ringDone=Boolean(sequence.ring_completed),immunity=Math.max(0,Number(sequence.field_immunity_remaining_s)||0),ringTarget=rangeLabel(gameFacts.ring_min_turrets,gameFacts.ring_max_turrets);write($('phaseBadge'),'textContent',phaseText(state));write($('phaseBadge'),'className',`badge ${state.phase==='overrun'||!ready?'bad':state.phase==='won'?'good':''}`);write($('boardBadge'),'textContent',physicalReady?'Board ready':'Board unavailable');write($('boardBadge'),'className',`badge ${physicalReady?'good':state.virtual_play?'warn':'bad'}`);write($('boardBadge'),'title',state.inputs?.board?.error||'');write($('ringBadge'),'textContent',ringDone?(immunity>0?`Ring immune ${Math.ceil(immunity)}s`:'Ring complete'):`Ring ${ringCount} / ${ringTarget}`);write($('ringBadge'),'className',`badge ${ringDone?'good':gameFacts.ring_min_turrets!=null&&ringCount>=gameFacts.ring_min_turrets?'warn':''}`);write($('waveBadge'),'textContent',`Wave ${state.wave||0} / ${state.wave_count||0}`);write($('enemyBadge'),'textContent',`${state.active_enemies||0} orcs`);write($('coreBadge'),'textContent',`Core ${core}%`);write($('coreBadge'),'className',`badge ${core>50?'good':core>20?'warn':'bad'}`);write($('coreMetric'),'textContent',`${core}%`);write($('waveMetric'),'textContent',`${state.wave||0} / ${state.wave_count||0}`);write($('enemyMetric'),'textContent',String(state.active_enemies||0));write($('towerMetric'),'textContent',`${(state.towers||[]).filter(tower=>!tower.destroyed).length} + ${(state.companions||[]).filter(tower=>!tower.destroyed).length}`);write($('killMetric'),'textContent',String(state.kills||0));write($('breachMetric'),'textContent',String(state.breaches||0));write($('mission'),'textContent',updateMission(state));write($('status'),'textContent',ready?(state.presentation?.status==='ready'?'Rendering Photon Game’s authoritative output.':`Artwork unavailable; using Canvas fallbacks: ${state.presentation?.error||'no content descriptor'}`):`Unavailable: ${state.error||'Photon Game is not ready'}`);write($('start'),'disabled',!ready||state.phase!=='setup'||(!state.virtual_play&&!physicalReady));write($('pause'),'disabled',state.phase!=='running');write($('pause'),'textContent',state.paused?'Resume':'Pause');}
-function applyState(state,source='command response'){dataFlow.snapshot(state,source);ui.state=state;ui.view?.applyState(state);renderControls();if(source!=='SSE'||state.status!=='ready'||performance.now()-lastHudAt>=100)paintHud();else if(hudTimer==null)hudTimer=setTimeout(paintHud,100-(performance.now()-lastHudAt))}
+let startError='';
+function practiceOverride(state){return state?.virtual_play||state?.virtual_test_control!=null||state?.virtual_test_loadout!=null;}
+function startBlocked(state){if(state?.status!=='ready')return state?.error||'Waiting for Photon Game';if(state.phase!=='setup')return state.phase==='running'?'Game running':'Reset before the next game';if(state.journey?.phase==='calibration')return state.journey.error||'Finish or cancel calibration before Start';if(state.journey?.phase==='upgrades')return 'Waiting for the shared 30-second upgrade break';if(!state.virtual_play&&state.journey?.motion_blocked)return state.journey.motion_error||'Waiting for arm stop confirmation';if(!state.virtual_play&&!boardReady(state))return state.inputs?.board?.error||'Waiting for fresh camera and board input';return '';}
+function paintHud(){renderCalibrationControls();if(practiceOverride(ui.state))$('scoredPlay').checked=false;const progress=ui.state?.progress||{};const people=progress.participants||[];write($('progressStatus'),'textContent',progress.error||`${progress.reward_enabled?'Scored game':'Practice'} · ${people.map(p=>p.name+' ('+p.side+')').join(' + ')||'Select players in their LTZ Score tabs'}${progress.result?' · '+progress.result.outcome+' · '+progress.result.kills+' kills saved':''}`);write($('scoredPlay'),'disabled',ui.state?.phase==='running'||practiceOverride(ui.state));write($('virtualPlay'),'disabled',ui.state?.phase==='running');clearTimeout(hudTimer);hudTimer=null;lastHudAt=performance.now();const state=ui.state;const gameFacts=facts(state),ready=state.status==='ready',physicalReady=boardReady(state),core=Math.max(0,Math.round(100*Number(state.core_hp||0)/Math.max(1,Number(state.core_max_hp||1)))),sequence=state.core_sequence||{},ringCount=Number(sequence.ring_candidate_count||0),ringDone=Boolean(sequence.ring_completed),immunity=Math.max(0,Number(sequence.field_immunity_remaining_s)||0),ringTarget=rangeLabel(gameFacts.ring_min_turrets,gameFacts.ring_max_turrets);write($('phaseBadge'),'textContent',phaseText(state));write($('phaseBadge'),'className',`badge ${state.phase==='overrun'||!ready?'bad':state.phase==='won'?'good':''}`);write($('boardBadge'),'textContent',physicalReady?'Board ready':'Board unavailable');write($('boardBadge'),'className',`badge ${physicalReady?'good':state.virtual_play?'warn':'bad'}`);write($('boardBadge'),'title',state.inputs?.board?.error||'');write($('ringBadge'),'textContent',ringDone?(immunity>0?`Ring immune ${Math.ceil(immunity)}s`:'Ring complete'):`Ring ${ringCount} / ${ringTarget}`);write($('ringBadge'),'className',`badge ${ringDone?'good':gameFacts.ring_min_turrets!=null&&ringCount>=gameFacts.ring_min_turrets?'warn':''}`);write($('waveBadge'),'textContent',`Wave ${state.wave||0} / ${state.wave_count||0}`);write($('enemyBadge'),'textContent',`${state.active_enemies||0} orcs`);write($('coreBadge'),'textContent',`Core ${core}%`);write($('coreBadge'),'className',`badge ${core>50?'good':core>20?'warn':'bad'}`);write($('coreMetric'),'textContent',`${core}%`);write($('waveMetric'),'textContent',`${state.wave||0} / ${state.wave_count||0}`);write($('enemyMetric'),'textContent',String(state.active_enemies||0));write($('towerMetric'),'textContent',`${(state.towers||[]).filter(tower=>!tower.destroyed).length} + ${(state.companions||[]).filter(tower=>!tower.destroyed).length}`);write($('killMetric'),'textContent',String(state.kills||0));write($('breachMetric'),'textContent',String(state.breaches||0));write($('mission'),'textContent',updateMission(state));write($('status'),'textContent',ready?(state.presentation?.status==='ready'?(state.virtual_play?'Rendering Photon Game’s authoritative output.':'Physical view uses Photon Board’s camera; gameplay is supplied by Photon Game.'):`Artwork unavailable; using Canvas fallbacks: ${state.presentation?.error||'no content descriptor'}`):`Unavailable: ${state.error||'Photon Game is not ready'}`);const blocked=startBlocked(state);write($('start'),'disabled',!!blocked);write($('startStatus'),'textContent',startError||blocked||($('scoredPlay').checked?'Scored game · both players must press Ready':'Practice · no score or unlocks awarded'));write($('start'),'title',blocked);write($('pause'),'disabled',state.phase!=='running');write($('pause'),'textContent',state.paused?'Resume':'Pause');}
+function applyState(state,source='command response'){if(Number.isFinite(state.server_time)&&Number.isFinite(ui.state?.server_time)&&state.server_time<ui.state.server_time)return;if(state.phase!==ui.state?.phase)startError='';dataFlow.snapshot(state,source);ui.state=state;savedCalibrations.update(state);operatorCamera.update(state);syncAruco();ui.view?.applyState(state);renderControls();if(source!=='SSE'||state.status!=='ready'||performance.now()-lastHudAt>=100)paintHud();else if(hudTimer==null)hudTimer=setTimeout(paintHud,100-(performance.now()-lastHudAt))}
 function selectTower(tower){clearTimeout(ui.aimTimer);ui.aimTimer=null;if(ui.selectedTower)ui.view?.clearTowerAimPreview(ui.selectedTower);ui.selectedTower=tower?String(tower.placement_id||tower.socket_id):null;ui.aimDraft=null;ui.view?.selectTower(ui.selectedTower);updateAim()}
 async function place(socketId){if(ui.busy||ui.selectedAtom==null||!ui.state?.virtual_play)return;ui.busy=true;try{const atom=ui.selectedAtom,output=await command({action:'place',atom_tag_id:atom,socket_id:String(socketId)}),tower=(output.towers||[]).find(item=>String(item.socket_id)===String(socketId));selectTower(tower);log(`Photon Game accepted Atom ${atom} on socket ${socketId}.`)}catch(error){log(`Placement rejected: ${error.message}`)}finally{ui.busy=false}}
 async function activateCore(){if(ui.busy||ui.selectedAtom==null||!ui.state?.virtual_play)return;ui.busy=true;try{const atom=ui.selectedAtom;await command({action:'activate_core',atom_tag_id:atom});log(`Photon Game accepted Atom ${atom} on the core.`)}catch(error){log(`Core activation rejected: ${error.message}`)}finally{ui.busy=false}}
@@ -163,9 +372,9 @@ function beginAimPointer(event){if(!ui.state?.virtual_play||!ui.selectedTower)re
 function moveAimPointer(event){if(!ui.aimPointer||event.pointerId!==ui.aimPointer.pointerId)return;event.preventDefault();const point=canvasPoint(event),aim=ui.view.aimFromPoint(ui.aimPointer.id,point.x,point.y);if(aim)setAimDraft(aim.angle,aim.spread,false)}
 function finishAimPointer(event,cancel=false){if(!ui.aimPointer||event.pointerId!==ui.aimPointer.pointerId)return;event.preventDefault();if(!cancel)moveAimPointer(event);const drag=ui.aimPointer,canvas=$('gameCanvas');if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);ui.aimPointer=null;$('stage').classList.remove('aim-dragging');setTimeout(()=>{ui.suppressCanvasClick=false},0);if(cancel){ui.aimDraft=null;ui.view.clearTowerAimPreview(drag.id);updateAim()}else saveAim()}
 $('atomTags').addEventListener('click',event=>{const button=event.target.closest('[data-atom]');if(!button)return;const atom=Number(button.dataset.atom);ui.selectedAtom=ui.selectedAtom===atom?null:atom;selectTower(null);renderControls()});$('socketTags').addEventListener('click',event=>{const button=event.target.closest('[data-socket]');if(button)place(button.dataset.socket)});$('gameCanvas').addEventListener('click',canvasClick);$('gameCanvas').addEventListener('pointerdown',beginAimPointer);$('gameCanvas').addEventListener('pointermove',moveAimPointer);$('gameCanvas').addEventListener('pointerup',event=>finishAimPointer(event));$('gameCanvas').addEventListener('pointercancel',event=>finishAimPointer(event,true));$('aimDirection').addEventListener('input',previewAim);$('aimReach').addEventListener('input',previewAim);$('aimDirection').addEventListener('change',saveAim);$('aimReach').addEventListener('change',saveAim);
-$('virtualPlay').addEventListener('change',async()=>{const requested=$('virtualPlay').checked;try{await command({action:'set_virtual',virtual_play:requested});ui.selectedAtom=null;selectTower(null);log(`${requested?'Virtual':'Physical'} presentation selected.`)}catch(error){$('virtualPlay').checked=!requested;log(`Mode change rejected: ${error.message}`)}});$('start').addEventListener('click',()=>command({action:'start',virtual_play:$('virtualPlay').checked,reward_enabled:!$('virtualPlay').checked&&$('scoredPlay').checked}).then(()=>log('Defense started.')).catch(error=>log(`Start rejected: ${error.message}`)));$('pause').addEventListener('click',()=>command({action:ui.state?.paused?'resume':'pause'}).catch(error=>log(`Pause rejected: ${error.message}`)));$('reset').addEventListener('click',()=>command({action:'reset',virtual_play:$('virtualPlay').checked}).then(()=>{ui.selectedAtom=null;selectTower(null);log('Defense reset.')}).catch(error=>log(`Reset rejected: ${error.message}`)));
-async function boot(){ui.view=TowerDefenceView.create({sandboxRoot:ROOT,onAssetError:log,onAssetStatus:value=>dataFlow.assets(value),onFps:fps=>{$('fpsMonitor').textContent=`${fps==null?'—':fps} FPS`},mapCanvas:$('mapCanvas'),gameCanvas:$('gameCanvas')});try{applyState(await json(`${SELF}/api/state`),'snapshot')}catch(error){applyState({status:'unavailable',error:error.message,inputs:{board:{status:'unavailable'}}})}const receive=TowerDefenceView.presentation.snapshotReceiver(state=>applyState(state,'SSE'));ui.events=new EventSource(`${SELF}/api/events`);ui.events.addEventListener('update',event=>{try{receive.update(JSON.parse(event.data))}catch(error){log(`Invalid game update: ${error.message}`)}});ui.events.onopen=()=>{ui.view.setFeedConnected(true);dataFlow.connection('open')};ui.events.onmessage=event=>{try{ui.view.setFeedConnected(true);receive.full(JSON.parse(event.data))}catch(error){dataFlow.connection('error',`Invalid snapshot: ${error.message}`);log(`Invalid game snapshot: ${error.message}`)}};ui.events.onerror=()=>{ui.view.setFeedConnected(false);dataFlow.connection('reconnecting','Photon Game stream disconnected; reconnecting…');$('status').textContent='Photon Game stream reconnecting…'}}
-window.addEventListener('beforeunload',()=>{clearTimeout(hudTimer);clearTimeout(ui.aimTimer);ui.events?.close();ui.view?.destroy();dataFlow.destroy()});boot();
+$('virtualPlay').addEventListener('change',async()=>{const requested=$('virtualPlay').checked;try{await command({action:'set_virtual',virtual_play:requested});ui.selectedAtom=null;selectTower(null);log(`${requested?'Virtual':'Physical'} presentation selected.`)}catch(error){$('virtualPlay').checked=!requested;log(`Mode change rejected: ${error.message}`)}});$('start').addEventListener('click',()=>{startError='';return command({action:'start',virtual_play:$('virtualPlay').checked,reward_enabled:!$('virtualPlay').checked&&$('scoredPlay').checked}).then(()=>log('Defense started.')).catch(error=>{log(`Start rejected: ${error.message}`);startError=`Start rejected: ${error.message}`;$('startStatus').textContent=startError;});});$('pause').addEventListener('click',()=>command({action:ui.state?.paused?'resume':'pause'}).catch(error=>log(`Pause rejected: ${error.message}`)));$('reset').addEventListener('click',()=>command({action:'reset',virtual_play:$('virtualPlay').checked}).then(()=>{ui.selectedAtom=null;selectTower(null);log('Defense reset.')}).catch(error=>log(`Reset rejected: ${error.message}`)));
+async function boot(){ui.view=TowerDefenceView.create({sandboxRoot:ROOT,onAssetError:log,onAssetStatus:value=>dataFlow.assets(value),onFps:fps=>{$('fpsMonitor').textContent=`${fps==null?'—':fps} FPS`},mapCanvas:$('mapCanvas'),gameCanvas:$('gameCanvas')});try{const initial=await json(`${SELF}/api/state`);if(initial.journey?.phase==='calibration')await command({action:'show_game'});else applyState(initial,'snapshot')}catch(error){applyState({status:'unavailable',error:error.message,inputs:{board:{status:'unavailable'}}})}const receive=TowerDefenceView.presentation.snapshotReceiver(state=>applyState(state,'SSE'));ui.events=new EventSource(`${SELF}/api/events?markers=1`);ui.events.addEventListener('markers',event=>{try{arucoMonitor.update(JSON.parse(event.data));savedCalibrations.camera(JSON.parse(event.data))}catch(error){arucoMonitor.disconnect();savedCalibrations.camera(null);log(`Invalid marker diagnostics: ${error.message}`)}});ui.events.addEventListener('update',event=>{try{receive.update(JSON.parse(event.data))}catch(error){log(`Invalid game update: ${error.message}`)}});ui.events.onopen=()=>{ui.view.setFeedConnected(true);dataFlow.connection('open')};ui.events.onmessage=event=>{try{ui.view.setFeedConnected(true);receive.full(JSON.parse(event.data))}catch(error){dataFlow.connection('error',`Invalid snapshot: ${error.message}`);log(`Invalid game snapshot: ${error.message}`)}};ui.events.onerror=()=>{savedCalibrations.camera(null);arucoMonitor.disconnect();operatorCamera.disconnect();syncAruco();ui.view.setFeedConnected(false);dataFlow.connection('reconnecting','Photon Game stream disconnected; reconnecting…');$('status').textContent='Photon Game stream reconnecting…'}}
+window.addEventListener('beforeunload',()=>{clearInterval(cameraWatchdog);savedCalibrations.destroy();operatorCamera.destroy();arucoMonitor.destroy();clearTimeout(hudTimer);clearTimeout(ui.aimTimer);ui.events?.close();ui.view?.destroy();dataFlow.destroy()});boot();
 </script>
 </body>
 </html>

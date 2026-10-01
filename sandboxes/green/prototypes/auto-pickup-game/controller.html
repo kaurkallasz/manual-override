@@ -323,6 +323,16 @@
   .scoreRow .who { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
   .scoreRow .team.green { color:#36e07c; } .scoreRow .team.purple { color:#b86bff; }
   .scoreEmpty { color:var(--muted); font-size:13px; }
+  .mobilePhysicalPicker{display:none}.mobileLtz .mobilePhysicalPicker{display:flex;align-items:center;gap:10px;width:100%}.mobilePhysicalPicker select{min-height:44px;flex:1;background:#13221a;color:#edf7ef;border:1px solid #405548;padding:8px}
+  .mobileLtz #ltxInstructions,.mobileLtz #btnChangeName,.mobileLtz #playerName,.mobileLtz #clock,.mobileLtz #btnNew{display:none!important}
+  .mobileLtz .gamebar.ltx{display:flex;gap:8px;padding:6px 12px;flex-wrap:wrap}
+  .mobileLtz .gamebarLiveStatus{flex:1;min-width:230px}
+  .mobileLtz .gamebarTimer{width:100%}.mobileLtz .gamebar.ltx #runStatus{display:block}
+  .mobileLtz #armSub,.mobileLtz #relayHost,.mobileLtz #relaySide,.mobileLtz #connHint,.mobileLtz #connectionPanel .row>.hint{display:none!important}
+  .mobileLtz #connectionPanel{position:sticky;top:0;z-index:8}
+  .mobileLtz .controlsPane main{padding:10px}.mobileLtz .panel{padding:12px;margin-bottom:10px}
+  .mobileLtz button,.mobileLtz input[type=range]{min-height:44px}
+  @media(orientation:portrait){.mobileLtz .videoPane{flex-basis:42%}}
 </style>
   <link rel="stylesheet" href="/theme.css" />
 </head>
@@ -423,11 +433,12 @@
   <span style="flex:1"></span>
   <span id="connPill" class="pill off"><span class="dot"></span><span id="connText">Disconnected</span></span>
   <span id="modePill" class="pill off"><span class="dot"></span><span id="modeText">—</span></span>
+  <label class="mobilePhysicalPicker">Mobile controls <select id="mobilePhysicalControl"><option value="1">Joint</option><option value="2">Cartesian XYZ</option><option value="3">Targeting</option><option value="4">Cue autonomy</option></select></label>
 </header>
 
 <main>
 
-  <section class="panel">
+  <section class="panel" id="connectionPanel">
     <h2>Connection</h2>
     <div class="row">
       <span class="hint" style="margin:0">Link</span>
@@ -796,7 +807,7 @@ async function gmFetch(path, opts = {}) {
 }
 
 function laserIntent(kind, detail = {}, category = "intent") {
-  if (!AUTO_PPX || (!LTX && TEAM !== "green")) return false;
+  if (MOBILE_LTZ || !AUTO_PPX || (!LTX && TEAM !== "green")) return false;
   const body = JSON.stringify({team:TEAM, kind, category, detail:{player:playerName, client_monotonic_ms:performance.now(), ...detail, team:TEAM}});
   laserIntentQueue = laserIntentQueue.then(async () => {
     const endpoint = LTX ? "/api/laser-tag-x-intent" : "/api/laser-intent";
@@ -813,6 +824,39 @@ function laserIntent(kind, detail = {}, category = "intent") {
 }
 
 const LTZ = LTX && new URLSearchParams(location.search).has('ltz');
+const MOBILE_LTZ = LTZ && new URLSearchParams(location.search).has('mobile');
+document.body.classList.toggle('mobileLtz', MOBILE_LTZ);
+let mobileGame=null,mobileGameAt=0,mobileGameBusy=false,mobileViewActive=true,mobileOwnsMotion=false,mobileGameError='',mobileControlChoice=1;
+function mobileRobotReady(){return mobileViewActive&&!document.hidden&&mobileGame?.status==='ready'&&!mobileGame.virtual_play&&!mobileGame.paused&&['setup','running'].includes(mobileGame.phase)&&performance.now()-mobileGameAt<2000;}
+function haltMobileRobot(){
+ pauseUserMoves();autoPpxAbort=true;
+ if(mobileOwnsMotion){mobileOwnsMotion=false;api('/api/stop',{});api('/api/pump',{mode:'off'});}
+}
+async function pollMobileGame(){
+ if(mobileGameBusy)return;mobileGameBusy=true;
+ try{
+  const response=await fetch('/s/gamemaster/p/mobile-ltz-api/api/state?side='+TEAM,{cache:'no-store',signal:AbortSignal.timeout(1800)});
+  if(!response.ok)throw Error('Photon Game unavailable');
+  const value=await response.json();if(value.contract!=='photon.game'||value.version!==2)throw Error('Photon Game contract mismatch');
+  mobileGame=value;mobileGameAt=performance.now();mobileGameError='';
+ }catch(error){mobileGame=null;mobileGameError=error.message;}finally{mobileGameBusy=false;}
+ const ready=mobileRobotReady(),player=mobileGame?.mobile_progress?.player;
+ ltzTier=ready?Number(mobileGame.virtual_test_control??(mobileGame.phase==='running'?mobileGame.player_progression?.[TEAM]?.control_tier:null)??player?.selected_control??1):0;
+ if(!Number.isInteger(ltzTier)||ltzTier<0||ltzTier>4)ltzTier=0;
+ // Keep the available controls visible while paused/ended; command admission
+ // below still rejects motion until fresh physical gameplay is ready.
+ const rawTier=Number(mobileGame?.virtual_test_control??(mobileGame?.phase==='running'?mobileGame.player_progression?.[TEAM]?.control_tier:null)??player?.selected_control??1);
+ const shown=Number.isInteger(rawTier)&&rawTier>=1&&rawTier<=4?rawTier:1;
+ if(mobileControlChoice>shown)mobileControlChoice=1;
+ const picker=gid('mobilePhysicalControl');picker.value=String(mobileControlChoice);
+ for(const option of picker.options)option.disabled=Number(option.value)>shown;
+ const chosen=mobileControlChoice;
+ applyLtxConfig({game_mode:'game_'+chosen,video_click_move:ready&&ltzTier>=3&&chosen>=3,visibility:{joint_angles:chosen===1,tcp_pose:chosen===2||chosen===3,auto_pick_place:chosen===3,auto_pp_x:chosen===4}});
+ const heading=document.querySelector('header h1');if(heading)heading.textContent=TEAM[0].toUpperCase()+TEAM.slice(1)+' robot controls';
+ gid('runStatus').textContent=ready?'Physical play · '+(player?.name||'Practice'):mobileGame?.paused?'Game paused':mobileGame?.phase==='overrun'||mobileGame?.phase==='won'?'Reset the game to resume controls':mobileGameError||'Waiting for fresh physical game state';
+ if(!ready)haltMobileRobot();
+}
+
 let ltzTier = 0;
 function applyLtzProgress(data) {
   if (!LTZ) return;
@@ -828,6 +872,7 @@ function applyLtzProgress(data) {
 }
 let ltzProgressEvents = null;
 function connectLtzProgress() {
+  if(MOBILE_LTZ){if(!ltzProgressEvents){ltzProgressEvents={close(){}};pollMobileGame();setInterval(pollMobileGame,500);setInterval(()=>{if(!mobileRobotReady())haltMobileRobot();},200);}return;}
   if (ltzProgressEvents) return;
   applyLtzProgress({status:'unavailable'});
   ltzProgressEvents = new EventSource(`/s/gamemaster/p/photon-progress/api/events?side=${TEAM}`);
@@ -895,7 +940,7 @@ async function pollLtxConfig() {
   }
 }
 
-function startWebcam() { gid('webcamFeed').src = `${WEBCAM}?t=${Date.now()}`; }
+function startWebcam() { if(MOBILE_LTZ&&new URLSearchParams(location.search).has('bridge'))return;gid('webcamFeed').src = `${WEBCAM}?t=${Date.now()}`; }
 async function loadPlayfield() {
   startWebcam();
   if (AUTO_PPX) await loadGameCalibration2();
@@ -1249,7 +1294,12 @@ function setFeedZoom(tags) {
   let zonePoints = null;
   if (AUTO_PPX) {
     const samples = cal2CalibrationSamples();
-    if (samples.length >= 6) autoPpxCal2FeedBoundary = cal2ReachBoundary(samples);
+    try {
+      if (samples.length >= 6) autoPpxCal2FeedBoundary = cal2ReachBoundary(samples);
+    } catch (error) {
+      autoPpxCal2FeedBoundary=[];
+      setAutoPpxStatus(error.message,"err");
+    }
     // Keep the last valid Cal 2 boundary while calibration data is refreshing.
     // Visible ArUco detections must never become an alternate crop source.
     if (autoPpxCal2FeedBoundary.length >= 3) {
@@ -1361,9 +1411,9 @@ function robotPointFromST(cam, s, t) {
   return { x:p.x, y:p.y };
 }
 function robotPointReachable(point) {
-  if (!point) return true;
+  if (!point) return false;
   const x = Number(point.x), y = Number(point.y);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return true;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
   if (gameReachWorkspace.x && (x < gameReachWorkspace.x[0] || x > gameReachWorkspace.x[1])) return false;
   if (gameReachWorkspace.y && (y < gameReachWorkspace.y[0] || y > gameReachWorkspace.y[1])) return false;
   const radius = Math.hypot(x, y);
@@ -1825,7 +1875,9 @@ function renderGameField(tags) {
   if (AUTO_PPX && selectedAutoPpxCalibration() === "cal2") {
     const samples = cal2CalibrationSamples();
     const hull = samples.length >= 3 ? calibrationConvexHull(samples) : [];
-    const armLimit = samples.length >= 6 ? cal2ReachBoundary(samples) : [];
+    let armLimit=[];
+    try { if(samples.length>=6)armLimit=cal2ReachBoundary(samples); }
+    catch(error){layer.innerHTML="";layer.hidden=true;autoPpxCal2FeedBoundary=[];setAutoPpxStatus(error.message,"err");renderCurrentArmPose();return;}
     const boundaryOverlay = hull.length >= 3
       ? `${showTags ? cal2BoundarySvg(hull) : ""}${cal2BaseNoGoSvg(samples,armLimit)}${cal2ArmLimitSvg(armLimit)}`
       : "";
@@ -1974,12 +2026,14 @@ function cal2CalibrationSamples(side = TEAM) {
     }).filter(p => Object.values(p).every(Number.isFinite));
 }
 function cal2RawPose(samples, u, v) {
+  assertCal2Geometry(samples);
   return {
     x:evalTps(samples, fitTps(samples, "x"), u, v),
     y:evalTps(samples, fitTps(samples, "y"), u, v),
   };
 }
 function cal2PoseEvaluator(samples) {
+  assertCal2Geometry(samples);
   const xCoeff=fitTps(samples,"x"), yCoeff=fitTps(samples,"y");
   return (u,v) => ({
     x:evalTps(samples,xCoeff,u,v),
@@ -1987,6 +2041,7 @@ function cal2PoseEvaluator(samples) {
   });
 }
 function cal2CameraForRobotPose(samples,pose){
+  assertCal2Geometry(samples);
   const reverse=samples.map(p=>({
     u:p.x/500,v:p.y/500,cameraU:p.u,cameraV:p.v,
   }));
@@ -1994,6 +2049,18 @@ function cal2CameraForRobotPose(samples,pose){
     u:evalTps(reverse,fitTps(reverse,"cameraU"),pose.x/500,pose.y/500),
     v:evalTps(reverse,fitTps(reverse,"cameraV"),pose.x/500,pose.y/500),
   };
+}
+function assertCal2Geometry(samples) {
+  const invalid=detail=>{throw new Error(`Auto PP Cal 2 is invalid: ${detail}. Recapture the six outer-edge points.`);};
+  if(samples.length<6)invalid('six captured points are required');
+  if(samples.some(p=>!['u','v','x','y'].every(k=>Number.isFinite(p[k]))))invalid('a captured point is not numeric');
+  for(let i=0;i<samples.length;i++)for(let j=0;j<i;j++){
+    if(Math.hypot(samples[i].x-samples[j].x,samples[i].y-samples[j].y)<2)invalid('captured robot positions overlap');
+    if(Math.hypot(samples[i].u-samples[j].u,samples[i].v-samples[j].v)<.001)invalid('captured camera positions overlap');
+  }
+  const area=points=>{const h=calibrationConvexHull(points);return Math.abs(h.reduce((sum,p,i)=>{const next=h[(i+1)%h.length];return sum+p.u*next.v-next.u*p.v;},0))/2;};
+  if(area(samples)<.0001)invalid('camera points do not span a two-dimensional field');
+  if(area(samples.map(p=>({u:p.x,v:p.y})))<100)invalid('robot points do not span a two-dimensional field');
 }
 function clipLtxArmSegment(start, end, margin = -3) {
   const maximum = 100 - margin;
@@ -2855,7 +2922,7 @@ function gameInit() {
   gid('teamName').textContent = TEAM.toUpperCase();
   gid('teamName').className = 'teamName ' + TEAM;
   setPlayerName(storedPlayerName());
-  showNameDialog();
+  if(!MOBILE_LTZ)showNameDialog();
   gid('nameForm').addEventListener('submit', ev => {
     ev.preventDefault();
     const next = cleanName(gid('nameInput').value);
@@ -2869,6 +2936,7 @@ function gameInit() {
     hideNameDialog();
     registerAutoPlayer();
   });
+  if(MOBILE_LTZ)gid('mobilePhysicalControl').onchange=()=>{haltMobileRobot();mobileControlChoice=Number(gid('mobilePhysicalControl').value);pollMobileGame();};
   gid('btnChangeName').addEventListener('click', () => showNameDialog());
   gid('btnNew').addEventListener('click', pressNew);
   gid('btnLoadPlayfield').addEventListener('click', () => loadPlayfield().catch(e => log(`playfield load ✗ ${e.message}`, "log-err")));
@@ -2900,7 +2968,7 @@ function gameInit() {
   if (LTX) {
     pollLtxConfig();
     setInterval(pollLtxConfig, 700);
-    watchLtxGameState();
+    if(!MOBILE_LTZ)watchLtxGameState();
     refreshLtxArmOverlay();
     setInterval(refreshLtxArmOverlay, LTX_ARM_POLL_MS);
   }
@@ -2908,6 +2976,7 @@ function gameInit() {
   setInterval(refreshPlayerScores, 5000);
 
   showApp();
+  if(MOBILE_LTZ)return;
   const pollGameState = () => {
     if (gamePollBusy) return;
     gamePollBusy = true;
@@ -3106,6 +3175,8 @@ function log(msg, cls="log-info") {
 }
 
 async function api(path, body, method, timeoutMs = 12000) {
+  const motion=path==='/api/move'||path==='/api/joint-move'||path==='/api/enable'||path==='/api/pump'&&body?.mode!=='off';
+  if(MOBILE_LTZ&&motion){if(!mobileRobotReady())return {ok:false,error:'Wait for an unpaused physical game and fresh game state.'};mobileOwnsMotion=true;}
   if (LTZ && (path === '/api/move' || path === '/api/joint-move')) {
     const action = path === '/api/joint-move' ? 'joint' : autoPpxRunning ? 'cue' : (autoPpxClickOverride || body?.ltz_action === 'image') ? 'image' : 'xyz';
     if (ltzTier < ({joint:1,xyz:2,image:3,cue:4}[action])) return {ok:false,error:'This LTZ control is locked'};
@@ -3610,7 +3681,7 @@ async function moveToPose(pose, label, wait = true, options = {}) {
     const cueGeneration = cueOwned ? autoPpxClickOverrideGeneration : null;
     const interruptWhen = options.clickOverride
       ? () => autoPpxClickOverrideWasSuperseded(options.clickOverride)
-      : (cueOwned ? () => autoPpxClickOverrideGeneration !== cueGeneration : null);
+      : (cueOwned ? () => autoPpxClickOverrideGeneration !== cueGeneration : options.interruptWhen || null);
     try {
       return await moveToPoseAttempt(pose, label, wait, {...options, cueOwned, interruptWhen});
     } catch (error) {
@@ -5140,17 +5211,31 @@ async function init() {
 }
 init();
 
-window.addEventListener("pagehide", pauseUserMoves);
+window.addEventListener("pagehide", () => {
+ pauseUserMoves();
+ if(MOBILE_LTZ&&mobileOwnsMotion){
+  autoPpxAbort=true;
+  for(const [path,body] of [['stop',{}],['pump',{mode:'off'}]])navigator.sendBeacon(BASE+'api/'+path,new Blob([JSON.stringify(body)],{type:'application/json'}));
+  mobileOwnsMotion=false;
+ }
+});
+window.addEventListener('message',event=>{
+ if(!MOBILE_LTZ||event.source!==parent||event.origin!==location.origin||event.data?.type!=='mobile-ltz:visibility')return;
+ mobileViewActive=event.data.active===true;
+ if(!mobileViewActive)haltMobileRobot();
+});
 window.addEventListener("pageshow", () => {
   poll().catch(() => null);
   refreshGameField().catch(() => null);
 });
 document.addEventListener("visibilitychange", () => {
+  if(MOBILE_LTZ&&document.hidden)haltMobileRobot();
   if (!document.hidden) {
     poll().catch(() => null);
     refreshGameField().catch(() => null);
   }
 });
+if(MOBILE_LTZ&&new URLSearchParams(location.search).has('bridge')){const script=document.createElement('script');script.src='mobile-bridge.js';document.body.append(script);}
 </script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');
-const GameState=require('../sandboxes/green/prototypes/mobile-ltz/live-game.js');
+const GameState=require('../shared/mobile_ltz/live-game.js');
 const level={width:1696,height:960,paths:[],sockets:[]};
 const setup={status:'ready',virtual_play:true,phase:'setup',run_id:null,level_revision:1,level,server_time:1};
 const running={...setup,phase:'running',run_id:'run-1',server_time:2};

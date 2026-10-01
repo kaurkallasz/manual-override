@@ -154,3 +154,21 @@ Numeric fields are clamped server-side (e.g. `x,z ∈ [-12,12]`, `size ∈
 - `screen.html` — Three.js 3D view (bloom + DOF), live poller, drag-to-move
 - `areas.json` — runtime-persisted areas (git-ignored)
 - `settings.json` — runtime-persisted view/effect state (git-ignored)
+
+
+## Calibration display reservation (2026-10-01)
+
+`display_snapshot()` / `display_command(value)` expose `hhh.playfield` v1.
+Commands begin, capture and restore a durable reservation by session ID and
+Green/Purple side. Begin saves the previous areas/view before replacing them;
+only this owner writes its files. Capture glows the accepted marker green while
+the existing renderer preserves its quiet ArUco pixels. Restore writes the
+previous field before clearing the reservation. Public legacy mutations and
+HTTP edits reject while reserved. Non-finite numeric settings reject.
+The save worker and initial loads run in `hub_init`; `hub_stop` joins and flushes.
+
+`screen?presentation=1` is the read-only external calibration renderer. It still
+receives owned areas/settings over SSE, but disables orbit/zoom, target selection,
+transform shortcuts, and camera/target saves. The ordinary screen remains an
+interactive editor. Game Master observes the corrected camera separately; it
+does not embed either target renderer in its camera stage.

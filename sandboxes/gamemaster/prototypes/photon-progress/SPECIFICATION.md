@@ -5,29 +5,45 @@ upgrade purchases, control mastery and historical results. Game decides results;
 Progress commits them. Nothing is initialized on import. `hub_init` opens and
 checks the database; `hub_stop` releases the store. No sibling files are read.
 
-## Contract: photon.progress v1
+## Contract: photon.progress v2
 
 All public replies carry `contract`, integer `version`, and `status`.
 
 - `progress_snapshot({side?})`: revision, simple profile list, full selected
   profile, internal roster and active attempts. HTTP strips the other side's
-  balances/loadouts. This is a venue profile picker, not personal accounts.
+  balances/loadouts. Lists, profiles and public roster entries expose boolean
+  `is_test`. This is a venue profile picker, not personal accounts.
 - `begin_attempt({run_id, reward_enabled, metadata, expected_roster?})`: freezes
   selected profiles, tiers, names and loadouts in one transaction. A scored run
-  requires at least one player; a profile cannot join two concurrent attempts.
+  requires both Green and Purple; a profile cannot join two concurrent attempts.
+  A test participant forces the whole attempt to practice, regardless of the
+  requested flag. The reply's `reward_enabled` is authoritative; the attempt
+  freezes `test_player_ids`, `practice_reason` and `requested_reward_enabled`.
 - `checkpoint_attempt({run_id, sequence, kills})`: applies only the cumulative
   kill delta. Each registered co-op profile receives one credit per kill.
 - `finalize_attempt({...checkpoint, outcome, active_seconds, finished_at,
   released_orcs})`: atomically records the result, credits, mastery and unlocks.
   Repeated identical results are harmless; conflicting results are rejected.
+- `attempt_snapshot(run_id)`: read a canonical attempt for restart recovery.
 - `recover_attempts()`: marks unfinished attempts interrupted using banked kills.
   Game must replay its terminal-result outbox before calling this function.
 - `control_policy(side)`: active scored run, frozen tier and run ID. An absent
   participant gets tier zero during scored play. The existing relay checks this
   contract before movement. Stop, release and watchdog behavior are independent.
-- `history_snapshot({player_id, dataset?, tier?, level?, from?, to?, cohort?,
+- `history_snapshot({player_id?, combined?, dataset?, tier?, side_at_run?, level?, from?, to?, cohort?,
   cursor?, limit?})`: paginated results, cohorts and aggregates. Limit is at most
   100. Dates are Unix seconds. Practice and scored results are separate.
+- `player_command(side, value)` / `public_snapshot(side)`: authenticated caller
+  facade for profile creation, selection and sequential purchases.
+  `create` accepts optional boolean `select:true` to create and select atomically
+  for that authenticated side. A locked current roster rolls back creation too.
+- `reserve_roster({id, expected_players?})` / `release_roster({id})`: atomically
+  freeze both profiles/loadouts after the shared upgrade timer; Ready binds to
+  profile ID and revision. Release also clears a lesson reservation.
+- `reserve_lesson_roster({id})`: freeze both profile identities during the
+  exclusive calibration turns; purchases remain allowed while waiting.
+- `complete_lesson({player_id, operation_id, milestone_id, lesson_version,
+  calibration_revision, evidence_id})`: idempotent, durable calibration receipt.
 
 These server functions are not player HTTP mutation endpoints. Player routes
 are `/api/state`, `/api/events`, `/api/history`, and POST `/api/player` (create,
@@ -37,12 +53,34 @@ revision and an operation ID, and are prohibited during an active attempt.
 
 ## Rules and durability
 
+Initialization seeds two stable built-in profiles: `ltz-test-green` (Test player
+· Green) and `ltz-test-purple` (Test player · Purple). Either can be selected
+through the existing picker, with distinct profiles for simultaneous co-op.
+Their classification comes from Progress-owned reserved IDs, never a browser
+flag or a display name. Legacy profiles without the additive marker remain real
+profiles. Any attempt including a test profile awards no currency, lifetime
+score, attempts, wins, mastery or unlocks to either participant. Results remain
+in the separate Practice dataset and never enter default Scored history or its
+cohort summaries. Built-ins retain baseline progress and use Game Master test
+controls/loadouts; earned purchases/control mutations are rejected. Backups
+retain test classification and reject scored attempts with these participants.
+
+Score and mobile pages use the shared `operation-id.js` receipt generator;
+`randomUUID` is optional. HTTP browsers can use `getRandomValues`, with a
+timestamp/counter/random fallback when neither API is present. Receipts provide
+idempotency, not authentication. Mobile bundles and hosted exports include the
+helper inside the established `mobile.js` file, without changing PHP allowlists.
+
 A confirmed kill in a scored attempt is one credit and one lifetime-score point.
 Purchases reduce available credits only. Defeats, resets and interrupted runs
 retain banked kills but grant no completion. Practice grants neither currency
 nor mastery. Three nonconsecutive wins at a tier unlock the next tier for free;
-three wins at each of the four tiers complete mastery. Lower-tier replays do not
-advance higher-tier counters.
+three wins at each of the four tiers complete mastery. Each profile stays at its
+mandatory current tier until advancement; normal downgrade/skip requests are
+rejected. The third XYZ win advances to Targeting with `calibration_pending`.
+Normal play stays blocked until the Game-owned lesson completes. Cue remains
+active after mastery. Schema-v1 migration backs up SQLite before restoring the
+highest earned tier and requiring a receipt for previously unlocked upper tiers.
 
 Machine Gun, Flamethrower, Mortar and Tesla Coil cost 250/500/750 credits for
 levels 2/3/4; each level adds 10% base damage and health. Force Field costs
@@ -75,6 +113,11 @@ only after six nonoverlapping results exist. Time improvement uses successful
 runs and treats lower time as better. Interrupted times are unknown. The client
 shows actual points, a three-result mean, unlock markers, and an accessible
 results table directly below upgrades in each team's LTZ Score tab.
+The mobile view adds combined run-deduplicated score/time plots, cohort-specific
+trailing means, tier/side/date/map/dataset filters and keyboard/touch run details.
+Interrupted duration and missing older telemetry remain unavailable. Terminal
+telemetry includes first placement, placement count, pauses and outcome reason;
+virtual pickup timings are labelled as simulation evidence.
 
 Smoke tests: `tests/test_photon_progress.py`, `tests/test_ltz_integration.py`,
 `tests/ltz_control_ui.cjs`, and the isolated `tests/ltz_browser*` fixture.

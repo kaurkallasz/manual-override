@@ -17,20 +17,25 @@ function displayAngles(confirmed,preview,bounds){
  if(Array.isArray(preview)&&preview.length===3&&preview.every(Number.isFinite))for(let i=1;i<3;i++)values[i]=clamp(preview[i],...bounds[i-1]);
  return values;
 }
-// Calibrated sketch zeroes; J3 is an absolute forearm angle, not relative to J2.
+// MG400 side elevation, facing left to keep the arm above the right-hand dock.
+// Dobot's MG400_ROS URDF: J2 rotates a vertical 175 mm upper link; the
+// parallelogram makes J3 an absolute forearm angle from horizontal (175 mm).
+// SVG y increases downward. Mirroring the radial direction gives these bearings.
+// https://github.com/Dobot-Arm/MG400_ROS/blob/main/mg400_description/urdf/mg400_description.urdf
+function bearing(axis,value){return axis===1?-90-value:180-value;}
 function pose(j2,j3){
- const shoulder={x:0,y:0},a=-120+j2,b=185+j3;
- const elbow={x:180*Math.cos(rad(a)),y:180*Math.sin(rad(a))};
+ const shoulder={x:0,y:0},a=bearing(1,j2),b=bearing(2,j3);
+ const elbow={x:175*Math.cos(rad(a)),y:175*Math.sin(rad(a))};
  const wrist={x:elbow.x+175*Math.cos(rad(b)),y:elbow.y+175*Math.sin(rad(b))};
  return {shoulder,elbow,wrist,head:{x:wrist.x,y:wrist.y+42},a,b};
 }
 // Include trigonometric extrema, not just limit endpoints. This frame stays fixed
 // throughout a gesture, including at the ends of both independent joint sweeps.
 function layout(width,height,bounds,zoom=1){
- const angles=(lo,hi)=>{const out=[lo,hi];for(let v=Math.ceil(lo/90)*90;v<hi;v+=90)out.push(v);return out;};
- const a=angles(-120+bounds[0][0],-120+bounds[0][1]),b=angles(185+bounds[1][0],185+bounds[1][1]);
+ const angles=(lo,hi)=>{if(lo>hi)[lo,hi]=[hi,lo];const out=[lo,hi];for(let v=Math.ceil(lo/90)*90;v<hi;v+=90)out.push(v);return out;};
+ const a=angles(bearing(1,bounds[0][0]),bearing(1,bounds[0][1])),b=angles(bearing(2,bounds[1][0]),bearing(2,bounds[1][1]));
  const xs=[0],ys=[0];
- for(const v of a){const x=180*Math.cos(rad(v)),y=180*Math.sin(rad(v));xs.push(x);ys.push(y);for(const w of b){xs.push(x+175*Math.cos(rad(w)));ys.push(y+175*Math.sin(rad(w)),y+175*Math.sin(rad(w))+51);}}
+ for(const v of a){const x=175*Math.cos(rad(v)),y=175*Math.sin(rad(v));xs.push(x);ys.push(y);for(const w of b){xs.push(x+175*Math.cos(rad(w)));ys.push(y+175*Math.sin(rad(w)),y+175*Math.sin(rad(w))+51);}}
  const minX=Math.min(...xs)-24,maxX=Math.max(...xs)+24,minY=Math.min(...ys)-24,maxY=Math.max(...ys);
  const pad=30,scale=zoom*Math.max(.01,Math.min((width-2*pad)/(maxX-minX),(height-68)/(maxY-minY)));
  return {scale,x:width/2-(minX+maxX)*scale/2,y:height-38-maxY*scale,w:width,h:height,zoom};
@@ -55,7 +60,7 @@ class IndicatorMotion{
 function alignRight(frame,bounds,rightEdge=frame.w-8){
  const s=frame.scale,r=Math.min(43*frame.zoom,frame.h*.19*frame.zoom,180*s*.42);
  const maxCos=(lo,hi)=>Math.ceil(lo/360)*360<=hi?1:Math.max(Math.cos(rad(lo)),Math.cos(rad(hi)));
- const mid=(bounds[0][0]+bounds[0][1])/2,edge=r*maxCos(mid-210,mid-30);
+ const mid=(bounds[0][0]+bounds[0][1])/2,edge=r*maxCos(bearing(1,mid+90),bearing(1,mid-90));
  return {...frame,x:rightEdge-edge};
 }
 class Motion{
@@ -76,10 +81,19 @@ class JointControls{
  get moving(){return this.motions.slice(1).some(m=>m.axis!==null);}
  get activeAxis(){return this.motions[this.selected]?.axis??this.motions.slice(1).find(m=>m.axis!==null)?.axis??null;}
  preview(fallback){if(this.goals.slice(1).every(v=>v===null))return null;return fallback.map((v,i)=>i?this.value(i,v):v);}
- step(dt,confirmed,bounds){
+ step(dt,confirmed,bounds,physical=false){
   const changed=[];
   for(const axis of [1,2]){
    const motion=this.motions[axis];if(motion.axis===null)continue;
+   // Physical joints already use the relay's acceleration/braking follower,
+   // just like J1. Feedback-paced 1.2-degree steps starve that follower between
+   // telemetry packets, causing repeated starts and stops. Send the latest goal
+   // once; the existing command queue coalesces input and Cal 2 validates it.
+   if(physical){
+    const value=clamp(motion.desired,...bounds[axis-1]);
+    this.goals[axis]=motion.value=value;motion.cancel();
+    changed.push([axis,value]);continue;
+   }
    const next=motion.step(dt,confirmed[axis],bounds[axis-1]);
    if(motion.axis===null){this.goals[axis]=null;continue;}
    this.goals[axis]=motion.desired;
@@ -89,6 +103,29 @@ class JointControls{
   return changed;
  }
  cancel(){for(const axis of [1,2]){this.motions[axis].cancel();this.goals[axis]=null;}this.selected=null;}
+}
+// Finger motion is relative to a fixed screen-space pivot captured on touch-down.
+// Both MG400 side-view bearings decrease as their joint value increases. Remove
+// the vertical nozzle offset so J3 follows the forearm's angle around the elbow.
+class JointDrag{
+ constructor(){this.cancel();}
+ begin(axis,value,x,y,pivot,offsetY,bounds,fine=false){
+  this.cancel();
+  if(![1,2].includes(axis)||!Array.isArray(bounds)||bounds.length!==2||![value,x,y,pivot?.x,pivot?.y,offsetY,...bounds].every(Number.isFinite)||bounds[0]>=bounds[1])return false;
+  if(Math.hypot(x-pivot.x,y-pivot.y-offsetY)<12)return false;
+  Object.assign(this,{axis,value:clamp(value,...bounds),start:{x,y},pivot:{...pivot},offsetY,bounds:[...bounds],gain:fine?.1:1,last:Math.atan2(y-pivot.y-offsetY,x-pivot.x)*180/Math.PI,moved:false});return true;
+ }
+ move(x,y){
+  if(this.axis===null||![x,y].every(Number.isFinite))return null;
+  if(!this.moved&&Math.hypot(x-this.start.x,y-this.start.y)<4)return null;
+  if(Math.hypot(x-this.pivot.x,y-this.pivot.y-this.offsetY)<12){this.last=null;return null;}
+  const angle=Math.atan2(y-this.pivot.y-this.offsetY,x-this.pivot.x)*180/Math.PI;
+  if(this.last===null){this.last=angle;return null;}
+  const value=clamp(this.value-delta(angle,this.last)*this.gain,...this.bounds);this.last=angle;this.moved=true;
+  if(Math.abs(value-this.value)<.00001)return null;
+  this.value=value;return value;
+ }
+ cancel(){this.axis=null;this.value=null;this.last=null;}
 }
 function mount(host,options){
  let shown=null,lastTime=0,raf=0,destroyed=false,previewing=false;
@@ -100,25 +137,59 @@ function mount(host,options){
  <g class="rigTool"><path class="rigContour" d="M-11 0 L-11 18 L11 18 L11 0 M-13 20 H13 V27 H-13Z M-9 29 H9 V43 H-9Z M-4 44 V51 H4 V44"/><path class="rigDetail" d="M-8 7 H8 M-7 23 H7 M0 31 V41"/></g>
  </g><g class="rigGonio rigGonio2"></g><g class="rigGonio rigGonio3"></g>
  <g class="rigActual" fill="none" stroke-linecap="round" stroke-linejoin="round"><path class="rigActualJ2"/><path class="rigActualJ3"/></g>
- </svg><span class="rigCaption">Arm position</span>`;
+ </svg><span class="rigCaption">Arm position</span>${options.request?'<button class="rigHandle" data-rig-axis="1" role="slider" aria-label="Drag elbow to adjust shoulder J2" title="Drag elbow to adjust shoulder J2" disabled><span>J2</span></button><button class="rigHandle" data-rig-axis="2" role="slider" aria-label="Drag nozzle to adjust elbow J3" title="Drag nozzle to adjust elbow J3" disabled><span>J3</span></button>':''}`;
  const svg=host.querySelector('svg'),g2=host.querySelector('.rigGonio2'),g3=host.querySelector('.rigGonio3'),caption=host.querySelector('.rigCaption');
  const elements={shoulder:host.querySelector('.rigShoulder'),forearm:host.querySelector('.rigForearm'),tool:host.querySelector('.rigTool'),stem:host.querySelector('.rigStem'),actual2:host.querySelector('.rigActualJ2'),actual3:host.querySelector('.rigActualJ3')};
  let frame=null,currentPose=pose(-5,-5),latest=null,layoutKey='',drawKey='';
+ const handles=options.request?[1,2].map(axis=>({axis,button:host.querySelector(`[data-rig-axis="${axis}"]`)})):[];
+ const drag=new JointDrag();let held=null;
+ function finish(){
+  if(!held)return;const old=held;held=null;drag.cancel();old.button.classList.toggle('active',false);
+  options.end?.(old.id);if(old.button.hasPointerCapture(old.id))old.button.releasePointerCapture(old.id);drawKey='';
+ }
+ function move(e){
+  if(held?.id!==e.pointerId)return;e.preventDefault();e.stopPropagation();
+  if(!options.available()){finish();options.cancel?.();return;}
+  const value=drag.move(e.clientX,e.clientY);if(value!==null)options.request(drag.axis,value);
+ }
+ for(const {axis,button} of handles){
+  button.addEventListener('pointerdown',e=>{
+   e.preventDefault();e.stopPropagation();if(e.button!==0||held||button.disabled||!options.available()||!frame)return;
+   const rect=host.getBoundingClientRect(),p=screen(axis===1?currentPose.shoulder:currentPose.elbow);
+   const value=options.goal?.(axis)??latest?.targets?.[axis]??latest?.joints?.[axis];
+   if(!drag.begin(axis,value,e.clientX,e.clientY,{x:rect.left+p.x,y:rect.top+p.y},axis===2?51*frame.scale:0,latest.limits[axis],options.precision?.()))return;
+   if(options.begin?.(axis,e.pointerId)===false){drag.cancel();return;}
+   held={id:e.pointerId,button};button.classList.toggle('active',true);button.focus({preventScroll:true});button.setPointerCapture(e.pointerId);drawKey='';
+  });
+  button.addEventListener('pointermove',move);
+  button.addEventListener('pointerup',e=>{if(held?.id===e.pointerId){move(e);finish();}});
+  for(const name of ['pointercancel','lostpointercapture'])button.addEventListener(name,e=>{if(held?.id===e.pointerId){finish();options.cancel?.();}});
+  button.addEventListener('keydown',e=>{
+   const direction={ArrowLeft:-1,ArrowDown:-1,ArrowRight:1,ArrowUp:1}[e.key];
+   if(direction===undefined&&!['Home','End'].includes(e.key))return;
+   e.preventDefault();if(button.disabled||held||!options.available())return;
+   const id='rig-key-'+axis;if(options.begin?.(axis,id)===false)return;
+   try{const bounds=latest.limits[axis],value=options.goal?.(axis)??latest.targets[axis];options.request(axis,e.key==='Home'?bounds[0]:e.key==='End'?bounds[1]:clamp(value+direction*(options.precision?.()?.05:.5),...bounds));}
+   finally{options.end?.(id);drawKey='';}
+  });
+ }
  function fit(bounds,rightEdge){
   const rect=host.getBoundingClientRect(),edge=Number.isFinite(rightEdge)?rightEdge-(rect.left||0):rect.width-8;
-  frame=alignRight(layout(rect.width,rect.height,bounds,2),bounds,edge);
+  const zoom=Number.isFinite(options.zoom)&&options.zoom>0?options.zoom:2;
+  frame=layout(rect.width,rect.height,bounds,zoom);
+  if(!options.contain)frame=alignRight(frame,bounds,edge);
   // Keep the original shoulder height above the slider dock. Expanded virtual
   // sweeps may change the drawing scale, but must not lift its stationary base.
-  frame.y=layout(rect.width,rect.height,limits,2).y;
+  if(!options.contain)frame.y=layout(rect.width,rect.height,limits,zoom).y;
   svg.setAttribute('viewBox',`0 0 ${rect.width} ${rect.height}`);drawKey='';
  }
  const screen=p=>({x:frame.x+p.x*frame.scale,y:frame.y+p.y*frame.scale});
  function protractor(group,p,angle,value,bounds,axis){
   const c=screen(p),r=Math.min(43*frame.zoom,frame.h*.19*frame.zoom,180*frame.scale*.42),activeAxis=options.activeAxis?.()===axis;
   // A 180-degree instrument centered on the configured sweep. Numeric labels remain real joint angles.
-  const mid=(bounds[0]+bounds[1])/2,start=mid-90,sweep=1;
-  const bearing=v=>axis===1?-120+v:185+v;
-  const polar=(v,radius)=>({x:c.x+radius*Math.cos(rad(bearing(v))),y:c.y+radius*Math.sin(rad(bearing(v)))});
+  const mid=(bounds[0]+bounds[1])/2,start=mid-90,sweep=0;
+  const jointBearing=v=>bearing(axis,v);
+  const polar=(v,radius)=>({x:c.x+radius*Math.cos(rad(jointBearing(v))),y:c.y+radius*Math.sin(rad(jointBearing(v)))});
   const first=polar(start,r),last=polar(start+180,r),zero=polar(0,r);
   let content=`<path d="M${first.x} ${first.y} A${r} ${r} 0 0 ${sweep} ${last.x} ${last.y}" class="gonioArc"/><path d="M${c.x} ${c.y} L${zero.x} ${zero.y}" class="gonioBaseline"/>`;
   const lo=polar(bounds[0],r),hi=polar(bounds[1],r);content+=`<path d="M${lo.x} ${lo.y} A${r} ${r} 0 0 ${sweep} ${hi.x} ${hi.y}" class="gonioRange"/>`;
@@ -133,11 +204,16 @@ function mount(host,options){
   const actual=validActual?pose(confirmed[1],confirmed[2]):currentPose;
   const p=currentPose,s=frame.scale,base=screen(p.shoulder),e=screen(p.elbow),w=screen(p.wrist),h=screen(p.head);
   svg.setAttribute('aria-label',`${previewing?'Target preview':'Arm position'}: shoulder ${values[1].toFixed(1)} degrees, elbow ${values[2].toFixed(1)} degrees`);
-  caption.textContent=previewing?'White: target · Red: actual':'Red: actual arm position';
-  elements.shoulder.setAttribute('transform',`translate(${base.x} ${base.y}) rotate(${p.a}) scale(${s})`);
+  caption.textContent=previewing?'White: target · Red: actual':latest?.physical?'Side view · measured J2 / J3':'Red: actual arm position';
+  const guideRadius=Math.min(43*frame.zoom,frame.h*.19*frame.zoom,180*s*.42);
+  const suggestedCaptionTop=Math.min(frame.h-22,Math.max(base.y+guideRadius,e.y+guideRadius,w.y+51*s)+14);
+  const captionTop=options.captionTop?.(suggestedCaptionTop,caption.offsetHeight||18)??suggestedCaptionTop;
+  caption.setAttribute('style',`top:${captionTop}px;bottom:auto`);
+  elements.shoulder.setAttribute('transform',`translate(${base.x} ${base.y}) rotate(${p.a}) scale(${s}) scale(${175/180} 1)`);
   elements.forearm.setAttribute('transform',`translate(${e.x} ${e.y}) rotate(${p.b}) scale(${s})`);
   elements.tool.setAttribute('transform',`translate(${w.x} ${w.y}) scale(${s})`);
   elements.stem.setAttribute('transform',`translate(${base.x} ${base.y}) scale(${s})`);
+  for(const {axis,button} of handles){const point=axis===1?e:{x:w.x,y:w.y+51*s};button.style.left=point.x+'px';button.style.top=point.y+'px';}
   protractor(g2,p.shoulder,p.a,values[1],bounds[0],1);protractor(g3,p.elbow,p.b,values[2],bounds[1],2);
   if(validActual){
    const a=screen(actual.shoulder),b=screen(actual.elbow),c=screen(actual.wrist);
@@ -147,14 +223,18 @@ function mount(host,options){
   }else{elements.actual2.setAttribute('d','');elements.actual3.setAttribute('d','');}
  }
  function tick(time){if(destroyed)return;const dt=Math.min(.05,(time-lastTime)/1000||0);lastTime=time;latest=options.state();const valid=Array.isArray(latest?.joints)&&latest.joints.length===3&&latest.joints.every(Number.isFinite)&&Array.isArray(latest?.limits)&&latest.limits.length===3&&latest.limits.every(b=>Array.isArray(b)&&b.length===2&&b.every(Number.isFinite)&&b[0]<b[1]&&b[0]>=-360&&b[1]<=360);const enabled=options.available()&&valid;host.classList.toggle('unavailable',!enabled);
+  if(held&&!enabled){finish();options.cancel?.();}
+  for(const {axis,button} of handles){button.disabled=!enabled;button.setAttribute('aria-disabled',String(!enabled));if(valid){const value=options.goal?.(axis)??latest.targets?.[axis]??latest.joints[axis];button.setAttribute('aria-valuemin',latest.limits[axis][0]);button.setAttribute('aria-valuemax',latest.limits[axis][1]);button.setAttribute('aria-valuenow',value);button.setAttribute('aria-valuetext',value.toFixed(options.precision?.()?2:1)+' degrees target');}}
   const bounds=[1,2].map(i=>valid?latest.limits[i]:limits[i-1]),rightEdge=options.rightEdge?.();const key=host.clientWidth+','+host.clientHeight+JSON.stringify(bounds)+','+rightEdge;if(key!==layoutKey){layoutKey=key;fit(bounds,rightEdge);}
+  // The white sketch follows selected targets immediately in either play mode.
+  // Red links remain measured feedback; this preview never drives commands.
   const preview=enabled?options.previewTargets?.():null;
   previewing=Array.isArray(preview)&&preview.length===3&&preview.every(Number.isFinite);
-  if(valid){if(!shown)shown=[...latest.joints];const destination=displayAngles(latest.joints,preview,bounds);for(let i=1;i<3;i++)shown[i]+=(destination[i]-shown[i])*(1-Math.exp(-dt/.075));}
-  const values=shown||[-80,-5,-5];const nextDraw=values.map(v=>v.toFixed(2)).join(',')+','+previewing+','+options.activeAxis?.()+','+options.precision?.()+','+(latest?.targets||[]).join(',')+','+(latest?.joints||[]).map(v=>Number(v).toFixed(2)).join(',');if(nextDraw!==drawKey){drawKey=nextDraw;draw(values,bounds);}raf=requestAnimationFrame(tick);
+  if(valid){if(!shown)shown=[...latest.joints];const destination=displayAngles(latest.joints,preview,bounds);if(previewing)shown=destination;else for(let i=1;i<3;i++)shown[i]+=(destination[i]-shown[i])*(1-Math.exp(-dt/.075));}
+  const values=shown||[-80,-5,-5];const nextDraw=values.map(v=>v.toFixed(2)).join(',')+','+previewing+','+Boolean(latest?.physical)+','+options.activeAxis?.()+','+options.precision?.()+','+(latest?.targets||[]).join(',')+','+(latest?.joints||[]).map(v=>Number(v).toFixed(2)).join(',');if(nextDraw!==drawKey){drawKey=nextDraw;draw(values,bounds);}raf=requestAnimationFrame(tick);
  }
  raf=requestAnimationFrame(tick);
- return {destroy(){destroyed=true;cancelAnimationFrame(raf);}};
+ return {cancelDrag:finish,relayout(){drawKey='';},destroy(){finish();destroyed=true;cancelAnimationFrame(raf);}};
 }
-const api={pose,layout,alignRight,Motion,IndicatorMotion,JointControls,delta,displayAngles,sliderBounds,baseDialAngle,baseDialValue,mount};if(typeof module==='object'&&module.exports)module.exports=api;else root.MobileJointRig=api;
+const api={pose,bearing,layout,alignRight,Motion,IndicatorMotion,JointControls,JointDrag,delta,displayAngles,sliderBounds,baseDialAngle,baseDialValue,mount};if(typeof module==='object'&&module.exports)module.exports=api;else root.MobileJointRig=api;
 })(typeof globalThis==='object'?globalThis:this);

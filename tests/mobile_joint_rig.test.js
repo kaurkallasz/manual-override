@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {pose,layout,Motion,IndicatorMotion,JointControls,delta,displayAngles,mount}=require('../sandboxes/green/prototypes/mobile-ltz/joint-rig.js');
-const {sliderBounds,alignRight}=require('../sandboxes/green/prototypes/mobile-ltz/joint-rig.js');
+const {pose,layout,Motion,IndicatorMotion,JointControls,delta,displayAngles,mount}=require('../shared/mobile_ltz/joint-rig.js');
+const {sliderBounds,alignRight}=require('../shared/mobile_ltz/joint-rig.js');
 test('fine sliders zoom exactly tenfold around each target and preserve width at physical limits',()=>{
  for(const bounds of [[-25,85],[-25,105],[-10,20]]){
   const span=(bounds[1]-bounds[0])/10;
@@ -53,7 +53,7 @@ test('J3 moves head around fixed elbow, J2 carries elbow without changing absolu
  const home=pose(-5,-5),head=pose(-5,20),elbow=pose(20,-5);
  assert.deepEqual(home.elbow,head.elbow);assert.notDeepEqual(home.head,head.head);
  assert.equal(home.b,elbow.b);assert.notDeepEqual(home.elbow,elbow.elbow);
- for(const p of [home,head,elbow]){assert.ok(Math.abs(Math.hypot(p.elbow.x,p.elbow.y)-180)<1e-8);assert.ok(Math.abs(Math.hypot(p.wrist.x-p.elbow.x,p.wrist.y-p.elbow.y)-175)<1e-8);assert.equal(p.head.x,p.wrist.x);assert.equal(p.head.y-p.wrist.y,42);}
+ for(const p of [home,head,elbow]){assert.ok(Math.abs(Math.hypot(p.elbow.x,p.elbow.y)-175)<1e-8);assert.ok(Math.abs(Math.hypot(p.wrist.x-p.elbow.x,p.wrist.y-p.elbow.y)-175)<1e-8);assert.equal(p.head.x,p.wrist.x);assert.equal(p.head.y-p.wrist.y,42);}
 });
 test('fixed half-height frame keeps handles attached and reachable through the full sweep',()=>{
  for(const [w,h] of [[362,422],[292,284],[475,195],[302,160]]){
@@ -120,7 +120,7 @@ test('arm illustration follows confirmed telemetry and exposes no input controls
   const vector=d=>{const [x,y,u,v]=d.match(/-?\d+(?:\.\d+)?/g).map(Number);return [+(u-x).toFixed(6),+(v-y).toFixed(6)];};
   assert.match(red2,/^M.+ L/);assert.match(red3,/^M.+ L/);
   // Slider endpoints must animate the entire pose even while telemetry stays still.
-  for(const [j2,j3,shoulderAngle,forearmAngle] of [[85,105,-35,290],[-25,-25,-145,160]]){
+  for(const [j2,j3,shoulderAngle,forearmAngle] of [[85,105,-175,75],[-25,-25,-65,205]]){
    preview=[-80,j2,j3];for(let i=0;i<60;i++){frame(64+i*16+(j2<0?960:0));assert.equal(base(),fixedBase,'slider animation cannot move the base');}
    const angle=key=>Number(parts.get(key).attrs.transform.match(/rotate\(([^)]+)\)/)[1]);
    assert.ok(Math.abs(angle('.rigShoulder')-shoulderAngle)<.01);assert.ok(Math.abs(angle('.rigForearm')-forearmAngle)<.01);
@@ -129,7 +129,30 @@ test('arm illustration follows confirmed telemetry and exposes no input controls
   }
   state.joints[2]=25;frame(1990);assert.deepEqual(vector(parts.get('.rigActualJ2').attrs.d),vector(red2));assert.notDeepEqual(vector(parts.get('.rigActualJ3').attrs.d),vector(red3));
   preview=null;for(let i=0;i<60;i++)frame(2000+i*16);
-  assert.match(parts.get('svg').attrs['aria-label'],/^Arm position:/);rig.destroy();
+  assert.match(parts.get('svg').attrs['aria-label'],/^Arm position:/);
+  state.physical=true;state.joints=[-20,30,45];preview=[-20,80,90];
+  frame(3000);
+  const angle=key=>Number(parts.get(key).attrs.transform.match(/rotate\(([^)]+)\)/)[1]);
+  assert.equal(angle('.rigShoulder'),-170,'physical shoulder shows selected 80° on the first frame');
+  assert.equal(angle('.rigForearm'),90,'physical forearm shows selected 90° on the first frame');
+  assert.match(parts.get('svg').attrs['aria-label'],/^Target preview:/);
+  assert.equal(parts.get('.rigCaption').textContent,'White: target · Red: actual');
+  assert.equal(parts.get('.rigActual').attrs['aria-label'],'Actual J2 30.0 degrees, J3 45.0 degrees');
+  const physicalRed2=parts.get('.rigActualJ2').attrs.d,physicalRed3=parts.get('.rigActualJ3').attrs.d;
+  preview=[-20,-25,105];frame(3016);
+  assert.equal(angle('.rigShoulder'),-65);assert.equal(angle('.rigForearm'),75);
+  assert.equal(parts.get('.rigActualJ2').attrs.d,physicalRed2,'Target changes cannot move measured red links');
+  assert.equal(parts.get('.rigActualJ3').attrs.d,physicalRed3);
+  state.joints=[-20,35,55];frame(3032);
+  assert.equal(angle('.rigShoulder'),-65,'Lagging telemetry cannot pull the selected target back');
+  assert.equal(angle('.rigForearm'),75);
+  assert.notEqual(parts.get('.rigActualJ2').attrs.d,physicalRed2,'Red follows the next measured shoulder angle');
+  assert.notEqual(parts.get('.rigActualJ3').attrs.d,physicalRed3,'Red follows the next measured elbow angle');
+  preview=null;for(let i=0;i<100;i++)frame(3048+i*16);
+  assert.ok(Math.abs(angle('.rigShoulder')+125)<.01);assert.ok(Math.abs(angle('.rigForearm')-125)<.01);
+  assert.match(parts.get('svg').attrs['aria-label'],/^Arm position:/);
+  assert.equal(parts.get('.rigCaption').textContent,'Side view · measured J2 / J3');
+  rig.destroy();
  }finally{global.requestAnimationFrame=originalRaf;global.cancelAnimationFrame=originalCancel;}
 });
 test('editing either slider preserves the other goal, preview and command progression',()=>{
@@ -168,13 +191,13 @@ test('stationary shoulder half-circle aligns with the slider panel edge at 2x si
  for(const [w,h,right] of [[242,372,228],[198,234,184],[405,195,391]]){
   const bounds=[[-25,85],[-25,105]],original=layout(w,h,bounds,2),frame=alignRight(original,bounds,right);
   const radius=Math.min(86,h*.38,180*frame.scale*.42);
-  assert.ok(Math.abs(frame.x+radius-right)<1e-8);
+  assert.ok(Math.abs(frame.x+radius*Math.cos(Math.PI/6)-right)<1e-8);
   assert.equal(frame.scale,original.scale);assert.equal(frame.y,original.y);
  }
 });
 
 test('fixed base dial maps the full runtime range and preserves clockwise direction',()=>{
- const {baseDialAngle,baseDialValue}=require('../sandboxes/green/prototypes/mobile-ltz/joint-rig.js');
+ const {baseDialAngle,baseDialValue}=require('../shared/mobile_ltz/joint-rig.js');
  for(const bounds of [[-160,160],[-90,120]]){
   assert.equal(baseDialAngle(bounds[0],bounds),90);assert.equal(baseDialAngle(bounds[1],bounds),-90);
   for(let i=0;i<=100;i++){
@@ -187,12 +210,53 @@ test('fixed base dial maps the full runtime range and preserves clockwise direct
  }
 });
 
-test('increasing J2 swings the elbow right without translating the base or changing J3',()=>{
+test('increasing J2 leans the left-facing arm forward without translating its base or changing J3',()=>{
  let previous=pose(-25,10);
  for(let j2=-24;j2<=85;j2++){
   const current=pose(j2,10);
-  assert.ok(current.elbow.x>previous.elbow.x);
+  assert.ok(current.elbow.x<previous.elbow.x);
   assert.deepEqual(current.shoulder,{x:0,y:0});assert.equal(current.b,previous.b);
   previous=current;
  }
+});
+
+
+test('physical shoulder and elbow send goals to the relay without waiting for delayed telemetry',()=>{
+ const controls=new JointControls(),confirmed=[-20,40,25],bounds=[[-25,85],[-25,105]];
+ for(const axis of [1,2]){
+  controls.request(axis,confirmed[axis],confirmed[axis]+15);
+  assert.deepEqual(controls.step(.016,confirmed,bounds,true),[[axis,confirmed[axis]+15]]);
+  // Feedback can remain unchanged for 500ms: no 1.2-degree stair steps or replay.
+  for(let tick=0;tick<32;tick++)assert.deepEqual(controls.step(.016,confirmed,bounds,true),[]);
+  assert.equal(controls.commanded(axis,confirmed[axis]),confirmed[axis]+15);
+ }
+ assert.deepEqual(controls.preview(confirmed),[-20,55,40]);
+ // Rapid input coalesces to the newest goal, including reversal and fine tune.
+ controls.request(1,55,60);controls.request(1,55,39.95);
+ assert.deepEqual(controls.step(.016,confirmed,bounds,true),[[1,39.95]]);
+ assert.equal(controls.commanded(2,25),40,'editing shoulder preserves elbow goal');
+ controls.request(2,40,500);
+ assert.deepEqual(controls.step(.016,confirmed,bounds,true),[[2,105]],'runtime joint bounds remain enforced');
+ controls.request(1,39.95,45);controls.cancel();
+ assert.deepEqual(controls.step(.016,confirmed,bounds,true),[],'stop cancels pending goals');
+ assert.equal(controls.preview(confirmed),null);
+});
+
+
+test('MG400 zero posture and absolute joint directions match the manufacturer geometry',()=>{
+ const near=(actual,expected)=>assert.ok(Math.abs(actual-expected)<1e-8,`${actual} ≠ ${expected}`);
+ const home=pose(0,0);near(home.elbow.x,0);near(home.elbow.y,-175);near(home.wrist.x,-175);near(home.wrist.y,-175);
+ const shoulder=pose(30,0);near(shoulder.elbow.x,-87.5);near(shoulder.elbow.y,-175*Math.sqrt(3)/2);
+ const forearm=pose(0,60);near(forearm.wrist.x,-87.5);near(forearm.wrist.y,-175+175*Math.sqrt(3)/2);
+ near(shoulder.b,180);near(forearm.a,-90);
+});
+
+test('drawing displacement agrees with recorded MG400 controller forward kinematics',()=>{
+ // Read-only relay records: base -12.5°, J3 25.5°, J2 44.56° then 38.53°.
+ // Fixed tool/base offsets cancel. These coordinates came from PositiveSolution.
+ const p=pose(44.56,25.5),q=pose(38.53,25.5);
+ const radialDelta=Math.hypot(367.123,-81.389)-Math.hypot(380.516,-84.358);
+ const heightDelta=7.908-(-4.248);
+ assert.ok(Math.abs(-(q.wrist.x-p.wrist.x)-radialDelta)<.1);
+ assert.ok(Math.abs(-(q.wrist.y-p.wrist.y)-heightDelta)<.1);
 });

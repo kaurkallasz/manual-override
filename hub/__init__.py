@@ -81,7 +81,7 @@ DEFAULT_SANDBOXES = {
             "dobot-mg400-relay": ["green", "purple"],
             "photon-progress": ["green", "purple"],
             "photon-game": ["green", "purple"],
-            "mobile-ltz-api": ["green"],
+            "mobile-ltz-api": ["green", "purple"],
             "tag-game": ["green", "purple"],
             "2p-tag-game": ["green", "purple"],
             "pickup-game": ["green", "purple"],

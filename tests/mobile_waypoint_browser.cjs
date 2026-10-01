@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
+const team=process.env.MOBILE_TEST_TEAM==='purple'?'purple':'green',piece=team==='purple'?102:100;
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
  try{
@@ -8,8 +9,18 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.request.post(root+'/__test/command',{data:{action:'reset'}});
   await page.request.post(root+'/__test/command',{data:{action:'virtual_test_loadout',levels:null,control:4}});
-  await page.goto(root+'/s/green/p/mobile-ltz/');
+  await page.goto(root+`/s/${team}/p/mobile-ltz/`);
   await page.waitForFunction(()=>$('connection').textContent==='Connected'&&controlMode==='cue');
+  for(let i=0;i<2;i++){
+   const label=await page.evaluate(()=>{
+    const tag=state.mobile_arm.tags[0],center=viewport.screen(tag.x,tag.y);
+    const el=[...$('markerLabels').children].find(el=>el.dataset.kind==='piece'&&el.textContent==='#'+tag.id),b=el.getBoundingClientRect();
+    return {x:b.x+b.width/2,y:b.y,center,markerBottom:center.y+21*viewport.scale};
+   });
+   assert(Math.abs(label.x-label.center.x)<.2,'Cue labels remain horizontally centered after rotation');
+   assert(Math.abs(label.y-label.markerBottom-4)<.2,'Cue labels stay below the displayed marker at either orientation');
+   await page.locator('#rotateView').click();
+  }
   await page.locator('.cueRow [data-field=destination]').selectOption('46');
   const cdp=await page.context().newCDPSession(page);
   const touch=(type,points=[])=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:points.map((p,i)=>({x:p.x,y:p.y,id:i+1,radiusX:5,radiusY:5,force:1}))});
@@ -55,7 +66,7 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
   assert.equal(await page.locator('#cuePlay').textContent(),'Ⅱ','compact view toggles to Pause');
   await page.waitForFunction(()=>!state.mobile_arm.cue.waypoint,null,{timeout:20000});
   await page.waitForFunction(()=>state.mobile_arm.cue.status==='completed',null,{timeout:30000});
-  assert.ok(await page.evaluate(()=>state.towers.some(t=>t.atom_tag_id===100&&t.aruco_id===46)),'previously unreachable marker 46 receives the piece');
+  assert.ok(await page.evaluate(piece=>state.towers.some(t=>t.atom_tag_id===piece&&t.aruco_id===46),piece),'previously unreachable marker 46 receives the piece');
   await page.waitForFunction(()=>$('xyzBullseyes').dataset.aligned==='true');
   await tapWaypoint({x:350,y:185});await page.locator('#cueStop').click();
   await page.waitForFunction(()=>!state.mobile_arm.cue.waypoint);

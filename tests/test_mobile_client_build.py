@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from flask import Flask
 
@@ -24,6 +25,9 @@ class ClientBuildTests(unittest.TestCase):
             (self.root/name).write_text((self.ui.HERE/name).read_text())
         (self.root/'joint-rig.js').write_text((self.ui.HERE/'joint-rig.js').read_text())
         (self.root/'turret-overlay.js').write_text((self.ui.HERE/'turret-overlay.js').read_text())
+        (self.root/'physical-arm.js').write_text((self.ui.HERE/'physical-arm.js').read_text())
+        (self.root/'journey.js').write_text((self.ui.HERE/'journey.js').read_text())
+        (self.root/'operation-id.js').write_text((self.ui.HERE/'operation-id.js').read_text())
         self.ui.HERE = self.root
         self.ui.hub_init(None)
         self.addCleanup(self.ui.hub_stop)
@@ -59,6 +63,19 @@ class ClientBuildTests(unittest.TestCase):
             self.assertEqual(self.client.get(f'/api/client/{build}/{file}').status_code, 404)
         self.ui.hub_stop()
         self.assertEqual(self.client.get('/api/client/latest/index.html').status_code, 503)
+
+    def test_physical_controller_discovery_fails_closed(self):
+        path='/api/physical-controller'
+        self.assertEqual(self.client.get(path).status_code,503)
+        descriptor=dict(contract='green.robot-controller',version=1,status='ready',path='/s/green/p/ltx/?ltz=1&mobile=1&bridge=1')
+        self.ui._ctx=SimpleNamespace(is_prototype_enabled=lambda slug:slug=='ltx',get_prototype=lambda slug:SimpleNamespace(controller_contract=lambda:descriptor))
+        self.assertEqual(self.client.get(path).json,descriptor)
+        for field,value in [('version',True),('version',2),('contract','wrong'),('status','unavailable'),('path','https://example.com/')]:
+            original=descriptor[field];descriptor[field]=value
+            self.assertEqual(self.client.get(path).status_code,503)
+            descriptor[field]=original
+        self.ui._ctx.is_prototype_enabled=lambda slug:False
+        self.assertEqual(self.client.get(path).status_code,503)
 
     def test_rig_is_bundled_for_already_deployed_hosting_allowlists(self):
         build = self.ui.client_contract()['build']

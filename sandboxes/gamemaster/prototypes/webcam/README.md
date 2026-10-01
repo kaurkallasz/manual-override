@@ -71,6 +71,15 @@ Open the **Webcam** tab, pick a camera and a **resolution** from the dropdowns,
 and the feed appears. Both choices are remembered (`camera-settings.json`), so
 next time the feed comes up on its own.
 
+The enabled module opens the remembered camera in `hub_init`, so Photon Board
+and Laser Tag Y receive frames without first opening Webcam or Laser Tag X.
+`hub_stop` releases the capture. Startup, viewer requests, camera changes and
+device scans share a lifecycle lock to prevent concurrent capture replacement.
+With no saved camera, choose one in Webcam first.
+
+Hardware-free startup/concurrency smoke test:
+`.venv/bin/python -m unittest discover -s tests -p test_webcam_lifecycle.py`.
+
 ### Resolution (up to 4K)
 
 The resolution dropdown offers up to **3840×2160 (4K)**. The camera reports the
@@ -126,3 +135,46 @@ Constants live at the top of `prototype.py`:
 | `STREAM_FPS` | `30` | cap on stream push rate |
 | `DEFAULT_W` / `DEFAULT_H` | `1920` / `1080` | resolution used when none is chosen/remembered |
 | `RESOLUTIONS` | VGA … 4K | options offered in the resolution dropdown |
+
+### Atom-screen false-positive rejection
+
+Atom IDs 100–105 use the existing six-code 3×3 dictionary, so small pieces of
+background artwork can alias a nine-bit code. The screen pass now requires exact
+code bits and an intact black border, rejects elongated/sliver quadrilaterals
+(longest/shortest edge at most 2, no angle below about 41°), rejects substantial
+overlap with a successfully decoded printed marker, and rejects multiple
+competing locations for the same Atom ID in one frame. Printed dictionaries and
+IDs are unchanged.
+
+A screen-only confirmation gate runs **before** the shared tracker, immediate
+`detections`, `visible_ids`, and camera overlays. It requires at least three
+consecutive processed observations spanning 0.3 seconds, with a consistent
+position and size. A missing observation, gap over 0.5 seconds, position jump
+(over half a marker width), or abrupt scale change restarts confirmation. Opening
+a capture resets this state. No unconfirmed screen candidate enters Board's
+15-second diagnostic history or other consumers. Once qualified, normal tracked
+and historical-position semantics remain unchanged. Expect about 0.3–0.4 seconds
+of additional initial acquisition at 10 Hz; reacquisition after a miss also
+requires confirmation. Strongly oblique Atom views may be rejected deliberately.
+
+Hardware-free regressions cover all six valid codes, rotations, blur, moderate
+foreshortening, printed table tags, legacy elongated false matches, duplicate and
+cross-dictionary ambiguity, motion continuity, and the public immediate output:
+`.venv/bin/python -m unittest discover -s tests -p 'test_webcam*py'`.
+# Public camera contracts
+
+Enabled consumers discover Webcam through the hub context; they do not access
+its capture manager or tracker. All the following contracts have integer
+version **1**:
+
+| Public function | Contract | Output / command |
+| --- | --- | --- |
+| `camera_status_snapshot()` | `hhh.webcam.camera` | `status`, `observed_at`, and owned `camera` dimensions/selection/status. |
+| `raw_frame_snapshot()` | `hhh.webcam.frame` | A fresh uncorrected BGR array copy and wall-clock `frame_at`; unavailable frames return `frame: null`. Maximum age is 1.5 seconds. This is an in-process output, not JSON. |
+| `tag_snapshot()` | `hhh.webcam.tags` | Raw tracked tags, immediate detections, dimensions, visible IDs and capture timestamp. Lens correction belongs to Camera Calibration. |
+| `camera_command(value)` | `hhh.webcam.controls` | `focus_read`, `focus_set`, `list`, or `select`; selection requires a nonnegative integer `index`. Focus booleans and finite numeric values are validated. Device failures return `ok: false` and `status: unavailable`. |
+| `set_tag_transformer(callback)` | `hhh.webcam.transformer` | Registers a pure correction callback or unregisters with `None`; returns a versioned acknowledgement. |
+
+Webcam remains the only camera capture owner. Camera selection and optical
+settings use atomic file replacement; invalid data or persistence errors do
+not silently overwrite saved settings. Hub lifecycle owns opening and closing.

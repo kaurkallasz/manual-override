@@ -131,7 +131,10 @@ class XYZTests(unittest.TestCase):
             self.assertEqual(self.engine.virtual_test_control, 3)
         self.engine.reset()
         self.assertEqual(self.engine.virtual_test_control, 3)
-        with self.assertRaises(ValueError): self.unlock(2)
+        self.unlock(2)  # Practice settings are also editable in physical mode.
+        self.assertEqual(self.engine.virtual_test_control, 2)
+        with self.assertRaises(ValueError):
+            self.arm.command({'action': 'connect'}, self.engine)
         self.engine.set_virtual_play(True)
         self.unlock(None)
         self.assertIsNone(self.engine.virtual_test_control)
@@ -163,13 +166,13 @@ class XYZTests(unittest.TestCase):
             self.assertEqual(self.arm.targets, self.arm.joints)
 
     def test_saved_progress_checked_server_side(self):
-        fake = SimpleNamespace(progress_snapshot=lambda query: {'contract': 'photon.progress', 'version': 1, 'status': 'ready', 'player': {'unlocked_control': 2}})
+        fake = SimpleNamespace(progress_snapshot=lambda query: {'contract': 'photon.progress', 'version': 2, 'status': 'ready', 'player': {'unlocked_control': 2,'current_control_tier':2,'progression_stage':'playing'}})
         self.game._hub_ctx = FakeContext({'photon-progress': fake})
         with patch.object(self.game, '_require_engine', return_value=(self.engine, True)):
             result = self.game.mobile_command({'action': 'control_mode', 'mode': 'xyz', 'session': self.token, 'sequence': 1})
         self.assertEqual(result['control_mode'], 'xyz')
         fake.progress_snapshot = lambda query: {'contract': 'wrong', 'version': 1, 'player': {'unlocked_control': 4}}
-        self.assertEqual(self.game._mobile_saved_control(), 1)
+        self.assertEqual(self.game._mobile_saved_control(), 0)
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,0 +1,3745 @@
+{
+  "status": "provisional",
+  "human_pilot": "not performed",
+  "historical_evidence": {
+    "source": "sandboxes/gamemaster/prototypes/pickup-game/pickup-log.csv",
+    "sha256": "7d961a89e3c617c3d7c218a93b168599e4a86b58a94d49004fa2c21fdfc35d40",
+    "count": 38,
+    "display_names": 17,
+    "range_seconds": [
+      4.22,
+      871.24
+    ],
+    "dates": [
+      "2026-06-15",
+      "2026-06-16",
+      "2026-06-17"
+    ],
+    "august_20_four_day_rows": 0,
+    "method_speed_factors": null,
+    "limitation": "No tier/settings/loadout metadata; no pooled median or inferred control-method gains.",
+    "raw_records": [
+      {
+        "source_line": 2,
+        "logged_at": "2026-06-15T09:03:51.462621+00:00",
+        "player": "Kaspar",
+        "team": "purple",
+        "elapsed_seconds": "4.22",
+        "started_at": "2026-06-15T09:03:47.239471+00:00",
+        "completed_at": "2026-06-15T09:03:51.462614+00:00"
+      },
+      {
+        "source_line": 3,
+        "logged_at": "2026-06-15T09:07:16.162604+00:00",
+        "player": "Kaur",
+        "team": "green",
+        "elapsed_seconds": "160.46",
+        "started_at": "2026-06-15T09:04:35.706732+00:00",
+        "completed_at": "2026-06-15T09:07:16.162601+00:00"
+      },
+      {
+        "source_line": 4,
+        "logged_at": "2026-06-15T10:22:55.665015+00:00",
+        "player": "ll",
+        "team": "purple",
+        "elapsed_seconds": "518.93",
+        "started_at": "2026-06-15T10:14:16.739818+00:00",
+        "completed_at": "2026-06-15T10:22:55.665011+00:00"
+      },
+      {
+        "source_line": 5,
+        "logged_at": "2026-06-15T10:22:56.478564+00:00",
+        "player": "lera",
+        "team": "green",
+        "elapsed_seconds": "555.93",
+        "started_at": "2026-06-15T10:13:40.550275+00:00",
+        "completed_at": "2026-06-15T10:22:56.478553+00:00"
+      },
+      {
+        "source_line": 6,
+        "logged_at": "2026-06-15T10:47:15.784287+00:00",
+        "player": "arina",
+        "team": "green",
+        "elapsed_seconds": "303.09",
+        "started_at": "2026-06-15T10:42:12.689854+00:00",
+        "completed_at": "2026-06-15T10:47:15.784281+00:00"
+      },
+      {
+        "source_line": 7,
+        "logged_at": "2026-06-15T10:47:18.833678+00:00",
+        "player": "anna",
+        "team": "purple",
+        "elapsed_seconds": "311.31",
+        "started_at": "2026-06-15T10:42:07.527307+00:00",
+        "completed_at": "2026-06-15T10:47:18.833671+00:00"
+      },
+      {
+        "source_line": 8,
+        "logged_at": "2026-06-15T10:53:41.554577+00:00",
+        "player": "anna",
+        "team": "purple",
+        "elapsed_seconds": "347.62",
+        "started_at": "2026-06-15T10:47:53.938560+00:00",
+        "completed_at": "2026-06-15T10:53:41.554571+00:00"
+      },
+      {
+        "source_line": 9,
+        "logged_at": "2026-06-15T10:58:05.037109+00:00",
+        "player": "anna",
+        "team": "purple",
+        "elapsed_seconds": "239.51",
+        "started_at": "2026-06-15T10:54:05.523905+00:00",
+        "completed_at": "2026-06-15T10:58:05.037104+00:00"
+      },
+      {
+        "source_line": 10,
+        "logged_at": "2026-06-15T11:01:19.291513+00:00",
+        "player": "anna",
+        "team": "purple",
+        "elapsed_seconds": "170.8",
+        "started_at": "2026-06-15T10:58:28.495934+00:00",
+        "completed_at": "2026-06-15T11:01:19.291509+00:00"
+      },
+      {
+        "source_line": 11,
+        "logged_at": "2026-06-15T11:01:40.795628+00:00",
+        "player": "lera",
+        "team": "green",
+        "elapsed_seconds": "796.97",
+        "started_at": "2026-06-15T10:48:23.823072+00:00",
+        "completed_at": "2026-06-15T11:01:40.795621+00:00"
+      },
+      {
+        "source_line": 12,
+        "logged_at": "2026-06-15T11:05:22.419246+00:00",
+        "player": "leraarina",
+        "team": "green",
+        "elapsed_seconds": "167.54",
+        "started_at": "2026-06-15T11:02:34.882454+00:00",
+        "completed_at": "2026-06-15T11:05:22.419242+00:00"
+      },
+      {
+        "source_line": 13,
+        "logged_at": "2026-06-15T11:11:43.765532+00:00",
+        "player": "leraarina",
+        "team": "green",
+        "elapsed_seconds": "173.95",
+        "started_at": "2026-06-15T11:08:49.816005+00:00",
+        "completed_at": "2026-06-15T11:11:43.765527+00:00"
+      },
+      {
+        "source_line": 14,
+        "logged_at": "2026-06-16T15:22:24.137884+00:00",
+        "player": "qwe",
+        "team": "green",
+        "elapsed_seconds": "66.15",
+        "started_at": "2026-06-16T15:21:17.985468+00:00",
+        "completed_at": "2026-06-16T15:22:24.137872+00:00"
+      },
+      {
+        "source_line": 15,
+        "logged_at": "2026-06-17T06:35:37.258617+00:00",
+        "player": "123",
+        "team": "green",
+        "elapsed_seconds": "67.52",
+        "started_at": "2026-06-17T06:34:29.743432+00:00",
+        "completed_at": "2026-06-17T06:35:37.258612+00:00"
+      },
+      {
+        "source_line": 16,
+        "logged_at": "2026-06-17T06:47:08.983321+00:00",
+        "player": "test",
+        "team": "purple",
+        "elapsed_seconds": "736.95",
+        "started_at": "2026-06-17T06:34:52.034314+00:00",
+        "completed_at": "2026-06-17T06:47:08.983314+00:00"
+      },
+      {
+        "source_line": 17,
+        "logged_at": "2026-06-17T07:33:59.611992+00:00",
+        "player": "denissnastya",
+        "team": "purple",
+        "elapsed_seconds": "845.81",
+        "started_at": "2026-06-17T07:19:53.803910+00:00",
+        "completed_at": "2026-06-17T07:33:59.611989+00:00"
+      },
+      {
+        "source_line": 18,
+        "logged_at": "2026-06-17T07:34:50.038381+00:00",
+        "player": "123",
+        "team": "green",
+        "elapsed_seconds": "871.24",
+        "started_at": "2026-06-17T07:20:18.795700+00:00",
+        "completed_at": "2026-06-17T07:34:50.038375+00:00"
+      },
+      {
+        "source_line": 19,
+        "logged_at": "2026-06-17T07:39:31.341514+00:00",
+        "player": "Tom",
+        "team": "purple",
+        "elapsed_seconds": "110.57",
+        "started_at": "2026-06-17T07:37:40.774877+00:00",
+        "completed_at": "2026-06-17T07:39:31.341508+00:00"
+      },
+      {
+        "source_line": 20,
+        "logged_at": "2026-06-17T07:50:48.158515+00:00",
+        "player": "Lucas",
+        "team": "purple",
+        "elapsed_seconds": "461.05",
+        "started_at": "2026-06-17T07:43:07.112512+00:00",
+        "completed_at": "2026-06-17T07:50:48.158510+00:00"
+      },
+      {
+        "source_line": 21,
+        "logged_at": "2026-06-17T07:51:25.985378+00:00",
+        "player": "denissnastya",
+        "team": "green",
+        "elapsed_seconds": "338.65",
+        "started_at": "2026-06-17T07:45:47.340270+00:00",
+        "completed_at": "2026-06-17T07:51:25.985373+00:00"
+      },
+      {
+        "source_line": 22,
+        "logged_at": "2026-06-17T07:56:36.222854+00:00",
+        "player": "Kristian",
+        "team": "purple",
+        "elapsed_seconds": "242.28",
+        "started_at": "2026-06-17T07:52:33.944111+00:00",
+        "completed_at": "2026-06-17T07:56:36.222850+00:00"
+      },
+      {
+        "source_line": 23,
+        "logged_at": "2026-06-17T08:01:16.513581+00:00",
+        "player": "Kristian",
+        "team": "purple",
+        "elapsed_seconds": "263.22",
+        "started_at": "2026-06-17T07:56:53.295639+00:00",
+        "completed_at": "2026-06-17T08:01:16.513572+00:00"
+      },
+      {
+        "source_line": 24,
+        "logged_at": "2026-06-17T08:06:21.623237+00:00",
+        "player": "denissnastya",
+        "team": "green",
+        "elapsed_seconds": "124.15",
+        "started_at": "2026-06-17T08:04:17.468811+00:00",
+        "completed_at": "2026-06-17T08:06:21.623226+00:00"
+      },
+      {
+        "source_line": 25,
+        "logged_at": "2026-06-17T08:09:11.906716+00:00",
+        "player": "denissnastya",
+        "team": "green",
+        "elapsed_seconds": "135.39",
+        "started_at": "2026-06-17T08:06:56.512122+00:00",
+        "completed_at": "2026-06-17T08:09:11.906711+00:00"
+      },
+      {
+        "source_line": 26,
+        "logged_at": "2026-06-17T08:17:52.673012+00:00",
+        "player": "Tom",
+        "team": "purple",
+        "elapsed_seconds": "81.72",
+        "started_at": "2026-06-17T08:16:30.953846+00:00",
+        "completed_at": "2026-06-17T08:17:52.673007+00:00"
+      },
+      {
+        "source_line": 27,
+        "logged_at": "2026-06-17T08:30:28.852893+00:00",
+        "player": "Tom",
+        "team": "purple",
+        "elapsed_seconds": "271.95",
+        "started_at": "2026-06-17T08:25:56.902355+00:00",
+        "completed_at": "2026-06-17T08:30:28.852888+00:00"
+      },
+      {
+        "source_line": 28,
+        "logged_at": "2026-06-17T10:14:59.317439+00:00",
+        "player": "gazan67",
+        "team": "purple",
+        "elapsed_seconds": "347.32",
+        "started_at": "2026-06-17T10:09:12.001213+00:00",
+        "completed_at": "2026-06-17T10:14:59.317428+00:00"
+      },
+      {
+        "source_line": 29,
+        "logged_at": "2026-06-17T10:15:00.050803+00:00",
+        "player": "gazan67",
+        "team": "green",
+        "elapsed_seconds": "342.22",
+        "started_at": "2026-06-17T10:09:17.828982+00:00",
+        "completed_at": "2026-06-17T10:15:00.050794+00:00"
+      },
+      {
+        "source_line": 30,
+        "logged_at": "2026-06-17T10:19:50.863129+00:00",
+        "player": "gazan67",
+        "team": "purple",
+        "elapsed_seconds": "262.01",
+        "started_at": "2026-06-17T10:15:28.856580+00:00",
+        "completed_at": "2026-06-17T10:19:50.863123+00:00"
+      },
+      {
+        "source_line": 31,
+        "logged_at": "2026-06-17T10:19:51.624089+00:00",
+        "player": "gazan67",
+        "team": "green",
+        "elapsed_seconds": "261.21",
+        "started_at": "2026-06-17T10:15:30.418509+00:00",
+        "completed_at": "2026-06-17T10:19:51.624083+00:00"
+      },
+      {
+        "source_line": 32,
+        "logged_at": "2026-06-17T10:23:51.156421+00:00",
+        "player": "gazan67",
+        "team": "purple",
+        "elapsed_seconds": "203.36",
+        "started_at": "2026-06-17T10:20:27.797064+00:00",
+        "completed_at": "2026-06-17T10:23:51.156407+00:00"
+      },
+      {
+        "source_line": 33,
+        "logged_at": "2026-06-17T10:23:52.031487+00:00",
+        "player": "gazan67",
+        "team": "green",
+        "elapsed_seconds": "204.7",
+        "started_at": "2026-06-17T10:20:27.336456+00:00",
+        "completed_at": "2026-06-17T10:23:52.031481+00:00"
+      },
+      {
+        "source_line": 34,
+        "logged_at": "2026-06-17T10:30:12.984165+00:00",
+        "player": "sten  miroslav",
+        "team": "purple",
+        "elapsed_seconds": "307.65",
+        "started_at": "2026-06-17T10:25:05.336348+00:00",
+        "completed_at": "2026-06-17T10:30:12.984158+00:00"
+      },
+      {
+        "source_line": 35,
+        "logged_at": "2026-06-17T10:30:13.858076+00:00",
+        "player": "Daniel Jarik",
+        "team": "green",
+        "elapsed_seconds": "291.07",
+        "started_at": "2026-06-17T10:25:22.789608+00:00",
+        "completed_at": "2026-06-17T10:30:13.858070+00:00"
+      },
+      {
+        "source_line": 36,
+        "logged_at": "2026-06-17T10:32:53.812327+00:00",
+        "player": "sten  miroslav",
+        "team": "purple",
+        "elapsed_seconds": "127.85",
+        "started_at": "2026-06-17T10:30:45.959377+00:00",
+        "completed_at": "2026-06-17T10:32:53.812323+00:00"
+      },
+      {
+        "source_line": 37,
+        "logged_at": "2026-06-17T10:32:54.747086+00:00",
+        "player": "Daniel Jarik",
+        "team": "green",
+        "elapsed_seconds": "130.42",
+        "started_at": "2026-06-17T10:30:44.323107+00:00",
+        "completed_at": "2026-06-17T10:32:54.747078+00:00"
+      },
+      {
+        "source_line": 38,
+        "logged_at": "2026-06-17T10:40:03.938738+00:00",
+        "player": "sten  miroslav",
+        "team": "purple",
+        "elapsed_seconds": "335.16",
+        "started_at": "2026-06-17T10:34:28.780035+00:00",
+        "completed_at": "2026-06-17T10:40:03.938734+00:00"
+      },
+      {
+        "source_line": 39,
+        "logged_at": "2026-06-17T10:40:05.314550+00:00",
+        "player": "Daniel Jarik",
+        "team": "green",
+        "elapsed_seconds": "336.53",
+        "started_at": "2026-06-17T10:34:28.779551+00:00",
+        "completed_at": "2026-06-17T10:40:05.314544+00:00"
+      }
+    ]
+  },
+  "assumptions": {
+    "first_placements_s": [
+      [
+        180,
+        100
+      ],
+      [
+        240,
+        102
+      ],
+      [
+        420,
+        101
+      ],
+      [
+        480,
+        103
+      ]
+    ],
+    "replenishment_start_s": 600,
+    "replenishment_interval_s": 120,
+    "slow_partner_delay_s": 120,
+    "source": "design assumptions; four nearest-core sockets, one per owned Atom; no core-tag shortcut",
+    "human_control_speed": "unmeasured; same action trace for each tier"
+  },
+  "map_revision": 19,
+  "scenarios": [
+    {
+      "tier": 1,
+      "upgrade_level": 1,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1414.4,
+      "kills": 1009,
+      "core_hp": 4524.9,
+      "peak_active_enemies": 119,
+      "peak_deferred": 0,
+      "released_orcs": 1009,
+      "schedule": {
+        "tier": 1,
+        "multiplier": 0.22,
+        "groups": [
+          [
+            26
+          ],
+          [
+            37
+          ],
+          [
+            47
+          ],
+          [
+            58
+          ],
+          [
+            68
+          ],
+          [
+            79
+          ],
+          [
+            89
+          ],
+          [
+            100
+          ],
+          [
+            110
+          ],
+          [
+            121
+          ],
+          [
+            132
+          ],
+          [
+            142
+          ]
+        ],
+        "waves": [
+          26,
+          37,
+          47,
+          58,
+          68,
+          79,
+          89,
+          100,
+          110,
+          121,
+          132,
+          142
+        ],
+        "total": 1009,
+        "release_rate_multiplier": 1.0,
+        "wave_interval_s": 95.0,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 337.0,
+            "duration_s": 37.0,
+            "orcs_per_s": 0.7027027027027027,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 395.0,
+            "release_end_s": 431.0,
+            "duration_s": 36.0,
+            "orcs_per_s": 1.0277777777777777,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 490.0,
+            "release_end_s": 525.0,
+            "duration_s": 35.0,
+            "orcs_per_s": 1.3428571428571427,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 585.0,
+            "release_end_s": 619.0,
+            "duration_s": 34.0,
+            "orcs_per_s": 1.7058823529411764,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 680.0,
+            "release_end_s": 713.0,
+            "duration_s": 33.0,
+            "orcs_per_s": 2.0606060606060606,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 775.0,
+            "release_end_s": 807.0,
+            "duration_s": 32.0,
+            "orcs_per_s": 2.46875,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 870.0,
+            "release_end_s": 901.0,
+            "duration_s": 31.0,
+            "orcs_per_s": 2.870967741935484,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 965.0,
+            "release_end_s": 995.0,
+            "duration_s": 30.0,
+            "orcs_per_s": 3.3333333333333335,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 1060.0,
+            "release_end_s": 1089.0,
+            "duration_s": 29.0,
+            "orcs_per_s": 3.793103448275862,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 1155.0,
+            "release_end_s": 1183.0,
+            "duration_s": 28.0,
+            "orcs_per_s": 4.321428571428571,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1250.0,
+            "release_end_s": 1277.0,
+            "duration_s": 27.0,
+            "orcs_per_s": 4.888888888888889,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1345.0,
+            "release_end_s": 1371.0,
+            "duration_s": 26.0,
+            "orcs_per_s": 5.461538461538462,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1371.0
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 1,
+      "upgrade_level": 4,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1410.0,
+      "kills": 1009,
+      "core_hp": 6092.52,
+      "peak_active_enemies": 116,
+      "peak_deferred": 0,
+      "released_orcs": 1009,
+      "schedule": {
+        "tier": 1,
+        "multiplier": 0.22,
+        "groups": [
+          [
+            26
+          ],
+          [
+            37
+          ],
+          [
+            47
+          ],
+          [
+            58
+          ],
+          [
+            68
+          ],
+          [
+            79
+          ],
+          [
+            89
+          ],
+          [
+            100
+          ],
+          [
+            110
+          ],
+          [
+            121
+          ],
+          [
+            132
+          ],
+          [
+            142
+          ]
+        ],
+        "waves": [
+          26,
+          37,
+          47,
+          58,
+          68,
+          79,
+          89,
+          100,
+          110,
+          121,
+          132,
+          142
+        ],
+        "total": 1009,
+        "release_rate_multiplier": 1.0,
+        "wave_interval_s": 95.0,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 337.0,
+            "duration_s": 37.0,
+            "orcs_per_s": 0.7027027027027027,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 395.0,
+            "release_end_s": 431.0,
+            "duration_s": 36.0,
+            "orcs_per_s": 1.0277777777777777,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 490.0,
+            "release_end_s": 525.0,
+            "duration_s": 35.0,
+            "orcs_per_s": 1.3428571428571427,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 585.0,
+            "release_end_s": 619.0,
+            "duration_s": 34.0,
+            "orcs_per_s": 1.7058823529411764,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 680.0,
+            "release_end_s": 713.0,
+            "duration_s": 33.0,
+            "orcs_per_s": 2.0606060606060606,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 775.0,
+            "release_end_s": 807.0,
+            "duration_s": 32.0,
+            "orcs_per_s": 2.46875,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 870.0,
+            "release_end_s": 901.0,
+            "duration_s": 31.0,
+            "orcs_per_s": 2.870967741935484,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 965.0,
+            "release_end_s": 995.0,
+            "duration_s": 30.0,
+            "orcs_per_s": 3.3333333333333335,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 1060.0,
+            "release_end_s": 1089.0,
+            "duration_s": 29.0,
+            "orcs_per_s": 3.793103448275862,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 1155.0,
+            "release_end_s": 1183.0,
+            "duration_s": 28.0,
+            "orcs_per_s": 4.321428571428571,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1250.0,
+            "release_end_s": 1277.0,
+            "duration_s": 27.0,
+            "orcs_per_s": 4.888888888888889,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1345.0,
+            "release_end_s": 1371.0,
+            "duration_s": 26.0,
+            "orcs_per_s": 5.461538461538462,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1371.0
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 2,
+      "upgrade_level": 1,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1334.2,
+      "kills": 1088,
+      "core_hp": 3435.18,
+      "peak_active_enemies": 134,
+      "peak_deferred": 0,
+      "released_orcs": 1088,
+      "schedule": {
+        "tier": 2,
+        "multiplier": 0.2376,
+        "groups": [
+          [
+            28
+          ],
+          [
+            39
+          ],
+          [
+            51
+          ],
+          [
+            62
+          ],
+          [
+            74
+          ],
+          [
+            85
+          ],
+          [
+            96
+          ],
+          [
+            108
+          ],
+          [
+            119
+          ],
+          [
+            131
+          ],
+          [
+            142
+          ],
+          [
+            153
+          ]
+        ],
+        "waves": [
+          28,
+          39,
+          51,
+          62,
+          74,
+          85,
+          96,
+          108,
+          119,
+          131,
+          142,
+          153
+        ],
+        "total": 1088,
+        "release_rate_multiplier": 1.08,
+        "wave_interval_s": 87.96296296296296,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 334.25925925925924,
+            "duration_s": 34.25925925925926,
+            "orcs_per_s": 0.8172972972972973,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 387.96296296296293,
+            "release_end_s": 421.29629629629625,
+            "duration_s": 33.33333333333333,
+            "orcs_per_s": 1.1700000000000002,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 475.9259259259259,
+            "release_end_s": 508.3333333333333,
+            "duration_s": 32.407407407407405,
+            "orcs_per_s": 1.5737142857142858,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 563.8888888888889,
+            "release_end_s": 595.3703703703704,
+            "duration_s": 31.48148148148148,
+            "orcs_per_s": 1.9694117647058824,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 651.8518518518518,
+            "release_end_s": 682.4074074074074,
+            "duration_s": 30.555555555555554,
+            "orcs_per_s": 2.421818181818182,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 739.8148148148148,
+            "release_end_s": 769.4444444444445,
+            "duration_s": 29.629629629629626,
+            "orcs_per_s": 2.8687500000000004,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 827.7777777777778,
+            "release_end_s": 856.4814814814815,
+            "duration_s": 28.703703703703702,
+            "orcs_per_s": 3.3445161290322583,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 915.7407407407408,
+            "release_end_s": 943.5185185185186,
+            "duration_s": 27.777777777777775,
+            "orcs_per_s": 3.8880000000000003,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 1003.7037037037037,
+            "release_end_s": 1030.5555555555557,
+            "duration_s": 26.85185185185185,
+            "orcs_per_s": 4.431724137931035,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 1091.6666666666665,
+            "release_end_s": 1117.5925925925924,
+            "duration_s": 25.925925925925924,
+            "orcs_per_s": 5.052857142857143,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1179.6296296296296,
+            "release_end_s": 1204.6296296296296,
+            "duration_s": 25.0,
+            "orcs_per_s": 5.68,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1267.5925925925926,
+            "release_end_s": 1291.6666666666667,
+            "duration_s": 24.074074074074073,
+            "orcs_per_s": 6.355384615384616,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1291.6666666666667
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 2,
+      "upgrade_level": 4,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1329.1,
+      "kills": 1088,
+      "core_hp": 5352.26,
+      "peak_active_enemies": 130,
+      "peak_deferred": 0,
+      "released_orcs": 1088,
+      "schedule": {
+        "tier": 2,
+        "multiplier": 0.2376,
+        "groups": [
+          [
+            28
+          ],
+          [
+            39
+          ],
+          [
+            51
+          ],
+          [
+            62
+          ],
+          [
+            74
+          ],
+          [
+            85
+          ],
+          [
+            96
+          ],
+          [
+            108
+          ],
+          [
+            119
+          ],
+          [
+            131
+          ],
+          [
+            142
+          ],
+          [
+            153
+          ]
+        ],
+        "waves": [
+          28,
+          39,
+          51,
+          62,
+          74,
+          85,
+          96,
+          108,
+          119,
+          131,
+          142,
+          153
+        ],
+        "total": 1088,
+        "release_rate_multiplier": 1.08,
+        "wave_interval_s": 87.96296296296296,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 334.25925925925924,
+            "duration_s": 34.25925925925926,
+            "orcs_per_s": 0.8172972972972973,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 387.96296296296293,
+            "release_end_s": 421.29629629629625,
+            "duration_s": 33.33333333333333,
+            "orcs_per_s": 1.1700000000000002,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 475.9259259259259,
+            "release_end_s": 508.3333333333333,
+            "duration_s": 32.407407407407405,
+            "orcs_per_s": 1.5737142857142858,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 563.8888888888889,
+            "release_end_s": 595.3703703703704,
+            "duration_s": 31.48148148148148,
+            "orcs_per_s": 1.9694117647058824,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 651.8518518518518,
+            "release_end_s": 682.4074074074074,
+            "duration_s": 30.555555555555554,
+            "orcs_per_s": 2.421818181818182,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 739.8148148148148,
+            "release_end_s": 769.4444444444445,
+            "duration_s": 29.629629629629626,
+            "orcs_per_s": 2.8687500000000004,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 827.7777777777778,
+            "release_end_s": 856.4814814814815,
+            "duration_s": 28.703703703703702,
+            "orcs_per_s": 3.3445161290322583,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 915.7407407407408,
+            "release_end_s": 943.5185185185186,
+            "duration_s": 27.777777777777775,
+            "orcs_per_s": 3.8880000000000003,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 1003.7037037037037,
+            "release_end_s": 1030.5555555555557,
+            "duration_s": 26.85185185185185,
+            "orcs_per_s": 4.431724137931035,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 1091.6666666666665,
+            "release_end_s": 1117.5925925925924,
+            "duration_s": 25.925925925925924,
+            "orcs_per_s": 5.052857142857143,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1179.6296296296296,
+            "release_end_s": 1204.6296296296296,
+            "duration_s": 25.0,
+            "orcs_per_s": 5.68,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1267.5925925925926,
+            "release_end_s": 1291.6666666666667,
+            "duration_s": 24.074074074074073,
+            "orcs_per_s": 6.355384615384616,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1291.6666666666667
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 3,
+      "upgrade_level": 1,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1272.0,
+      "kills": 1170,
+      "core_hp": 2166.65,
+      "peak_active_enemies": 148,
+      "peak_deferred": 0,
+      "released_orcs": 1170,
+      "schedule": {
+        "tier": 3,
+        "multiplier": 0.2552,
+        "groups": [
+          [
+            30
+          ],
+          [
+            42
+          ],
+          [
+            55
+          ],
+          [
+            67
+          ],
+          [
+            79
+          ],
+          [
+            91
+          ],
+          [
+            104
+          ],
+          [
+            116
+          ],
+          [
+            128
+          ],
+          [
+            140
+          ],
+          [
+            153
+          ],
+          [
+            165
+          ]
+        ],
+        "waves": [
+          30,
+          42,
+          55,
+          67,
+          79,
+          91,
+          104,
+          116,
+          128,
+          140,
+          153,
+          165
+        ],
+        "total": 1170,
+        "release_rate_multiplier": 1.16,
+        "wave_interval_s": 81.89655172413794,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 331.8965517241379,
+            "duration_s": 31.896551724137932,
+            "orcs_per_s": 0.9405405405405405,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 381.8965517241379,
+            "release_end_s": 412.9310344827586,
+            "duration_s": 31.03448275862069,
+            "orcs_per_s": 1.3533333333333333,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 463.7931034482759,
+            "release_end_s": 493.9655172413793,
+            "duration_s": 30.172413793103452,
+            "orcs_per_s": 1.8228571428571427,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 545.6896551724138,
+            "release_end_s": 575.0,
+            "duration_s": 29.31034482758621,
+            "orcs_per_s": 2.2858823529411763,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 627.5862068965517,
+            "release_end_s": 656.0344827586207,
+            "duration_s": 28.448275862068968,
+            "orcs_per_s": 2.776969696969697,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 709.4827586206897,
+            "release_end_s": 737.0689655172414,
+            "duration_s": 27.586206896551726,
+            "orcs_per_s": 3.2987499999999996,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 791.3793103448277,
+            "release_end_s": 818.1034482758622,
+            "duration_s": 26.724137931034484,
+            "orcs_per_s": 3.8916129032258064,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 873.2758620689656,
+            "release_end_s": 899.1379310344828,
+            "duration_s": 25.862068965517242,
+            "orcs_per_s": 4.485333333333333,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 955.1724137931035,
+            "release_end_s": 980.1724137931035,
+            "duration_s": 25.0,
+            "orcs_per_s": 5.12,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 1037.0689655172414,
+            "release_end_s": 1061.2068965517242,
+            "duration_s": 24.13793103448276,
+            "orcs_per_s": 5.799999999999999,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1118.9655172413793,
+            "release_end_s": 1142.2413793103449,
+            "duration_s": 23.27586206896552,
+            "orcs_per_s": 6.573333333333332,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1200.8620689655172,
+            "release_end_s": 1223.2758620689656,
+            "duration_s": 22.413793103448278,
+            "orcs_per_s": 7.361538461538461,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1223.2758620689656
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 3,
+      "upgrade_level": 4,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1268.4,
+      "kills": 1170,
+      "core_hp": 4374.24,
+      "peak_active_enemies": 147,
+      "peak_deferred": 0,
+      "released_orcs": 1170,
+      "schedule": {
+        "tier": 3,
+        "multiplier": 0.2552,
+        "groups": [
+          [
+            30
+          ],
+          [
+            42
+          ],
+          [
+            55
+          ],
+          [
+            67
+          ],
+          [
+            79
+          ],
+          [
+            91
+          ],
+          [
+            104
+          ],
+          [
+            116
+          ],
+          [
+            128
+          ],
+          [
+            140
+          ],
+          [
+            153
+          ],
+          [
+            165
+          ]
+        ],
+        "waves": [
+          30,
+          42,
+          55,
+          67,
+          79,
+          91,
+          104,
+          116,
+          128,
+          140,
+          153,
+          165
+        ],
+        "total": 1170,
+        "release_rate_multiplier": 1.16,
+        "wave_interval_s": 81.89655172413794,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 331.8965517241379,
+            "duration_s": 31.896551724137932,
+            "orcs_per_s": 0.9405405405405405,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 381.8965517241379,
+            "release_end_s": 412.9310344827586,
+            "duration_s": 31.03448275862069,
+            "orcs_per_s": 1.3533333333333333,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 463.7931034482759,
+            "release_end_s": 493.9655172413793,
+            "duration_s": 30.172413793103452,
+            "orcs_per_s": 1.8228571428571427,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 545.6896551724138,
+            "release_end_s": 575.0,
+            "duration_s": 29.31034482758621,
+            "orcs_per_s": 2.2858823529411763,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 627.5862068965517,
+            "release_end_s": 656.0344827586207,
+            "duration_s": 28.448275862068968,
+            "orcs_per_s": 2.776969696969697,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 709.4827586206897,
+            "release_end_s": 737.0689655172414,
+            "duration_s": 27.586206896551726,
+            "orcs_per_s": 3.2987499999999996,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 791.3793103448277,
+            "release_end_s": 818.1034482758622,
+            "duration_s": 26.724137931034484,
+            "orcs_per_s": 3.8916129032258064,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 873.2758620689656,
+            "release_end_s": 899.1379310344828,
+            "duration_s": 25.862068965517242,
+            "orcs_per_s": 4.485333333333333,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 955.1724137931035,
+            "release_end_s": 980.1724137931035,
+            "duration_s": 25.0,
+            "orcs_per_s": 5.12,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 1037.0689655172414,
+            "release_end_s": 1061.2068965517242,
+            "duration_s": 24.13793103448276,
+            "orcs_per_s": 5.799999999999999,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1118.9655172413793,
+            "release_end_s": 1142.2413793103449,
+            "duration_s": 23.27586206896552,
+            "orcs_per_s": 6.573333333333332,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1200.8620689655172,
+            "release_end_s": 1223.2758620689656,
+            "duration_s": 22.413793103448278,
+            "orcs_per_s": 7.361538461538461,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1223.2758620689656
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 4,
+      "upgrade_level": 1,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1211.9,
+      "kills": 1250,
+      "core_hp": 1299.74,
+      "peak_active_enemies": 160,
+      "peak_deferred": 0,
+      "released_orcs": 1250,
+      "schedule": {
+        "tier": 4,
+        "multiplier": 0.2728,
+        "groups": [
+          [
+            32
+          ],
+          [
+            45
+          ],
+          [
+            58
+          ],
+          [
+            71
+          ],
+          [
+            85
+          ],
+          [
+            98
+          ],
+          [
+            111
+          ],
+          [
+            124
+          ],
+          [
+            137
+          ],
+          [
+            150
+          ],
+          [
+            163
+          ],
+          [
+            176
+          ]
+        ],
+        "waves": [
+          32,
+          45,
+          58,
+          71,
+          85,
+          98,
+          111,
+          124,
+          137,
+          150,
+          163,
+          176
+        ],
+        "total": 1250,
+        "release_rate_multiplier": 1.24,
+        "wave_interval_s": 76.61290322580645,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 329.83870967741933,
+            "duration_s": 29.838709677419356,
+            "orcs_per_s": 1.0724324324324324,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 376.61290322580646,
+            "release_end_s": 405.64516129032256,
+            "duration_s": 29.032258064516128,
+            "orcs_per_s": 1.55,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 453.2258064516129,
+            "release_end_s": 481.45161290322585,
+            "duration_s": 28.225806451612904,
+            "orcs_per_s": 2.0548571428571427,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 529.8387096774193,
+            "release_end_s": 557.2580645161289,
+            "duration_s": 27.419354838709676,
+            "orcs_per_s": 2.5894117647058823,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 606.4516129032259,
+            "release_end_s": 633.0645161290323,
+            "duration_s": 26.612903225806452,
+            "orcs_per_s": 3.193939393939394,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 683.0645161290322,
+            "release_end_s": 708.8709677419354,
+            "duration_s": 25.806451612903228,
+            "orcs_per_s": 3.7975,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 759.6774193548387,
+            "release_end_s": 784.6774193548387,
+            "duration_s": 25.0,
+            "orcs_per_s": 4.44,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 836.2903225806451,
+            "release_end_s": 860.483870967742,
+            "duration_s": 24.193548387096776,
+            "orcs_per_s": 5.125333333333333,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 912.9032258064516,
+            "release_end_s": 936.2903225806451,
+            "duration_s": 23.387096774193548,
+            "orcs_per_s": 5.857931034482759,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 989.516129032258,
+            "release_end_s": 1012.0967741935484,
+            "duration_s": 22.580645161290324,
+            "orcs_per_s": 6.642857142857142,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1066.1290322580644,
+            "release_end_s": 1087.9032258064515,
+            "duration_s": 21.774193548387096,
+            "orcs_per_s": 7.485925925925926,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1142.741935483871,
+            "release_end_s": 1163.7096774193549,
+            "duration_s": 20.967741935483872,
+            "orcs_per_s": 8.393846153846154,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1163.7096774193549
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 4,
+      "upgrade_level": 4,
+      "slow_partner": false,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1209.7,
+      "kills": 1250,
+      "core_hp": 3481.3,
+      "peak_active_enemies": 158,
+      "peak_deferred": 0,
+      "released_orcs": 1250,
+      "schedule": {
+        "tier": 4,
+        "multiplier": 0.2728,
+        "groups": [
+          [
+            32
+          ],
+          [
+            45
+          ],
+          [
+            58
+          ],
+          [
+            71
+          ],
+          [
+            85
+          ],
+          [
+            98
+          ],
+          [
+            111
+          ],
+          [
+            124
+          ],
+          [
+            137
+          ],
+          [
+            150
+          ],
+          [
+            163
+          ],
+          [
+            176
+          ]
+        ],
+        "waves": [
+          32,
+          45,
+          58,
+          71,
+          85,
+          98,
+          111,
+          124,
+          137,
+          150,
+          163,
+          176
+        ],
+        "total": 1250,
+        "release_rate_multiplier": 1.24,
+        "wave_interval_s": 76.61290322580645,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 329.83870967741933,
+            "duration_s": 29.838709677419356,
+            "orcs_per_s": 1.0724324324324324,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 376.61290322580646,
+            "release_end_s": 405.64516129032256,
+            "duration_s": 29.032258064516128,
+            "orcs_per_s": 1.55,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 453.2258064516129,
+            "release_end_s": 481.45161290322585,
+            "duration_s": 28.225806451612904,
+            "orcs_per_s": 2.0548571428571427,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 529.8387096774193,
+            "release_end_s": 557.2580645161289,
+            "duration_s": 27.419354838709676,
+            "orcs_per_s": 2.5894117647058823,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 606.4516129032259,
+            "release_end_s": 633.0645161290323,
+            "duration_s": 26.612903225806452,
+            "orcs_per_s": 3.193939393939394,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 683.0645161290322,
+            "release_end_s": 708.8709677419354,
+            "duration_s": 25.806451612903228,
+            "orcs_per_s": 3.7975,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 759.6774193548387,
+            "release_end_s": 784.6774193548387,
+            "duration_s": 25.0,
+            "orcs_per_s": 4.44,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 836.2903225806451,
+            "release_end_s": 860.483870967742,
+            "duration_s": 24.193548387096776,
+            "orcs_per_s": 5.125333333333333,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 912.9032258064516,
+            "release_end_s": 936.2903225806451,
+            "duration_s": 23.387096774193548,
+            "orcs_per_s": 5.857931034482759,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 989.516129032258,
+            "release_end_s": 1012.0967741935484,
+            "duration_s": 22.580645161290324,
+            "orcs_per_s": 6.642857142857142,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1066.1290322580644,
+            "release_end_s": 1087.9032258064515,
+            "duration_s": 21.774193548387096,
+            "orcs_per_s": 7.485925925925926,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1142.741935483871,
+            "release_end_s": 1163.7096774193549,
+            "duration_s": 20.967741935483872,
+            "orcs_per_s": 8.393846153846154,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1163.7096774193549
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 240,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 480,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 240.1
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    },
+    {
+      "tier": 1,
+      "upgrade_level": 1,
+      "slow_partner": true,
+      "seed": 42055,
+      "phase": "won",
+      "active_seconds": 1414.4,
+      "kills": 1009,
+      "core_hp": 4235.07,
+      "peak_active_enemies": 119,
+      "peak_deferred": 0,
+      "released_orcs": 1009,
+      "schedule": {
+        "tier": 1,
+        "multiplier": 0.22,
+        "groups": [
+          [
+            26
+          ],
+          [
+            37
+          ],
+          [
+            47
+          ],
+          [
+            58
+          ],
+          [
+            68
+          ],
+          [
+            79
+          ],
+          [
+            89
+          ],
+          [
+            100
+          ],
+          [
+            110
+          ],
+          [
+            121
+          ],
+          [
+            132
+          ],
+          [
+            142
+          ]
+        ],
+        "waves": [
+          26,
+          37,
+          47,
+          58,
+          68,
+          79,
+          89,
+          100,
+          110,
+          121,
+          132,
+          142
+        ],
+        "total": 1009,
+        "release_rate_multiplier": 1.0,
+        "wave_interval_s": 95.0,
+        "first_wave_delay_s": 300.0,
+        "timings": [
+          {
+            "wave": 1,
+            "start_s": 300.0,
+            "release_end_s": 337.0,
+            "duration_s": 37.0,
+            "orcs_per_s": 0.7027027027027027,
+            "overlap_s": 0
+          },
+          {
+            "wave": 2,
+            "start_s": 395.0,
+            "release_end_s": 431.0,
+            "duration_s": 36.0,
+            "orcs_per_s": 1.0277777777777777,
+            "overlap_s": 0
+          },
+          {
+            "wave": 3,
+            "start_s": 490.0,
+            "release_end_s": 525.0,
+            "duration_s": 35.0,
+            "orcs_per_s": 1.3428571428571427,
+            "overlap_s": 0
+          },
+          {
+            "wave": 4,
+            "start_s": 585.0,
+            "release_end_s": 619.0,
+            "duration_s": 34.0,
+            "orcs_per_s": 1.7058823529411764,
+            "overlap_s": 0
+          },
+          {
+            "wave": 5,
+            "start_s": 680.0,
+            "release_end_s": 713.0,
+            "duration_s": 33.0,
+            "orcs_per_s": 2.0606060606060606,
+            "overlap_s": 0
+          },
+          {
+            "wave": 6,
+            "start_s": 775.0,
+            "release_end_s": 807.0,
+            "duration_s": 32.0,
+            "orcs_per_s": 2.46875,
+            "overlap_s": 0
+          },
+          {
+            "wave": 7,
+            "start_s": 870.0,
+            "release_end_s": 901.0,
+            "duration_s": 31.0,
+            "orcs_per_s": 2.870967741935484,
+            "overlap_s": 0
+          },
+          {
+            "wave": 8,
+            "start_s": 965.0,
+            "release_end_s": 995.0,
+            "duration_s": 30.0,
+            "orcs_per_s": 3.3333333333333335,
+            "overlap_s": 0
+          },
+          {
+            "wave": 9,
+            "start_s": 1060.0,
+            "release_end_s": 1089.0,
+            "duration_s": 29.0,
+            "orcs_per_s": 3.793103448275862,
+            "overlap_s": 0
+          },
+          {
+            "wave": 10,
+            "start_s": 1155.0,
+            "release_end_s": 1183.0,
+            "duration_s": 28.0,
+            "orcs_per_s": 4.321428571428571,
+            "overlap_s": 0
+          },
+          {
+            "wave": 11,
+            "start_s": 1250.0,
+            "release_end_s": 1277.0,
+            "duration_s": 27.0,
+            "orcs_per_s": 4.888888888888889,
+            "overlap_s": 0
+          },
+          {
+            "wave": 12,
+            "start_s": 1345.0,
+            "release_end_s": 1371.0,
+            "duration_s": 26.0,
+            "orcs_per_s": 5.461538461538462,
+            "overlap_s": 0
+          }
+        ],
+        "scheduled_end_s": 1371.0
+      },
+      "actions": [
+        {
+          "at": 180,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "placement"
+        },
+        {
+          "at": 360,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "placement"
+        },
+        {
+          "at": 420,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "placement"
+        },
+        {
+          "at": 600,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 600,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 720,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 840,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 960,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1080,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1200,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 100,
+          "socket": "socket_15",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 101,
+          "socket": "socket_04",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 102,
+          "socket": "socket_12",
+          "kind": "replenish/replace"
+        },
+        {
+          "at": 1320,
+          "piece": 103,
+          "socket": "socket_11",
+          "kind": "replenish/replace"
+        }
+      ],
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 360.0
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared"
+      }
+    }
+  ]
+}

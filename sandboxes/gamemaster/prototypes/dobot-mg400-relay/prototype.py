@@ -269,6 +269,10 @@ def _point_in_polygon(x, y, polygon):
     for current in polygon:
         x1, y1 = previous
         x2, y2 = current
+        dx, dy = x2-x1, y2-y1
+        fraction = max(0, min(1, ((x-x1)*dx+(y-y1)*dy)/(dx*dx+dy*dy or 1)))
+        if math.hypot(x-x1-fraction*dx, y-y1-fraction*dy) <= 1e-7:
+            return True
         if ((y1 > y) != (y2 > y)):
             crossing = (x2 - x1) * (y - y1) / (y2 - y1) + x1
             if x <= crossing:
@@ -300,6 +304,8 @@ def _validate_cal2_joint_pose(pose, guard):
     values.extend(value for point in polygon for value in point)
     if not all(math.isfinite(value) for value in values):
         return "Auto PP Cal 2 safety limits contain non-finite values"
+    if radius_min < 0 or radius_min >= radius_max or z_min >= z_max:
+        return "Auto PP Cal 2 safety limits are invalid"
     radius = math.hypot(x, y)
     if radius < radius_min or radius > radius_max:
         return (f"joint target TCP radius {radius:.1f} mm is outside the Auto PP "
@@ -310,6 +316,54 @@ def _validate_cal2_joint_pose(pose, guard):
     if not _point_in_polygon(x, y, polygon):
         return "joint target TCP is outside the Auto PP Cal 2 arm boundary"
     return None
+
+
+def _cal2_pose_violations(pose, guard):
+    """Distances beyond each already-validated Cartesian safety boundary."""
+    x, y, z = map(float, pose[:3])
+    polygon = guard['polygon']
+    outside = 0.0
+    if not _point_in_polygon(x, y, polygon):
+        distances = []
+        for i, (x1, y1) in enumerate(polygon):
+            x2, y2 = polygon[(i+1) % len(polygon)]
+            dx, dy = x2-x1, y2-y1
+            fraction = max(0, min(1, ((x-x1)*dx+(y-y1)*dy)/(dx*dx+dy*dy or 1)))
+            distances.append(math.hypot(x-x1-fraction*dx, y-y1-fraction*dy))
+        outside = min(distances)
+    radius = math.hypot(x, y)
+    return [max(0, value) for value in (guard['radius_min']-radius,
+            radius-guard['radius_max'], guard['z_min']-z, z-guard['z_max'], outside)]
+
+
+def _validate_cal2_cartesian_path(current, target, guard):
+    """Allow only a bounded, monotonic retreat from a measured boundary stop.
+
+    The destination must be safe. A start up to 10 mm outside may move inward,
+    but no violated constraint may worsen and no safe constraint may be crossed.
+    Once inside, the whole remaining segment must stay inside.
+    """
+    error = _validate_cal2_joint_pose(target, guard)
+    if error:
+        return error
+    start_error = _validate_cal2_joint_pose(current, guard)
+    if start_error and not start_error.startswith('joint target TCP '):
+        return start_error
+    previous = _cal2_pose_violations(current, guard)
+    if any(value > 10 for value in previous):
+        return start_error
+    entered = not start_error
+    steps = max(64, math.ceil(math.dist(current[:3], target[:3])/2))
+    for index in range(1, steps+1):
+        sample = [current[i]+(target[i]-current[i])*index/steps for i in range(3)]
+        violations = _cal2_pose_violations(sample, guard)
+        error = _validate_cal2_joint_pose(sample, guard)
+        if error and (entered or any(value > previous[i]+1e-7 for i, value in enumerate(violations))):
+            return error
+        if not error:
+            entered = True
+        previous = violations
+    return None if entered else start_error
 
 
 def _clamp_pose(x, y, z, r):
@@ -575,6 +629,29 @@ def arms_snapshot():
     }
 
 
+def stop_side(side):
+    """Owner-public stop and measured settling; never grants a new motion lease."""
+    if side not in SIDES:
+        raise ValueError('invalid side')
+    robot = _arm(side)
+    if robot is None or not robot.is_connected():
+        return {'contract':'hhh.relay.stop','version':1,'status':'unavailable','stopped':False,'error':'fresh connected arm feedback required to confirm Stop'}
+    try:
+        robot.hold()
+        first = robot.get_state()
+        time.sleep(.12)
+        second = robot.get_state()
+        fresh = time.time()-second.get('last_feedback',0) <= 1.5
+        joints = (first.get('joints'),second.get('joints'))
+        valid = all(isinstance(j,list) and len(j)==4 and all(type(v) in (int,float) and math.isfinite(v) for v in j) for j in joints)
+        settled = fresh and valid and all(abs(a-b)<.2 for a,b in zip(*joints))
+        if settled:
+            kick_side(side)
+        return {'contract':'hhh.relay.stop','version':1,'status':'ready','stopped':settled}
+    except Exception as exc:
+        return {'contract':'hhh.relay.stop','version':1,'status':'unavailable','error':str(exc),'stopped':False}
+
+
 def side_holder(side):
     """The opaque token currently holding `side`, or None if free."""
     if side not in SIDES:
@@ -594,8 +671,7 @@ def _watchdog_loop():
     arm and free that side (mark not present). The other side is unaffected. Arm
     I/O happens outside the lock."""
     period = 1.0 / WATCHDOG_HZ
-    while True:
-        time.sleep(period)
+    while not _watchdog_stop.wait(period):
         # Learn each connected+enabled arm's height model from live feedback so the
         # Z floor can clamp descending joint targets smoothly.
         for s in SIDES:
@@ -620,10 +696,8 @@ def _watchdog_loop():
             _live.bump()
 
 
-_watchdog_thread = threading.Thread(
-    target=_watchdog_loop, name="relay-watchdog", daemon=True
-)
-_watchdog_thread.start()
+_watchdog_stop = threading.Event()
+_watchdog_thread = None
 
 
 # ---- response helpers ------------------------------------------------------
@@ -652,6 +726,7 @@ def _arm_dict(side):
     robot = _arm(side)
     raw = DobotMG400._blank_state() if robot is None else robot.get_state()
     return {
+        "device": dict(_last_link.get(side) or {}),
         "connected": raw["connected"],
         "robot_mode": raw["robot_mode"],
         "enabled": raw["enabled"],
@@ -995,15 +1070,7 @@ def acquire():
         _sides[side]["token"] = token
         _sides[side]["mode"] = mode
         _touch_locked(side)
-    # If this side's arm is live + enabled, make sure the right follower runs
-    # (outside the lock — blocking arm I/O).
-    robot = _arm(side)
-    if robot is not None and robot.is_connected():
-        try:
-            _ensure_follower(robot, mode)
-            _log_command("robot", side, "ensure_follower", {"mode": mode}, ok=True)
-        except Exception:   # pragma: no cover - defensive
-            _log_command("robot", side, "ensure_follower", {"mode": mode}, ok=False, error="follower failed")
+    # A lease grants no movement. Only a fully validated move starts a follower.
     _live.bump()
     return _ok(token=token, lease_secs=LEASE_SECS, side=side)
 
@@ -1069,13 +1136,6 @@ def move():
     if mode not in MODES:
         _log_command("robot", side, "move", {"mode": mode}, ok=False, error="bad mode")
         return _fail("mode must be 'joint' or 'cartesian'")
-    # Make sure the right follower is running for this command.
-    try:
-        _ensure_follower(robot, mode)
-    except DobotError as e:
-        _log_command("robot", side, "ensure_follower", {"mode": mode}, ok=False, error=str(e))
-        return _fail(str(e), errid=e.errid)
-
     if mode == "joint":
         j = data.get("joints")
         if not (isinstance(j, (list, tuple)) and len(j) >= 3):
@@ -1085,11 +1145,15 @@ def move():
             j4 = float(j[3]) if len(j) > 3 else robot.get_state()["joints"][3]
         except (ValueError, TypeError, IndexError):
             return _fail("joints must be numeric")
+        if not all(math.isfinite(v) for v in (j1,j2,j3,j4)): return _fail('finite joints required'),400
         j1, j2, j3, j4 = _clamp_joints(j1, j2, j3, j4)
         _sample_z_model(side, robot)   # learn the height model from live jogging too
         j1, j2, j3, j4, znote = _apply_z_floor(side, j1, j2, j3, j4, robot)
         predicted_pose = None
-        guard = data.get("cal2_guard")
+        try:
+            guard = _server_cal2_guard(side)
+        except (ValueError,AttributeError) as exc:
+            return _fail(str(exc)),403
         if guard is not None:
             try:
                 target_joints = [j1, j2, j3, j4]
@@ -1125,6 +1189,7 @@ def move():
                 _log_command("robot", side, "joint_cal2_guard", {}, ok=False,
                              error=error)
                 return _fail(error)
+        _ensure_follower(robot, mode)
         robot.set_target_joints(j1, j2, j3, j4)
         clamped = {"j1": round(j1, 2), "j2": round(j2, 2),
                    "j3": round(j3, 2), "j4": round(j4, 2)}
@@ -1142,8 +1207,18 @@ def move():
             r = float(p[3]) if len(p) > 3 else robot.get_state()["pose"][3]
         except (ValueError, TypeError, IndexError):
             return _fail("pose must be numeric")
+        if not all(math.isfinite(v) for v in (x,y,z,r)): return _fail('finite pose required'),400
         x, y, z, r = _clamp_pose(x, y, z, r)
         x, y, z, r, znote = _apply_pose_z_floor(x, y, z, r)
+        try:
+            guard = _server_cal2_guard(side)
+            current=robot.get_state()['pose']
+            error = _validate_cal2_cartesian_path(current, [x,y,z,r], guard)
+            if error:
+                return _fail(error),403
+        except (ValueError,AttributeError,KeyError,TypeError) as exc:
+            return _fail(f'Cannot validate Cartesian path: {exc}'),403
+        _ensure_follower(robot, mode)
         robot.set_target_pose(x, y, z, r)
         clamped = {"x": round(x, 2), "y": round(y, 2),
                    "z": round(z, 2), "r": round(r, 2)}
@@ -1164,6 +1239,10 @@ def pump():
         _log_incoming("pump", data, ok=False, error=err)
         return _fail(err)
     mode = (data.get("mode") or "off").lower()
+    if mode != 'off':
+        error = _ltz_motion_error(side,{'mode':'cartesian','ltz_action':'xyz','primitive':'pump'})
+        if error:
+            return _fail(error),403
     if mode not in ("suck", "blow", "off"):
         _log_command("robot", side, "pump", {"mode": mode}, ok=False, error="bad mode")
         return _fail("mode must be 'suck', 'blow' or 'off'")
@@ -1218,32 +1297,117 @@ _hub_ctx = None
 
 
 def hub_init(ctx):
-    global _hub_ctx
+    global _hub_ctx, _watchdog_thread
     _hub_ctx = ctx
+    if _watchdog_thread is None or not _watchdog_thread.is_alive():
+        _watchdog_stop.clear()
+        _watchdog_thread = threading.Thread(target=_watchdog_loop, name='relay-watchdog', daemon=True)
+        _watchdog_thread.start()
 
 
 def hub_stop():
-    global _hub_ctx
+    global _hub_ctx, _watchdog_thread
+    _watchdog_stop.set()
+    if _watchdog_thread:
+        _watchdog_thread.join(timeout=3)
+        _watchdog_thread = None
     _hub_ctx = None
 
 
 def _ltz_motion_error(side, data):
-    if _hub_ctx is None or not _hub_ctx.is_prototype_enabled('photon-progress'):
-        return 'Cannot verify LTZ controls: Photon Progress is unavailable or disabled'
+    if _hub_ctx is None:
+        return 'Cannot verify LTZ controls: hub context unavailable'
     try:
-        module = _hub_ctx.get_prototype('photon-progress')
-        policy = module.control_policy(side)
-        if policy.get('contract') != 'photon.progress' or type(policy.get('version')) is not int or policy['version'] != 1 or policy.get('status') != 'ready':
-            raise ValueError('Photon Progress unavailable')
-        if not policy.get('active'):
-            return None
+        game = _hub_ctx.get_prototype('photon-game') if _hub_ctx.is_prototype_enabled('photon-game') else None
+        scope = game.motion_policy(side) if game and callable(getattr(game,'motion_policy',None)) else None
+        if not isinstance(scope,dict) or scope.get('contract') != 'photon.game.motion' or type(scope.get('version')) is not int or scope['version'] != 1 or scope.get('status') != 'ready':
+            return 'Cannot verify the current game control session'
+        if scope.get('scope') == 'waiting' or scope.get('blocked'):
+            return 'Wait for the other player or shared game transition'
+        if scope.get('scope') in ('practice','tutorial'):
+            tier = scope.get('tier')
+            if type(tier) is not int or not 1<=tier<=4:
+                raise ValueError('invalid test/tutorial tier')
+        elif scope.get('scope')=='player':
+            module = _hub_ctx.get_prototype('photon-progress') if _hub_ctx.is_prototype_enabled('photon-progress') else None
+            policy = module.control_policy(side) if module else {}
+            if policy.get('contract') != 'photon.progress' or type(policy.get('version')) is not int or policy['version'] != 2 or policy.get('status') != 'ready':
+                raise ValueError('Photon Progress unavailable')
+            tier = policy.get('tier',0)
+        else:
+            raise ValueError('unknown game motion scope')
+        if not tier or scope['scope']=='player' and policy.get('stage') != 'playing':
+            return 'Select a player and complete the required calibration lesson'
         mode = data.get('mode', 'joint')
         action = data.get('ltz_action', 'joint' if mode == 'joint' else 'xyz')
         required = {'joint': 1, 'xyz': 2, 'image': 3, 'cue': 4}.get(action)
         if required is None or (mode == 'cartesian' and required < 2):
             return 'invalid LTZ control action'
-        if required > policy.get('tier', 0):
+        # XYZ is also the internal Cartesian primitive for Targeting/Cue.
+        # The server tier binds the session; browser labels cannot grant another tier.
+        if data.get('primitive') == 'pump': return None
+        if required > tier or scope['scope']=='player' and ((tier==1 and mode!='joint') or (tier>1 and mode=='joint')):
             return 'this control method is locked for the active LTZ player'
     except Exception as exc:
         return f'Cannot verify LTZ controls: {exc}'
     return None
+
+
+def _server_cal2_guard(side):
+    if _hub_ctx is None or not _hub_ctx.is_prototype_enabled('auto-pickup-game'):
+        raise ValueError('Cal 2 safety owner unavailable')
+    owner = _hub_ctx.get_prototype('auto-pickup-game')
+    value = owner.calibration_safety_snapshot(side)
+    if not isinstance(value,dict) or value.get('contract') != 'hhh.cal2.safety' or type(value.get('version')) is not int or value['version'] != 1 or value.get('status') != 'ready':
+        raise ValueError('Validated Cal 2 safety limits unavailable')
+    return value['guard']
+
+
+@bp.before_request
+def _field_reservation_guard():
+    action=request.path.rsplit('/',1)[-1]
+    # Operator connection opens feedback sockets; it neither enables the arm nor
+    # starts a follower. Keep this recovery path available to confirm a stop.
+    if action=='connect' and _is_operator_request():
+        return None
+    if request.method != 'POST' or action in ('stop','hold','release','kick','disconnect','heartbeat') or (action=='pump' and (request.get_json(silent=True) or {}).get('mode')=='off'):
+        return None
+    if _hub_ctx and _hub_ctx.is_prototype_enabled('auto-pickup-game'):
+        try:
+            owner = _hub_ctx.get_prototype('auto-pickup-game')
+            value = owner.calibration_session_snapshot()
+        except Exception:
+            return _fail('Calibration reservation owner unavailable'),503
+        if not isinstance(value,dict) or value.get('status') != 'ready' or value.get('contract') != 'hhh.cal2.session' or type(value.get('version')) is not int or value['version'] != 1 or value.get('active_side') not in (None,'green','purple'):
+            return _fail('Calibration reservation contract unavailable'),503
+        side = (request.get_json(silent=True) or {}).get('side')
+        # Opening feedback sockets is the recovery step, not a motion grant.
+        # The player route fixes the side; allow only the selected turn or an
+        # arm whose previous stop still needs measured confirmation.
+        selected = side in SIDES and value.get('active_side') == side
+        if action=='connect' and (selected or side in value.get('pending_stops',{})):
+            return None
+        if selected and action in ('acquire','enable','clear_error'):
+            # Connect -> acquire -> enable is the existing player route. A
+            # display reservation must allow this sequence before begin can
+            # observe an enabled arm. Move/pump still require a live lesson.
+            try:
+                value = owner.calibration_session_maintain()
+            except Exception:
+                return _fail('Calibration setup owner unavailable'),503
+            if not isinstance(value,dict) or value.get('contract')!='hhh.cal2.session' or type(value.get('version')) is not int or value['version']!=1 or value.get('status')!='ready':
+                return _fail('Calibration setup evidence unavailable'),503
+        if value.get('pending_stops'):
+            return _fail(value.get('motion_error') or 'Previous calibration stop is not confirmed'),403
+        if value.get('active_side') and side != value['active_side']:
+            return _fail('The other player owns the unified calibration playfield'),403
+        if selected and value.get('active_side')==side and value.get('requires_activation') and action in ('acquire','enable','clear_error'):
+            return None
+        if value.get('active_side'):
+            sessions=value.get('sessions')
+            session=sessions.get(value.get('active_id')) if isinstance(sessions,dict) and isinstance(value.get('active_id'),str) else None
+            stamp=session.get('access_until') if isinstance(session,dict) else None
+            if not isinstance(session,dict) or type(stamp) not in (int,float) or not math.isfinite(stamp) or not isinstance(value.get('epoch'),str) or session.get('epoch')!=value['epoch']:
+                return _fail('Calibration reservation evidence unavailable'),503
+            if session.get('paused') or stamp<=time.time():
+                return _fail('Calibration connection expired; reconnect to continue'),403

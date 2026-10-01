@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {LiveFeed}=require('../sandboxes/green/prototypes/mobile-ltz/network.js');
+const {LiveFeed}=require('../shared/mobile_ltz/network.js');
 let now=0,recoveries=0,received=0;const sources=[];
 global.performance={now:()=>now};global.EventSource=class{constructor(){sources.push(this)}addEventListener(name,fn){this[name]=fn}close(){this.closed=true}};
 const feed=new LiveFeed({url:'/events',receive:()=>received++,recover:()=>recoveries++});

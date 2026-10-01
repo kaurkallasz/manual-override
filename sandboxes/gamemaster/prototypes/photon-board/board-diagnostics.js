@@ -149,7 +149,18 @@
     if(enabled&&!previewOn){$("feed").src=url("/api/preview");previewOn=true;}
     if(!enabled&&previewOn){$("feed").removeAttribute("src");previewOn=false;previewFailed=false;}
     $("feed").hidden=!enabled||previewFailed;
-    $("cameraMessage").textContent=data.source==="simulation"?"SIMULATED OBSERVATIONS · no live camera or controller intent":previewFailed?"Corrected camera preview unavailable; toggle camera to retry":!enabled?"Coordinate overlay · camera off or evidence unavailable":"Lens-corrected frame · unrotated · projected TCP, not full arm geometry";
+    let message = "Lens-corrected frame · unrotated · projected TCP, not full arm geometry";
+    if(data.source === "simulation") message = "SIMULATED OBSERVATIONS · no live camera or controller intent";
+    else if(!$("camera").checked) message = "Camera preview hidden · enable Corrected camera to show it";
+    else if(!enabled) {
+      const blocked = Object.entries(data.inputs || {})
+        .filter(([name, input]) => ["webcam", "camera_calibration", "relay"].includes(name) && input.status !== "ready")
+        .map(([name, input]) => `${name.replaceAll("_", " ")}: ${input.error || input.status}`);
+      const reason = (data.errors || []).filter(Boolean).join("; ") || blocked.join("; ")
+        || data.game_placement?.error || "Waiting for fresh Board observations";
+      message = `Preview paused · ${reason}`;
+    } else if(previewFailed) message = "Corrected camera preview unavailable; toggle camera to retry";
+    $("cameraMessage").textContent = message;
   }
   function show(data) {
     if(data?.contract!=="photon.board.tracking"||data.version!==1){fail("Incompatible Photon Board tracking output");return;}
@@ -168,7 +179,7 @@
   function fail(message) {
     $("status").textContent="DISCONNECTED · EVIDENCE UNAVAILABLE";$("status").className="badge bad";
     $("errors").textContent=message;
-    if(current){current={...current,status:"unavailable",arms:{},tags:current.tags.map(t=>({...t,visible:false,age_s:null,stage:"unknown",arm:null,target_id:null,confidence:"unknown",evidence:"Stream disconnected; historical position only"}))};renderArms(current);renderOverlay(current);renderTable(current);renderPreview(current);}
+    if(current){current={...current,status:"unavailable",errors:[message],arms:{},tags:current.tags.map(t=>({...t,visible:false,age_s:null,stage:"unknown",arm:null,target_id:null,confidence:"unknown",evidence:"Stream disconnected; historical position only"}))};renderArms(current);renderOverlay(current);renderTable(current);renderPreview(current);}
     $("inputs").replaceChildren(element("span","Input health unknown while disconnected","bad"));
   }
   $("camera").onchange=()=>current&&renderPreview(current);

@@ -27,6 +27,8 @@ class LtzIntegrationTests(unittest.TestCase):
         self.store = self.progress._store
         self.player_id = self.store.create_player('Test player', uuid.uuid4().hex)['player_id']
         self.store.select_player('green', self.player_id)
+        self.partner_id=self.store.create_player('Test partner',uuid.uuid4().hex)['player_id']
+        self.store.select_player('purple',self.partner_id)
         self.game = load('photon-game')
         self.bundle = load('photon-level').runtime_bundle()
 
@@ -109,6 +111,30 @@ class LtzIntegrationTests(unittest.TestCase):
         player = self.store.snapshot('green')['player']
         self.assertEqual((player['credits'],player['wins']), (42,1))
 
+    def test_late_durable_result_repairs_recovery_outbox_and_allows_next_start(self):
+        self.store.begin({'run_id':'legacy-race','reward_enabled':False,'metadata':{}})
+        prior={'run_id':'legacy-race','sequence':63,'kills':0,'outcome':'interrupted',
+               'active_seconds':0,'finished_at':1789502196.214591,'released_orcs':0}
+        self.store.record(prior,final=True)
+        path=self.path/'pending.json'
+        path.write_text(json.dumps({**prior,'sequence':75,'outcome':'aborted','active_seconds':10.15270279161632,
+                                    'finished_at':1789502581.55021,'released_orcs':32}))
+        link=self.game.ProgressLink(lambda slug:self.progress,lambda:None,lambda:None,path)
+        link.roster()
+        self.assertFalse(path.exists())
+        self.assertEqual(self.store.attempt('legacy-race')['outcome'],'aborted')
+        link.begin({'run_id':'next-practice','reward_enabled':False,'metadata':{}})
+        self.assertEqual(link.snapshot()['status'],'ready')
+
+    def test_calibration_worker_runs_even_when_score_recovery_fails(self):
+        ticked=threading.Event()
+        link=self.game.ProgressLink(lambda slug:None,lambda:None,lambda:None,self.path/'pending.json',tick=ticked.set)
+        link.start()
+        try:
+            self.assertTrue(ticked.wait(2),'Calibration reservation maintenance was starved by Progress failure')
+            self.assertEqual(link.snapshot()['status'],'unavailable')
+        finally:link.stop()
+
     def test_transaction_committed_but_ack_lost_retries_without_double_award(self):
         engine = self.engine()
         link = self.game.ProgressLink(lambda _:self.progress, lambda:engine, lambda:None, self.path/'pending.json')
@@ -144,7 +170,8 @@ class LtzIntegrationTests(unittest.TestCase):
         # Compile just the real policy function, without importing any arm driver.
         source=(ROOT/'sandboxes/gamemaster/prototypes/dobot-mg400-relay/prototype.py').read_text()
         node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='_ltz_motion_error')
-        context=FakeContext({'photon-progress':self.progress})
+        context=FakeContext({'photon-progress':self.progress,'photon-game':types.SimpleNamespace(motion_policy=lambda side:
+            {'contract':'photon.game.motion','version':1,'status':'ready','scope':'player','tier':1,'blocked':False})})
         namespace={'_hub_ctx':context}
         exec(compile(ast.Module(body=[node],type_ignores=[]),'relay-policy','exec'),namespace)
         check=namespace['_ltz_motion_error']
@@ -152,9 +179,16 @@ class LtzIntegrationTests(unittest.TestCase):
         self.assertIsNone(check('green',{'mode':'joint'}))
         self.assertIn('locked',check('green',{'mode':'cartesian','ltz_action':'cue','tier':4}))
         self.assertIn('invalid',check('green',{'mode':'cartesian','ltz_action':'joint'}))
-        self.assertIn('locked',check('purple',{'mode':'joint'}))
+        self.assertIsNone(check('purple',{'mode':'joint'}))
         with patch.object(self.progress,'control_policy',return_value={'contract':'bad','version':1}):
             self.assertIn('Cannot verify',check('green',{'mode':'joint'}))
+        # A server-owned GM test grant needs no saved profile or Progress owner.
+        context.modules.pop('photon-progress')
+        for tier,action in enumerate(('joint','xyz','image','cue'),1):
+            context.modules['photon-game'].motion_policy=lambda side,tier=tier:{'contract':'photon.game.motion','version':1,'status':'ready','scope':'practice','tier':tier,'blocked':False}
+            for side in ('green','purple'):
+                self.assertIsNone(check(side,{'mode':'joint' if tier==1 else 'cartesian','ltz_action':action}))
+                if tier<4:self.assertIn('locked',check(side,{'mode':'cartesian','ltz_action':'cue'}))
 
     def test_game_start_uses_saved_loadout_and_virtual_play_cannot_score(self):
         game=self.game
@@ -168,6 +202,7 @@ class LtzIntegrationTests(unittest.TestCase):
         with self.assertRaises(game.GameError):
             game.apply_command({'action':'start','virtual_play':True,'reward_enabled':True})
         def physical():game._inputs['board']={'status':'ready','error':None}
+        game._journey.ready('green');game._journey.ready('purple')
         with patch.object(game,'_physical_observation',side_effect=physical):
             result=game.apply_command({'action':'start','virtual_play':False,'reward_enabled':True})
         self.assertEqual(result['progress']['participants'][0]['player_id'],self.player_id)
@@ -237,12 +272,50 @@ class LtzIntegrationTests(unittest.TestCase):
             with self.assertRaises(game.GameError):game.apply_command({'action':'virtual_test_loadout','levels':bad})
             self.assertEqual(engine.virtual_test_loadout,levels)
         game.apply_command({'action':'set_virtual','virtual_play':False})
-        self.assertEqual(engine._unit_level('green','machine_gun'),1)
-        with self.assertRaises(game.GameError):game.apply_command({'action':'virtual_test_loadout','levels':levels})
+        self.assertEqual(engine._unit_level('green','mortar'),4)
+        game.apply_command({'action':'virtual_test_loadout','levels':levels})
+        with self.assertRaisesRegex(ValueError,'locked'):
+            engine.place(100,slot,source='physical')
         app=Flask('test-unlock-authorization');app.register_blueprint(game.bp,url_prefix='/game')
         with app.test_client() as client:
             response=client.post('/game/api/command',json={'action':'virtual_test_loadout','levels':levels},environ_overrides={'hhh.roles':{'green'}})
             self.assertEqual(response.status_code,403)
+
+    def test_physical_practice_unlocks_refresh_restore_and_protect_scoring(self):
+        game=self.virtual_game();engine=game._engine
+        game.apply_command({'action':'set_virtual','virtual_play':False})
+        before=self.store.snapshot('green')['player']
+        levels={track:4 for track in before['levels']}
+        slots=list(engine.level.sockets)
+        engine.place(100,slots[0],source='physical')
+        engine.place(102,slots[1],source='physical')
+        tower=engine.placements[slots[0]];tower['hp']=tower['max_hp']*.4
+        field=engine._create_force_field(slots[0],slots[1],check_line_of_sight=False)
+        game.apply_command({'action':'virtual_test_loadout','levels':levels,'control':4})
+        self.assertEqual({t['upgrade_level'] for t in engine.placements.values()},{4})
+        self.assertAlmostEqual(tower['hp']/tower['max_hp'],.4)
+        self.assertEqual(field['upgrade_level'],4)
+        def physical():game._inputs['board']={'status':'ready','error':None,'upstream':{'source':'camera'}}
+        with patch.object(game,'_physical_observation',side_effect=physical):
+            with self.assertRaisesRegex(game.GameError,'disable test unlocks'):
+                game.apply_command({'action':'start','reward_enabled':True})
+            state=game.apply_command({'action':'start','reward_enabled':False})
+        self.assertFalse(state['virtual_play'])
+        self.assertFalse(state['progress']['reward_enabled'])
+        self.assertEqual(state['progress']['metadata']['virtual_test_loadout'],levels)
+        game.apply_command({'action':'virtual_test_loadout','levels':None,'control':None})
+        self.assertEqual({t['upgrade_level'] for t in engine.placements.values()},{1})
+        game.apply_command({'action':'reset'})
+        game.apply_command({'action':'virtual_test_loadout','levels':None,'control':4})
+        with patch.object(game,'_physical_observation',side_effect=physical):
+            with self.assertRaisesRegex(game.GameError,'disable test unlocks'):
+                game.apply_command({'action':'start','reward_enabled':True})
+            game.apply_command({'action':'virtual_test_loadout','levels':None,'control':None})
+            game._journey.ready('green');game._journey.ready('purple')
+            game.apply_command({'action':'start','reward_enabled':True})
+        with self.assertRaisesRegex(game.GameError,'scored attempt'):
+            game.apply_command({'action':'virtual_test_loadout','levels':levels})
+        self.assertEqual(self.store.snapshot('green')['player'],before)
 
     def test_virtual_unlocks_work_without_progress_module(self):
         game=self.virtual_game();game._hub_ctx.modules.pop('photon-progress')
@@ -251,6 +324,37 @@ class LtzIntegrationTests(unittest.TestCase):
         state=game.apply_command({'action':'start','virtual_play':True})
         self.assertEqual(state['virtual_test_loadout'],levels)
         self.assertFalse(game._progress.attempt)
+
+    def test_test_profiles_make_scored_start_practice_for_every_gm_control_tier(self):
+        game=self.virtual_game()
+        self.store.select_player('green','ltz-test-green')
+        before=self.store.snapshot('purple')['player']
+        test_before=self.store.snapshot('green')['player']
+        for tier in range(1,5):
+            game.apply_command({'action':'virtual_test_loadout','levels':None,'control':tier})
+            state=game.apply_command({'action':'start','virtual_play':True,'reward_enabled':True})
+            self.assertFalse(state['progress']['reward_enabled'])
+            self.assertEqual(state['progress']['practice_reason'],'test_player')
+            self.assertEqual(state['contract_control_tier'],tier)
+            for side in ('green','purple'):
+                self.assertEqual(game.motion_policy(side)['tier'],tier)
+            game._engine.kills=1000
+            game.apply_command({'action':'reset','virtual_play':True})
+        self.assertEqual(self.store.snapshot('purple')['player'],before)
+        self.assertEqual(self.store.snapshot('green')['player'],test_before)
+        self.assertEqual(self.store.history(None,{'combined':True})['total'],0)
+        self.assertEqual(self.store.history(None,{'combined':True,'dataset':'practice'})['total'],4)
+
+    def test_progress_link_reports_actual_test_player_reward_eligibility(self):
+        self.store.select_player('green','ltz-test-green')
+        engine=self.engine()
+        link=self.game.ProgressLink(lambda slug:self.progress,lambda:engine,lambda:None,self.path/'pending.json')
+        attempt=link.begin({'run_id':'test-roster','reward_enabled':True,'metadata':{}})
+        self.assertFalse(attempt['reward_enabled'])
+        self.assertFalse(link.snapshot()['reward_enabled'])
+        engine.phase,engine.kills='won',900
+        link.flush()
+        self.assertEqual(self.store.snapshot('purple')['player']['credits'],0)
 
 
 if __name__=='__main__':unittest.main()

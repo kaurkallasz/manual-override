@@ -1,14 +1,15 @@
 const assert=require('node:assert/strict'),{chromium}=require('playwright');
 const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
+const team=process.env.MOBILE_TEST_TEAM==='purple'?'purple':'green',piece=team==='purple'?102:100;
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});try{
  const page=await browser.newPage({viewport:{width:844,height:390},isMobile:true,hasTouch:true});const errors=[],commands=[];
- page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().endsWith('/api/command'))commands.push(r.postDataJSON());});
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().includes('/api/command'))commands.push(r.postDataJSON());});
  await page.request.post(root+'/__test/camera',{data:{enabled:false,stale:false}});
  await page.request.post(root+'/__test/command',{data:{action:'reset'}});
  await page.request.post(root+'/__test/command',{data:{action:'virtual_test_loadout',levels:null,control:4}});
- await page.goto(root+'/s/green/p/mobile-ltz/');await page.waitForFunction(()=>state?.status==='ready'&&view?.levelReady&&controlMode==='cue');
+ await page.goto(root+`/s/${team}/p/mobile-ltz/`);await page.waitForFunction(()=>state?.status==='ready'&&view?.levelReady&&controlMode==='cue');
  const socket=await page.evaluate(()=>state.level.sockets.find(s=>s.aruco_id===44).socket_id);
- await page.request.post(root+'/__test/command',{data:{action:'place',atom_tag_id:100,socket_id:socket,team:'green'}});
+ await page.request.post(root+'/__test/command',{data:{action:'place',atom_tag_id:piece,socket_id:socket,team}});
  await page.waitForFunction(()=>turretOverlay.selected&&document.querySelector('[data-aim-handle=aim]'));
  assert.equal(await page.locator('[data-aim-handle]').count(),1,'one combined square');
  const cdp=await page.context().newCDPSession(page);
@@ -22,8 +23,8 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
  };
  let before=await tower();await drag('aim',0,-45);let after=await tower();
  assert.notEqual(after.targeting.angle_degrees,before.targeting.angle_degrees);assert.notEqual(after.targeting.spread,before.targeting.spread,'one diagonal drag changes both direction and range');
- before=after;const angle=before.targeting.angle_degrees*Math.PI/180;
- await drag('aim',20*Math.cos(angle),20*Math.sin(angle));after=await tower();assert.notEqual(after.targeting.spread,before.targeting.spread);
+ before=after;const angle=before.targeting.angle_degrees*Math.PI/180,direction=await page.evaluate(()=>viewport.direction);
+ await drag('aim',20*Math.cos(angle)*direction,20*Math.sin(angle)*direction);after=await tower();assert.notEqual(after.targeting.spread,before.targeting.spread);
  assert.ok(Math.abs(after.targeting.angle_degrees-before.targeting.angle_degrees)<.001,'radial drag preserves direction');
  assert.equal(commands.filter(c=>['xyz','cue_waypoint','joints'].includes(c?.action)).length,0,'turret drag never moves arm or inserts waypoint');
  await page.screenshot({path:'/tmp/mobile-turret-virtual.png'});
@@ -37,7 +38,7 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
  assert.equal(await page.locator('#playfieldVideo').isVisible(),true);
  assert.equal(await page.evaluate(()=>!!session),false,'aiming works without arm session');
  await drag('aim',20,-25);
- const aligned=await page.evaluate(()=>{const t=turretOverlay.tower(),p=turretOverlay.point(t),v=viewport;return {x:p.x,y:p.y,expectedX:v.vw/2+((.1+.8*t.x/state.level.width)*v.w-v.cx)*v.scale,expectedY:v.vh/2+((.05+.9*t.y/state.level.height)*v.h-v.cy)*v.scale};});
+ const aligned=await page.evaluate(()=>{const t=turretOverlay.tower(),p=turretOverlay.point(t),v=viewport;return {x:p.x,y:p.y,expectedX:v.vw/2+v.direction*((.1+.8*t.x/state.level.width)*v.w-v.cx)*v.scale,expectedY:v.vh/2+v.direction*((.05+.9*t.y/state.level.height)*v.h-v.cy)*v.scale};});
  assert.ok(Math.abs(aligned.x-aligned.expectedX)<.1&&Math.abs(aligned.y-aligned.expectedY)<.1,'overlay registered to camera');
  await page.screenshot({path:'/tmp/mobile-turret-video.png'});
  for(const [width,height] of [[390,844],[568,320],[320,568]]){
@@ -45,13 +46,20 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
   await page.waitForFunction(()=>turretOverlay.ready()&&document.querySelector('[data-aim-handle=aim]'));
   assert.deepEqual(errors,[]);
   assert.equal(await page.locator('[data-aim-handle]').count(),1,'one combined square');
-  for(const name of ['aim']){const b=await page.locator(`[data-aim-handle=${name}]`).boundingBox();assert.ok(b.x>=0&&b.y>=0&&b.x+b.width<=width+.1&&b.y+b.height<=height+.1);}
+  // Read visibility and geometry together: a camera freshness transition may
+  // remove the handle between separate automation calls.
+  const boxes=await page.waitForFunction(()=>{
+   const nodes=[...document.querySelectorAll('[data-aim-handle]')];if(!turretOverlay.ready()||nodes.length!==1)return false;
+   return nodes.map(el=>{const b=el.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height};});
+  }).then(handle=>handle.jsonValue());
+  for(const b of boxes)assert.ok(b.x>=0&&b.y>=0&&b.x+b.width<=width+.1&&b.y+b.height<=height+.1);
   await page.screenshot({path:`/tmp/mobile-turret-video-${width}x${height}.png`});
  }
  await page.request.post(root+'/__test/camera',{data:{enabled:true,stale:true}});
  await page.waitForFunction(()=>state.mobile_camera?.status==='unavailable');
  assert.equal(await page.locator('[data-aim-handle]').count(),0);
- assert.match(await page.locator('#turretAimStatus').textContent(),/Tracking unavailable/);
+ assert.equal(await page.locator('#turretAimStatus').count(),0);
+ assert.match(await page.locator('#feedback').textContent(),/Tracking unavailable/);
  await page.request.post(root+'/__test/camera',{data:{enabled:true,stale:false}});
  await page.waitForFunction(()=>turretOverlay.cameraReady()&&document.querySelector('[data-aim-handle]'));
  await page.reload();await page.waitForFunction(()=>turretOverlay.selected&&turretOverlay.cameraReady());

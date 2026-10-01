@@ -36,10 +36,13 @@ def export():
     (OUT/'assets.json').write_text(json.dumps({p:f for p,f,_ in results}))
     (OUT/'renderer.js').write_bytes(fetch('renderer.js'))
     for name in ['index.html','mobile.css','mobile.js','viewport.js','live-game.js','network.js']:
-        shutil.copyfile(ROOT/'sandboxes/green/prototypes/mobile-ltz'/name,OUT/name)
-    rig=(ROOT/'sandboxes/green/prototypes/mobile-ltz/joint-rig.js').read_text()
-    turret=(ROOT/'sandboxes/green/prototypes/mobile-ltz/turret-overlay.js').read_text()
-    (OUT/'mobile.js').write_text(rig+'\n'+turret+'\n'+(OUT/'mobile.js').read_text())
+        shutil.copyfile(ROOT/'shared/mobile_ltz'/name,OUT/name)
+    rig=(ROOT/'shared/mobile_ltz/joint-rig.js').read_text()
+    turret=(ROOT/'shared/mobile_ltz/turret-overlay.js').read_text()
+    physical=(ROOT/'shared/mobile_ltz/physical-arm.js').read_text()
+    journey=(ROOT/'shared/mobile_ltz/journey.js').read_text()
+    operations=(ROOT/'shared/mobile_ltz/operation-id.js').read_text()
+    (OUT/'mobile.js').write_text(operations+'\n'+journey+'\n'+rig+'\n'+turret+'\n'+physical+'\n'+(OUT/'mobile.js').read_text())
     shutil.copyfile(Path(__file__).with_name('api.php'),OUT/'api.php')
     shutil.copyfile(Path(__file__).with_name('index.php'),OUT/'index.php')
     url=json.loads((RUNTIME/'tunnel.json').read_text())['url']

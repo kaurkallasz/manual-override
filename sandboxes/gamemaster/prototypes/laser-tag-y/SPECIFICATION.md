@@ -18,9 +18,10 @@ through Game, and reconnect/reset snapshots clear stale units. No browser-side
 unlock or damage calculation is added.
 
 Presents Photon Game to the Gamemaster and to an external display. It owns no
-gameplay, level, board, camera, or persistent state.
+gameplay, level, board or camera state. Its only persisted operator state is the
+display-only table-marker location cache described below.
 
-- Live input: only `photon.game` v2 snapshots/SSE. Authenticated operator intent
+- Live gameplay input: only `photon.game` v2 snapshots/SSE. Authenticated operator intent
   is forwarded unchanged to Photon Game's command input.
 - Asset references arrive only inside Game's `presentation` field, using
   `photon.level.assets` v1. Y prefixes the supplied base with the current sandbox
@@ -47,7 +48,12 @@ gameplay, level, board, camera, or persistent state.
   Board; saved Cal 2 measurements → Auto Pickup ↔ Board diagnostics; Player LTX
   intent → Auto Pickup/Relay; authored files → Level → Game/image delivery;
   Game-owned settings and operator commands → Game; Board → Game → Y.
-  Corrected video terminates at Board's on-demand preview, never Game or Y.
+  The operator physical view displays corrected video from Board’s existing
+  `/api/preview` endpoint. Video bytes never enter Game. Virtual play and Board
+  simulation show the generated view; the external screen always renders the
+  map for display on the physical playfield. Camera failures show an explicit
+  message and Retry camera button; they never fall back to a virtual image.
+  Game disconnects or stale input hide the camera until fresh evidence returns.
   The two calibration datasets, projection arguments/results, controller intent
   versus observed feedback, and virtual input alternatives are distinguished.
   The scrollable graph has branch jump controls and opens on Game/Y.
@@ -56,10 +62,11 @@ gameplay, level, board, camera, or persistent state.
   Game's bounded `inputs.board.upstream` report, where supplied. Missing or
   older-than-three-second reports are unknown/last-known even while Game SSE
   remains live. Virtual play marks physical Board input unused. Hardware device
-  identities, calibration values and video frames are not sent to this window.
+  identities and calibration values are not sent to this window. The diagram
+  reports preview image load/error status, not measured camera frame rate.
   Selecting a node shows the relevant fields, actual received source addresses,
   status, snapshot age, SSE message count, or renderer image-load counts.
-  The diagram observes Y's existing snapshot, SSE and image loader only; it
+  The diagram observes Y's existing Game snapshot/SSE and image loader only; it
   performs no extra requests or commands and introduces no sibling dependency.
   Flow animation reflects recent SSE events and pending/recent image activity,
   not packet speed or measured bandwidth. Disconnected/stale feeds stop the live
@@ -105,7 +112,8 @@ gameplay, level, board, camera, or persistent state.
 - Direction and wide/narrow sliders remain synchronized keyboard-accessible
   inputs to that same command. They are presentation controls, not another
   gameplay state store, and rejected commands return the guide to Game output.
-- Y never reads Photon Level or Photon Board, opens a camera, parses TMJ, edits a
+- Y never reads Photon Level or Board gameplay state directly, opens a camera
+  device, parses TMJ, edits a
   level, calculates combat, mutates game state locally, persists runs, or controls
   hardware.
 - A Game contract mismatch is contained here and displayed as `unavailable`.
@@ -176,8 +184,10 @@ Muzzle, Tesla and mortar launch visuals follow the raised head; socket size,
 placement, targeting and simulation geometry are unchanged. Base-level art
 keeps its existing composition.
 
-The **Virtual Atom controls → Virtual test unlocks** section appears when Virtual
-play is enabled. Gamemaster can enable test overrides, lock turret types for
+The **Unlocks** panel sits directly below Aruco MNGMNT (Virtual Atom controls
+in virtual play). It remains visible and editable in both virtual and physical
+practice. Active scored runs cannot change overrides, and a scored game cannot
+start until test overrides are disabled. Gamemaster can enable test overrides, lock turret types for
 placement, choose turret/Force Field levels 1–4, apply a complete selection,
 unlock all L4, or return everything to base level. The UI preserves unsaved
 selections during unrelated SSE updates and shows the server's applied loadout
@@ -187,9 +197,142 @@ both shared map views. The form forwards one Game command and owns no upgrades.
 
 ### Mobile control test unlocks
 
-The same Virtual test unlocks form includes **Mobile control unlock**: Joint (1),
+The same Unlocks form includes **Mobile control unlock**: Joint (1),
 Cartesian XYZ (2), Targeting (3), and Cue autonomy (4). Apply sends
 `virtual_test_loadout` with `levels` plus `control` (integer 1–4, or null when the
-override is off). The selection unlocks through that tier for Green mobile practice.
+override is off). The selection unlocks through that tier for Green mobile practice, including the
+calibrated physical controller embedded in Mobile LTZ. Relay authorization and
+physical workspace checks still apply.
 Unlock all L4 includes tier 4; All base levels restores tier 1. Targeting enables finger dragging; Cue autonomy enables queued pickup and placement. Unsaved dropdown edits survive unrelated SSE updates.
 These overrides do not write saved players, credits, wins, or physical-arm settings.
+
+## Physical ArUco management
+
+Physical operator play labels the Atom/target panel **Aruco MNGMNT**. Current
+Board detections light its read-only Atom, socket and core chips green with
+“Found”; remembered detections show an explicit last-seen age and dashed border.
+Virtual play keeps **Virtual Atom controls** and its existing commands.
+
+The camera image and SVG marker overlay share one fitted full-frame rectangle
+and one centered **1.15×** transform during gameplay, clipped by the operator
+stage. Calibration removes that crop to show all outer targets. Corner
+polygons and ID labels use corrected-camera normalized coordinates, never Level
+render coordinates. Current outlines are green; remembered outlines are dashed
+and labeled with age. HUD and controls are not zoomed. The external screen and
+virtual renderer are unchanged.
+
+The operator's existing Y `/api/events?markers=1` connection carries named
+`markers` events alongside the unchanged full/incremental Photon Game events.
+Y's server adapter reads Board's public cached `tracking_snapshot()` through the
+enabled module contract and validates `photon.board.tracking` v1. It samples
+this display projection at most five times per second as Game events arrive;
+it neither samples hardware nor adds a browser connection. The external screen
+keeps its existing Game-only stream.
+
+The monitor keeps diagnostics received before the first video frame so camera
+startup cannot discard the initial marker snapshot. Only display diagnostics
+are consumed; Game remains the sole gameplay/placement authority. No browser
+detection or gameplay target memory is introduced. Invalid contracts, stale
+sample/frame times, or disconnects clear outlines and current-detection
+indicators. Mode changes and camera/Game failure hide the display, and teardown
+closes the shared stream. Board's reported visibility distinguishes current
+detections from retained coordinates. The operator-only table-marker display
+cache is described below.
+
+Cache analysis (existing policy, unchanged by this display): Webcam promotes a
+tag after 1 second of detection (gaps over 0.5 seconds restart qualification),
+retains confirmed tags for 3 seconds after loss, and retains immediate reads for
+10 seconds. Board diagnostic history stores fixed markers for 5 seconds and
+movable IDs for 15 seconds, only refreshing from visible detections. Its separate
+game placement cache stores fixed-marker centers for 120 seconds from qualifying
+observations; source changes clear that cache. Camera/arm freshness and placement
+dwell still gate gameplay, even when a target center is remembered. The diagnostic
+UI does not claim to expose that longer game cache, and a green chip means a
+current detection, not a cached placement target or robot readiness.
+
+Smoke test: `.venv/bin/python -m unittest discover -s tests -p test_laser_tag_y_camera.py`.
+
+### Saved table-marker locations
+
+Y stores the last observed corrected-camera centers and corner polygons for
+**IDs 40–59** in browser local storage, scoped to this sandbox's Y URL, with a
+versioned descriptor and full-frame dimensions. It learns only from fresh,
+visible Board diagnostics; neither cached diagnostic rows nor a simulation can
+seed or refresh it. At most 20 entries are stored. Writes are throttled to once
+per second and flushed on teardown. Invalid records are rejected; storage errors
+are visible and leave a visit-only cache.
+
+While fresh camera/diagnostic input is available, obscured cached table locations
+remain drawn as dashed green outlines labeled **cached**. Their read-only chips
+show **Cached location**, distinct from bright-green **Found** detections.
+The cache survives page reload and has no time expiry. A changed frame resolution
+automatically clears old coordinates. Reset it after moving the camera/table or
+changing calibration; a same-resolution camera move cannot be inferred here.
+Core and movable tags continue to use Board's bounded diagnostic history.
+
+**Reset all cached locations** clears every saved and in-memory table location.
+The current pre-reset frame cannot immediately reseed the cache; newly observed
+frames can. The panel confirms the reset and explains that visible codes will
+be learned again. This is an operator display cache only: it neither changes
+Board's independent 120-second gameplay marker memory nor provides placement
+or robot-control evidence.
+
+### Calibration and practice transitions — 2026-10-01
+
+The main stage shows the existing Photon Board corrected camera preview during
+calibration, at full frame without the normal 15% crop. Game-marker registration
+can be unavailable after calibration replaces those markers; the existing preview
+endpoint still validates the real camera. Camera errors show a retry state, never
+generated targets. Game freshness and disconnect handling remain required.
+
+Only the external screen mounts the owner-served Auto PP Cal 2 targets. Its Y
+presentation helper validates `hhh.playfield.display` v1 and the exact Playfield
+screen path, then requests `?presentation=1` to disable zoom, orbit, target editing
+and camera saves. An unavailable descriptor keeps a waiting/error surface over
+the game. Normal presentation returns on exit; Y owns no target coordinates.
+
+Selecting another GM calibration test safely cancels the previous practice
+session before opening the requested side. Game screen, Green, Purple and Both
+controls sit above the camera. Loading the operator page sends `show_game` when
+a calibration is retained; the external screen follows the resulting Game state.
+Reloading the external screen alone does not cancel an operator-selected lesson.
+
+Projection exit/switch remains available with an offline arm. The calibration
+owner first revokes lesson access and durably inhibits motion until Relay confirms
+the previous stop. Previewing another side grants no movement. Both starts Green
+then Purple; earned progress pauses under `deferred_calibration` and is resumed
+with the visible Resume player calibration button. It cannot award or skip a
+tier. Errors and hardware readiness are shown beside the screen controls.
+The status distinguishes selecting calibration from the owner's targets becoming
+ready. Display failures are shown before motion-readiness notices, so an offline
+arm notice cannot conceal the actual reason targets have not loaded.
+
+GM test overrides select practice Start and remain applied to both teams. Pending
+control edits survive incoming state, and older stream snapshots cannot replace
+a newer command result. Start reports its rejection beside the button and stays
+blocked during calibration, the shared upgrade interval, or unavailable physical
+Board input. Game owns validation and all resulting phase changes.
+# Saved calibration selection
+
+Game Master can choose Green or Purple and a saved calibration, preview it over
+the current corrected camera, and apply it. The default is the latest complete
+calibration; explicit older choices persist until changed or a new calibration
+is completed. Each preview shows six numbered ground targets and four dashed
+3 cm raised-tag samples. Coordinates are canonical for both arms, with no second
+Purple rotation. Preview uses the same contained image rectangle and no gameplay
+zoom. It changes no robot, projection, game mode, player statistics or progress.
+
+The operator-only `/api/calibrations?side=green|purple` facade checks the enabled
+Cal 2 owner and its exact `hhh.cal2.history` integer-v1 contract. Apply forwards
+`calibration_apply` through Photon Game, including the observed rig revision.
+Game settles the current lesson/display; Cal 2 owns validation, stops, archives
+and persistence. Running games reject Apply. The shared transport height is
+restored with the selected arm, and player controllers must reconnect after
+lease revocation. Required player calibration remains required.
+
+Preview freshness uses the existing Board tracking messages multiplexed onto
+the Game SSE feed. Missing, stale, simulated or malformed camera evidence hides
+the historical overlay and pauses the camera preview. No extra polling or
+hardware control path is introduced. Closing preview returns to the existing
+physical/virtual presentation. New captures become the newest history record;
+applying an old record never changes its original capture time.

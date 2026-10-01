@@ -143,6 +143,9 @@ class RelayClient:
         """Acquire our side's arm and start heartbeating. Each side owns its own
         arm now, so acquire never collides across sides — only a missing relay or a
         genuinely bad request is an error. Raises RelayError in those cases."""
+        # Connect the relay-owned Purple arm before acquiring its lease, just
+        # as Green does. A player must not depend on the operator's Connect.
+        self._ensure_arm_connected()
         status, body = self._post("/api/acquire",
                                   {"side": self.side, "mode": self.control_mode})
         if status is None:

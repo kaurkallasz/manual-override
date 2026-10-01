@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {FetchEventSource}=require('../sandboxes/green/prototypes/mobile-ltz/network.js');
+const {FetchEventSource}=require('../shared/mobile_ltz/network.js');
 (async()=>{
  const frames=[];let requestOptions;
  const wire=new TextEncoder().encode(': heartbeat\r\ndata: {"name":"🧟"}\r\n\r\nevent: update\ndata: {"a":\ndata: 1}\n\ndata: {"truncated":');
