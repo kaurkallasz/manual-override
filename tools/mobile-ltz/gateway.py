@@ -171,9 +171,9 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
         side=direct['side'] if direct else request.headers.get('X-Mobile-Team','green')
         if side not in ('green','purple'):return jsonify(error='Invalid player team'),400
         client = re.fullmatch(r'client/(?:manifest|(?:[a-f0-9]{32}|latest)/(?:index\.html|mobile\.css|mobile\.js|viewport\.js|live-game\.js|network\.js|joint-rig\.js))', path)
-        if not client and path not in ('login', 'state', 'events', 'command', 'player', 'journey', 'history', 'calibrations', 'renderer.js') and not path.startswith('assets/'):
+        if not client and path not in ('login', 'state', 'events', 'command', 'player', 'journey', 'history', 'calibrations', 'diagnostics', 'renderer.js') and not path.startswith('assets/'):
             return jsonify(error='Not found'), 404
-        if request.method != ('POST' if path in ('login', 'command', 'player', 'journey') else 'GET'):
+        if request.method != ('POST' if path in ('login', 'command', 'player', 'journey', 'diagnostics') else 'GET'):
             return jsonify(error='Method not allowed'), 405
         if '..' in path or '\\' in path or '?' in path or '#' in path:
             return jsonify(error='Invalid path'), 400
@@ -208,7 +208,7 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
             if not cookie or len(cookie) > 2048 or any(c in cookie for c in '\r\n;'):
                 return jsonify(error='Sign in to your team'), 401
             headers['Cookie'] = 'hhh_auth=' + cookie
-            data = request.get_data() if path in ('command','player','journey') else None
+            data = request.get_data() if path in ('command','player','journey','diagnostics') else None
             if data is not None:
                 headers['Content-Type'] = 'application/json'
             url = upstream + '/s/gamemaster/p/mobile-ltz-api/api/' + quote(path, safe='/')+'?side='+side

@@ -26,9 +26,9 @@
 <div class="row"><label for="manualFocus">Manual focus</label><input id="manualFocus" type="range" min="0" max="255" step="1" disabled><output id="focusValue">—</output></div>
 <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
 <b>Webcam exposure</b>
-<p class="note">Disable auto exposure before adjusting exposure time. The logarithmic scale gives finer control at short exposures; values are shown in seconds.</p>
+<p class="note">Disable auto exposure before adjusting exposure time. Most of the slider finely adjusts 0.01–0.05 seconds, centred on 0.03 s. Its ends accelerate through the rest of the camera’s range.</p>
 <div class="row"><label><input id="autoexposure" type="checkbox" style="width:auto"> Auto exposure</label><span id="exposureSupport" class="note">Checking camera controls…</span></div>
-<div class="row"><label for="manualExposure">Manual exposure</label><input id="manualExposure" type="range" min="0" max="1000" step="1" disabled><output id="exposureValue">—</output></div>
+<div class="row"><label for="manualExposure">Manual exposure</label><input id="manualExposure" type="range" min="0" max="500" step="1" disabled><output id="exposureValue">—</output></div>
 <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
 <b>Display brightness</b>
 <p class="note">Target, playfield objects, and Atom tags are linked by default. Unlink to tune them independently; linking again preserves their current ratios.</p>
@@ -53,19 +53,63 @@ const TARGET_BRIGHTNESS_KEY='hhh-calibration-target-brightness';
 const PLAYFIELD_BRIGHTNESS_KEY='hhh-calibration-playfield-brightness';
 const BRIGHTNESS_LINK_KEY='hhh-brightness-sliders-linked';
 const PLAYFIELD_SETTINGS='/s/gamemaster/p/playfield-areas/api/settings';
-$('feed').src=U('api/stream')+'?t='+Date.now();
-let configLoaded=false,focusSaving=false;
+let configLoaded=false,focusSaving=false,focusRevision=0;
 let exposureRange={min:1,max:1000,step:1};
+// UVC exposure is in 100 µs units. Reserve 80% of travel for 0.01–0.05 s:
+// at the usual step=1, every central slider step is exactly 0.0001 s.
+function exposureSegments(){
+  const {min,max}=exposureRange,low=Math.max(min,100),high=Math.min(max,500);
+  if(high<=low)return [[0,min],[500,max]];
+  return [[0,min],...(low>min?[[50,low]]:[]),...(high<max?[[450,high]]:[]),[500,max]];
+}
 function exposureSliderPosition(value){
-  const {min,max,step}=exposureRange,offset=Math.max(step,1);
+  const {min,max,step}=exposureRange,points=exposureSegments();
+  value=Math.max(min,Math.min(max,value));
   if(max<=min)return 0;
-  return 1000*Math.log((Math.max(min,Math.min(max,value))+offset)/(min+offset))/Math.log((max+offset)/(min+offset));
+  for(let i=1;i<points.length;i++){
+    const [a,lo]=points[i-1],[b,hi]=points[i];
+    if(value>hi)continue;
+    const linear=lo>=100&&hi<=500;
+    const ratio=linear?(value-lo)/(hi-lo):Math.log((value+step)/(lo+step))/Math.log((hi+step)/(lo+step));
+    return a+(b-a)*ratio;
+  }
+  return 500;
 }
 function exposureFromSlider(position){
-  const {min,max,step}=exposureRange,offset=Math.max(step,1),ratio=Math.max(0,Math.min(1,position/1000));
-  const value=Math.exp(Math.log(min+offset)+ratio*Math.log((max+offset)/(min+offset)))-offset;
-  return Math.max(min,Math.min(max,min+Math.round((value-min)/step)*step));
+  const {min,max,step}=exposureRange,points=exposureSegments();
+  position=Math.max(0,Math.min(500,position));
+  for(let i=1;i<points.length;i++){
+    const [a,lo]=points[i-1],[b,hi]=points[i];
+    if(position>b)continue;
+    const ratio=(position-a)/(b-a),linear=lo>=100&&hi<=500;
+    const value=linear?lo+ratio*(hi-lo):Math.exp(Math.log(lo+step)+ratio*Math.log((hi+step)/(lo+step)))-step;
+    return Math.max(min,Math.min(max,min+Math.round((value-min)/step)*step));
+  }
+  return max;
 }
+let cameraEvents=null,pendingRequests=0,pageActive=true;
+function stopCameraEvents(){if(cameraEvents){cameraEvents.close();cameraEvents=null;}}
+function startCameraEvents(){
+  if(cameraEvents||pendingRequests||document.hidden||!pageActive)return;
+  const stream=new EventSource(U('api/events'));cameraEvents=stream;
+  stream.onmessage=event=>{
+    if(cameraEvents!==stream)return;
+    try{const d=JSON.parse(event.data);if(d.preview)$('feed').src=d.preview;
+      if(d.calibration)renderStatus(d.calibration);
+      if(!focusSaving&&d.controls){if(d.controls.ok)renderFocus(d.controls);else focusMessage(d.controls.error||'Camera controls unavailable');}
+    }catch(e){focusMessage('Could not read camera controls');}
+  };
+  stream.onerror=()=>{if(cameraEvents===stream)focusMessage('Camera connection interrupted; reconnecting…');};
+}
+// Give finite control requests a connection even when other hub views stream.
+async function cameraRequest(url,options={}){
+  pendingRequests++;stopCameraEvents();
+  try{const r=await fetch(url,{...options,signal:AbortSignal.timeout(url.endsWith('/api/focus')?10000:60000)});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d;}
+  finally{pendingRequests--;startCameraEvents();}
+}
+document.addEventListener('visibilitychange',()=>document.hidden?stopCameraEvents():startCameraEvents());
+window.addEventListener('pagehide',()=>{pageActive=false;stopCameraEvents();});
+window.addEventListener('pageshow',()=>{pageActive=true;startCameraEvents();});
 function exposureSeconds(value){return `${(Number(value)/10000).toFixed(4)} s`}
 function setTargetBrightness(value){
   const brightness=Math.max(10,Math.min(200,Math.round(Number(value)||100)));
@@ -86,8 +130,7 @@ function savePlayfieldBrightness(){
   clearTimeout(brightnessSaveTimer);
   brightnessSaveTimer=setTimeout(async()=>{
     try{
-      const r=await fetch(PLAYFIELD_SETTINGS,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({global_brightness:brightnessValues.global/100,atom_brightness:brightnessValues.atom/100}),keepalive:true});
-      if(!r.ok)throw Error('request failed');
+      await cameraRequest(PLAYFIELD_SETTINGS,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({global_brightness:brightnessValues.global/100,atom_brightness:brightnessValues.atom/100}),keepalive:true});
     }catch(e){focusMessage('Could not save playfield brightness')}
   },60);
 }
@@ -106,8 +149,7 @@ function changeBrightness(kind,value){
 }
 async function loadPlayfieldBrightness(){
   try{
-    const r=await fetch(PLAYFIELD_SETTINGS),d=await r.json();
-    if(!r.ok)throw Error(d.error||'request failed');
+    const d=await cameraRequest(PLAYFIELD_SETTINGS);
     const s=d.settings||{},serverGlobal=clampBrightness(Number(s.global_brightness??1)*100);
     const remembered=localStorage.getItem(PLAYFIELD_BRIGHTNESS_KEY);
     brightnessValues.global=remembered===null?serverGlobal:clampBrightness(remembered);
@@ -117,8 +159,8 @@ async function loadPlayfieldBrightness(){
     if(brightnessValues.global!==serverGlobal)savePlayfieldBrightness();
   }catch(e){focusMessage('Could not load playfield brightness')}
 }
-async function post(path,body={}){const r=await fetch(U(path),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}
-async function del(path){const r=await fetch(U(path),{method:'DELETE'});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}
+async function post(path,body={}){return cameraRequest(U(path),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+async function del(path){return cameraRequest(U(path),{method:'DELETE'});}
 function message(text,ok=false){$('msg').textContent=text;$('msg').className=ok?'ok':'bad'}
 function focusMessage(text,ok=false){$('focusMsg').textContent=text;$('focusMsg').className=ok?'ok':'bad'}
 function calibrationQuality(rms){
@@ -131,8 +173,7 @@ function calibrationQuality(rms){
 async function loadCameras(){
   $('refreshCameras').disabled=true;
   try{
-    const r=await fetch(U('api/cameras')),d=await r.json();
-    if(!r.ok)throw Error(d.error||'Could not list cameras');
+    const d=await cameraRequest(U('api/cameras'));
     $('focusCamera').innerHTML=d.cameras.length?d.cameras.map(c=>`<option value="${c.index}">${c.label}</option>`).join(''):'<option value="">No cameras found</option>';
     $('focusCamera').disabled=!d.cameras.length;
     if(d.active_index!==null&&d.active_index!==undefined)$('focusCamera').value=String(d.active_index);
@@ -154,25 +195,40 @@ function renderFocus(c){
   exposureRange={min:exposureMin,max:exposureMax,step:exposureStep};
   if(exposureSupported&&Number.isFinite(Number(c.exposure))){$('manualExposure').value=exposureSliderPosition(Number(c.exposure));$('exposureValue').value=exposureSeconds(c.exposure)}else $('exposureValue').value='—';
   $('manualExposure').disabled=!c.camera_open||!exposureSupported||$('autoexposure').checked;
-  $('exposureSupport').textContent=!c.camera_open?'Open a camera in the Webcam tab':(autoExposureSupported||exposureSupported?'UVC exposure controls available':'Exposure controls not supported by this camera/backend');
+  $('exposureSupport').textContent=!c.camera_open?'Open a camera in the Webcam tab':(autoExposureSupported||exposureSupported?'UVC exposure controls available':(c.uvc_error||'Exposure controls not supported by this camera/backend'));
   if(c.camera_index!==null&&c.camera_index!==undefined)$('focusCamera').value=String(c.camera_index);
 }
-async function pollFocus(){if(focusSaving)return;try{const r=await fetch(U('api/focus'));const d=await r.json();if(r.ok)renderFocus(d)}catch(e){}}
-async function poll(){try{const s=await(await fetch(U('api/status'))).json();$('camera').textContent=s.camera_ready?'ready':'open Webcam tab';$('camera').className=s.camera_ready?'ok':'bad';$('board').textContent=s.board_found?'detected':'not detected';$('board').className=s.board_found?'ok':'';$('samples').textContent=`${s.samples} / ${s.minimum_samples}`;if(s.calibrated){const q=calibrationQuality(s.rms);$('result').textContent=`saved · RMS ${s.rms.toFixed(3)} px · ${q.label}`;$('result').className=q.good?'ok':'bad';$('result').title='RMS reprojection error: <0.3 px excellent, <0.5 px good, <1.0 px usable, ≥1.0 px poor'}else{$('result').textContent='none';$('result').className=''}$('enabled').checked=s.enabled;$('capture').disabled=!s.camera_ready||!s.board_found;$('calibrate').disabled=s.samples<s.minimum_samples;if(!configLoaded){$('cols').value=s.board[0];$('rows').value=s.board[1];$('square').value=s.square_size;configLoaded=true}}catch(e){}}
-$('apply').onclick=async()=>{try{await post('api/config',{cols:+$('cols').value,rows:+$('rows').value,square_size:+$('square').value});message('Board settings applied.',true);poll()}catch(e){message(e.message)}};
-$('capture').onclick=async()=>{try{$('capture').disabled=true;message('Scanning 9 checkerboard positions… keep the target screen open.',true);const d=await post('api/capture'),skipped=d.skipped?.length?` Positions ${d.skipped.join(', ')} were obstructed and skipped.`:'';message(`Captured ${d.patterns} shifted checkerboards.${skipped} Ready to calculate calibration.`,true);poll()}catch(e){message(e.message)}finally{$('capture').disabled=false}};
-$('reset').onclick=async()=>{await post('api/reset');message('Samples cleared.',true);poll()};
-$('calibrate').onclick=async()=>{try{const d=await post('api/calibrate'),q=calibrationQuality(d.rms);message(`Calibration saved. RMS reprojection error: ${d.rms.toFixed(4)} px — ${q.label}.`,q.good);poll()}catch(e){message(e.message)}};
-$('clearCalibration').onclick=async()=>{try{await del('api/calibration');message('Saved calibration and samples cleared. Ready for a new calibration.',true);poll()}catch(e){message(e.message)}};
+async function pollFocus(){if(focusSaving)return;const revision=focusRevision;try{const d=await cameraRequest(U('api/focus'));if(!focusSaving&&revision===focusRevision)renderFocus(d);}catch(e){focusMessage(e.message);}}
+function renderStatus(s){$('camera').textContent=s.camera_ready?'ready':'open Webcam tab';$('camera').className=s.camera_ready?'ok':'bad';$('board').textContent=s.board_found?'detected':'not detected';$('board').className=s.board_found?'ok':'';$('samples').textContent=`${s.samples} / ${s.minimum_samples}`;if(s.calibrated){const q=calibrationQuality(s.rms);$('result').textContent=`saved · RMS ${s.rms.toFixed(3)} px · ${q.label}`;$('result').className=q.good?'ok':'bad';$('result').title='RMS reprojection error: <0.3 px excellent, <0.5 px good, <1.0 px usable, ≥1.0 px poor'}else{$('result').textContent='none';$('result').className=''}$('enabled').checked=s.enabled;$('capture').disabled=!s.camera_ready||!s.board_found;$('calibrate').disabled=s.samples<s.minimum_samples;if(!configLoaded){$('cols').value=s.board[0];$('rows').value=s.board[1];$('square').value=s.square_size;configLoaded=true}}
+let controlsQueue=Promise.resolve();
+function saveControls(data,describe,revision=++focusRevision){
+  focusSaving=true;
+  controlsQueue=controlsQueue.then(async()=>{
+    try{const d=await post('api/focus',data);if(revision===focusRevision){renderFocus(d);focusMessage(describe(d),true);}}
+    catch(e){if(revision===focusRevision)focusMessage(e.message);}
+    finally{if(revision===focusRevision){focusSaving=false;}}
+  });
+  return controlsQueue;
+}
+$('apply').onclick=async()=>{try{await post('api/config',{cols:+$('cols').value,rows:+$('rows').value,square_size:+$('square').value});message('Board settings applied.',true)}catch(e){message(e.message)}};
+$('capture').onclick=async()=>{try{$('capture').disabled=true;message('Scanning 9 checkerboard positions… keep the target screen open.',true);const d=await post('api/capture'),skipped=d.skipped?.length?` Positions ${d.skipped.join(', ')} were obstructed and skipped.`:'';message(`Captured ${d.patterns} shifted checkerboards.${skipped} Ready to calculate calibration.`,true)}catch(e){message(e.message)}finally{$('capture').disabled=false}};
+$('reset').onclick=async()=>{await post('api/reset');message('Samples cleared.',true)};
+$('calibrate').onclick=async()=>{try{const d=await post('api/calibrate'),q=calibrationQuality(d.rms);message(`Calibration saved. RMS reprojection error: ${d.rms.toFixed(4)} px — ${q.label}.`,q.good)}catch(e){message(e.message)}};
+$('clearCalibration').onclick=async()=>{try{await del('api/calibration');message('Saved calibration and samples cleared. Ready for a new calibration.',true)}catch(e){message(e.message)}};
 $('enabled').onchange=()=>post('api/enabled',{enabled:$('enabled').checked});
 $('refreshCameras').onclick=loadCameras;
-$('focusCamera').onchange=async()=>{const index=Number($('focusCamera').value);if(!Number.isInteger(index))return;focusSaving=true;$('focusCamera').disabled=true;focusMessage(`Opening Camera ${index}…`);try{await post('api/camera',{index});await pollFocus();focusMessage(`Camera ${index} selected.`,true)}catch(e){focusMessage(e.message);await loadCameras()}finally{focusSaving=false;$('focusCamera').disabled=false;pollFocus()}};
-$('autofocus').onchange=async()=>{focusSaving=true;try{const d=await post('api/focus',{autofocus:$('autofocus').checked});renderFocus(d);focusMessage(d.autofocus?'Autofocus enabled.':'Autofocus disabled; manual focus is available.',true)}catch(e){focusMessage(e.message)}finally{focusSaving=false;pollFocus()}};
-$('autoexposure').onchange=async()=>{focusSaving=true;try{const d=await post('api/focus',{autoexposure:$('autoexposure').checked});renderFocus(d);focusMessage(d.autoexposure?'Auto exposure enabled.':'Auto exposure disabled; manual exposure is available.',true)}catch(e){focusMessage(e.message)}finally{focusSaving=false;pollFocus()}};
-let focusTimer;
-$('manualFocus').oninput=()=>{$('focusValue').value=$('manualFocus').value;clearTimeout(focusTimer);focusTimer=setTimeout(async()=>{focusSaving=true;try{const d=await post('api/focus',{focus:+$('manualFocus').value});renderFocus(d);focusMessage(`Manual focus set to ${d.focus}.`,true)}catch(e){focusMessage(e.message)}finally{focusSaving=false;pollFocus()}},120)};
-let exposureTimer;
-$('manualExposure').oninput=()=>{const exposure=exposureFromSlider(+$('manualExposure').value);$('exposureValue').value=exposureSeconds(exposure);clearTimeout(exposureTimer);exposureTimer=setTimeout(async()=>{focusSaving=true;try{const d=await post('api/focus',{exposure});renderFocus(d);focusMessage(`Manual exposure set to ${exposureSeconds(d.exposure)}.`,true)}catch(e){focusMessage(e.message)}finally{focusSaving=false;pollFocus()}},120)};
+$('focusCamera').onchange=async()=>{const index=Number($('focusCamera').value);if(!Number.isInteger(index))return;focusSaving=true;$('focusCamera').disabled=true;focusMessage(`Opening Camera ${index}…`);try{await post('api/camera',{index});focusMessage(`Camera ${index} selected.`,true)}catch(e){focusMessage(e.message);await loadCameras()}finally{focusSaving=false;$('focusCamera').disabled=false;pollFocus()}};
+let focusTimer,exposureTimer;
+$('autofocus').onchange=()=>{clearTimeout(focusTimer);return saveControls({autofocus:$('autofocus').checked},d=>d.autofocus?'Autofocus enabled.':'Autofocus disabled; manual focus is available.');};
+$('autoexposure').onchange=()=>{clearTimeout(exposureTimer);return saveControls({autoexposure:$('autoexposure').checked},d=>d.autoexposure?'Auto exposure enabled.':'Auto exposure disabled; manual exposure is available.');};
+$('manualFocus').oninput=()=>{
+  const focus=+$('manualFocus').value,revision=++focusRevision;focusSaving=true;$('focusValue').value=focus;
+  clearTimeout(focusTimer);focusTimer=setTimeout(()=>saveControls({focus},d=>`Manual focus set to ${d.focus}.`,revision),120);
+};
+$('manualExposure').oninput=()=>{
+  const exposure=exposureFromSlider(+$('manualExposure').value),revision=++focusRevision;focusSaving=true;$('exposureValue').value=exposureSeconds(exposure);
+  clearTimeout(exposureTimer);exposureTimer=setTimeout(()=>saveControls({exposure},d=>`Manual exposure set to ${exposureSeconds(d.exposure)}.`,revision),120);
+};
 $('targetBrightness').oninput=()=>changeBrightness('target',$('targetBrightness').value);
 $('globalBrightness').oninput=()=>changeBrightness('global',$('globalBrightness').value);
 $('atomBrightness').oninput=()=>changeBrightness('atom',$('atomBrightness').value);
@@ -183,5 +239,5 @@ brightnessValues.target=clampBrightness(localStorage.getItem(TARGET_BRIGHTNESS_K
 const rememberedPlayfieldBrightness=localStorage.getItem(PLAYFIELD_BRIGHTNESS_KEY);
 if(rememberedPlayfieldBrightness!==null)brightnessValues.global=clampBrightness(rememberedPlayfieldBrightness);
 renderBrightness();loadPlayfieldBrightness();
-poll();pollFocus();loadCameras();setInterval(poll,750);setInterval(pollFocus,2000);
+loadCameras();startCameraEvents();
 </script></body></html>

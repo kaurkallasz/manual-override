@@ -2325,7 +2325,7 @@ function cal2ClickToPose(u, v) {
     throw new Error("target is outside the Auto PP Cal 2 arm limit");
   }
   const shared = gameCalibration2.shared_z || {};
-  const z = Number(sliderEls.z && sliderEls.z.value) || Number(shared.transport_height) || 0;
+  const z = Number(sliderEls.z && sliderEls.z.value) || Number(gameArmCal2().transport_height ?? shared.transport_height) || 0;
   const pose = { ...cal2RawPose(samples, u, v), z };
   assertAutoPpxPoseSafe(pose, "Auto PP Cal 2 target");
   return pose;
@@ -3232,7 +3232,7 @@ function updateAutoZReadout() {
   if (!out) return;
   const arm = AUTO_PPX ? gameArmCal2() : gameArmCal();
   const cal2Pickup = arm.pickup_height;
-  const cal2Transport = (gameCalibration2.shared_z || {}).transport_height;
+  const cal2Transport = arm.transport_height ?? (gameCalibration2.shared_z || {}).transport_height;
   const pickup = AUTO_PPX
     ? (cal2Pickup == null || cal2Pickup === "" ? NaN : Number(cal2Pickup))
     : (arm.pickup_height && arm.pickup_height.set ? Number(arm.pickup_height.z) : NaN);
@@ -3963,9 +3963,9 @@ function autoPpxBasePickupZ() {
 }
 function autoPpxTransportZ() {
   if (selectedAutoPpxCalibration() === "cal2") {
-    const transport = (gameCalibration2.shared_z || {}).transport_height;
+    const transport = gameArmCal2().transport_height ?? (gameCalibration2.shared_z || {}).transport_height;
     const z = Number(transport);
-    if (transport == null || transport === "" || !Number.isFinite(z)) throw new Error("Auto PP Cal 2 shared transport Z is not calibrated");
+    if (transport == null || transport === "" || !Number.isFinite(z)) throw new Error("Auto PP Cal 2 transport Z is not calibrated");
     return z;
   }
   return calibratedZ("transport_height");

@@ -36,6 +36,7 @@ import subprocess
 import threading
 import time
 import json
+import math
 
 
 # ---- ports ----------------------------------------------------------------
@@ -86,9 +87,10 @@ ENABLED_MODES = {5, 6, 7, 8, 10, 11}
 # position and stop streaming, so re-locking the arm doesn't snap it back to a
 # stale setpoint. (Excludes 5 ENABLED-idle and 7 RUNNING — our normal streaming.)
 NO_SERVO_MODES = {1, 2, 3, 4, 6, 9}
-# How many consecutive feedback ticks in a NO_SERVO mode before we conclude the
-# arm really left servo-follow (debounce against one-frame glitches).
-NO_SERVO_TRIP = 3
+# A single unlock packet invalidates motion, even between servo ticks.
+SERVO_MODES = {5, 7}
+FEEDBACK_MAX_AGE = 0.25
+SYNC_SETTLE_SECS = 0.08
 
 # Alarm groups from Dobot's official MG400/M1Pro alarm tables. Robot feedback
 # reports every alarm as mode 9 (ERROR), so GetErrorID() is required to tell an
@@ -107,10 +109,14 @@ def classify_alarm_ids(alarm_ids):
     ids = {int(value) for value in (alarm_ids or [])}
     if ids & EMERGENCY_ALARM_IDS:
         return "emergency_lock", "Emergency stop / safety lock"
-    if ids & WORKSPACE_ALARM_IDS:
-        return "workspace_limit", "Usable-area or joint-limit stop"
     if ids & COLLISION_ALARM_IDS:
         return "collision", "Collision safety stop"
+    if 70 in ids:
+        return "joint4_positive_limit", "Joint 4 positive rotation limit"
+    if 71 in ids:
+        return "joint4_negative_limit", "Joint 4 negative rotation limit"
+    if ids & WORKSPACE_ALARM_IDS:
+        return "workspace_limit", "Usable-area or joint-limit stop"
     if ids:
         return "controller_fault", "Controller fault"
     return "unknown_fault", "Fault reported; alarm code unavailable"
@@ -183,6 +189,9 @@ class DobotMG400:
         self._servo_thread = None
         self._servo_running = False
         self._servo_lock = threading.Lock()
+        self._lifecycle_lock = threading.RLock()
+        self._motion_epoch = 0
+        self._feedback_safe = False
         self._control_mode = None  # "joint" | "cartesian" | None
         self._target = None        # desired [j1..j4] OR [x,y,z,r]
         self._setpoint = None      # current streamed setpoint
@@ -228,7 +237,61 @@ class DobotMG400:
 
     def get_state(self):
         with self._state_lock:
-            return dict(self._state)
+            state = dict(self._state)
+        fresh = self.feedback_fresh(state)
+        with self._servo_lock:
+            if not fresh and self._feedback_safe:
+                self._invalidate_motion_locked()
+                self._feedback_safe = False
+            state['motion_epoch'] = self._motion_epoch
+        state['feedback_ok'] = fresh
+        state['motion_ready'] = fresh and state.get('robot_mode') in SERVO_MODES
+        return state
+
+    @staticmethod
+    def feedback_fresh(state):
+        stamp = state.get('last_feedback')
+        return (state.get('connected') is True and state.get('feedback_ok') is True
+                and type(stamp) in (int, float) and math.isfinite(stamp)
+                and 0 <= time.time() - stamp <= FEEDBACK_MAX_AGE
+                and all(isinstance(state.get(key), (list, tuple))
+                        and len(state[key]) == 4
+                        and all(type(v) in (int, float) and math.isfinite(v) for v in state[key])
+                        for key in ('pose', 'joints')))
+
+    def _invalidate_motion_locked(self):
+        self._motion_epoch += 1
+        self._servo_running = False
+        self._target = self._setpoint = None
+        self._vel = [0.0] * 4
+
+    def reset_motion(self):
+        """Invalidate commands before a new connection/Enable; never move the arm."""
+        with self._servo_lock:
+            self._invalidate_motion_locked()
+        self.stop_servo()
+        return self.get_state()['motion_epoch']
+
+    def wait_for_motion_feedback(self, after=None, timeout=1.0):
+        """Require new, stable, enabled feedback. A timeout never supplies a seed."""
+        after = time.time() if after is None else after
+        deadline = time.monotonic() + timeout
+        first = None
+        while time.monotonic() < deadline:
+            state = self.get_state()
+            if state['motion_ready'] and state['last_feedback'] > after:
+                if first is None or max(abs(a-b) for a,b in zip(first['joints'], state['joints'])) > .2:
+                    first = state
+                elif state['last_feedback'] - first['last_feedback'] >= SYNC_SETTLE_SECS:
+                    return state
+            else:
+                first = None
+            time.sleep(.01)
+        raise DobotError(-1, 'Fresh, settled arm feedback required. Relock the arm and reconnect.', 'synchronize')
+
+    def _check_motion_epoch_locked(self, expected_epoch):
+        if expected_epoch is not None and expected_epoch != self._motion_epoch:
+            raise DobotError(-1, 'Arm position changed. Reconnect to synchronize controls.', 'motion')
 
     def get_target(self):
         """The commanded target the follower is slewing toward, or None before the
@@ -344,12 +407,21 @@ class DobotMG400:
         except (ValueError, IndexError):
             return -1
 
-    def _command(self, sock, lock, command, raise_on_error=True):
+    def _command(self, sock, lock, command, raise_on_error=True, motion_epoch=None):
         if sock is None:
             raise DobotError(-1, "not connected", command)
         with lock:
             try:
-                sock.sendall(command.encode("utf-8"))
+                if motion_epoch is None:
+                    sock.sendall(command.encode("utf-8"))
+                else:
+                    # Check at the actual send boundary too: an unlock may have
+                    # arrived since this servo frame was calculated.
+                    with self._servo_lock:
+                        self._check_motion_epoch_locked(motion_epoch)
+                        if not self._servo_running:
+                            raise DobotError(-1, 'Servo movement cancelled', command)
+                        sock.sendall(command.encode("utf-8"))
                 resp = self._recv_response(sock)
             except (OSError, socket.timeout) as e:
                 raise DobotError(-1, str(e), command)
@@ -361,8 +433,8 @@ class DobotMG400:
     def _dash(self, command, raise_on_error=True):
         return self._command(self._dashboard, self._dash_lock, command, raise_on_error)
 
-    def _move(self, command, raise_on_error=True):
-        return self._command(self._motion, self._motion_lock, command, raise_on_error)
+    def _move(self, command, raise_on_error=True, motion_epoch=None):
+        return self._command(self._motion, self._motion_lock, command, raise_on_error, motion_epoch)
 
     # -- dashboard (control) --------------------------------------------------
     def enable(self):
@@ -463,18 +535,20 @@ class DobotMG400:
             f"MovL({x:.3f},{y:.3f},{z:.3f},{r:.3f})", raise_on_error=False
         )
 
-    def servo_j(self, j1, j2, j3, j4, t=0.1):
+    def servo_j(self, j1, j2, j3, j4, t=0.1, *, expected_epoch=None):
         """Stream one joint servo setpoint (degrees). ServoJ is meant to be sent
         repeatedly at a steady cadence; `t` is the time to reach this point."""
         return self._move(
-            f"ServoJ({j1:.3f},{j2:.3f},{j3:.3f},{j4:.3f},t={t:.3f})", raise_on_error=False
+            f"ServoJ({j1:.3f},{j2:.3f},{j3:.3f},{j4:.3f},t={t:.3f})", raise_on_error=False,
+            motion_epoch=expected_epoch
         )
 
-    def servo_p(self, x, y, z, r):
+    def servo_p(self, x, y, z, r, *, expected_epoch=None):
         """Stream one Cartesian servo setpoint. ServoP takes no optional params
         and should be sent at <= ~33 Hz."""
         return self._move(
-            f"ServoP({x:.3f},{y:.3f},{z:.3f},{r:.3f})", raise_on_error=False
+            f"ServoP({x:.3f},{y:.3f},{z:.3f},{r:.3f})", raise_on_error=False,
+            motion_epoch=expected_epoch
         )
 
     # -- velocity / accel caps (separate joint vs cartesian setters) ----------
@@ -501,12 +575,13 @@ class DobotMG400:
             self._max_ang_acc = max(1.0, float(ang_deg_s2))
 
     # -- targets --------------------------------------------------------------
-    def set_target_joints(self, j1, j2, j3, j4=None):
+    def set_target_joints(self, j1, j2, j3, j4=None, *, expected_epoch=None):
         """Set the desired joint angles the joint follower slews toward. J4 is held
         at its current angle unless given."""
         with self._servo_lock:
-            if self._target is None:
-                self._target = [0.0, 0.0, 0.0, 0.0]
+            self._check_motion_epoch_locked(expected_epoch)
+            if self._target is None or not self._servo_running:
+                raise DobotError(-1, 'Follower is not synchronized. Reconnect.', 'motion')
             self._target[0] = float(j1)
             self._target[1] = float(j2)
             self._target[2] = float(j3)
@@ -514,12 +589,13 @@ class DobotMG400:
                 self._target[3] = float(j4)
         self._last_motion_ts = time.time()   # give a fresh move its grace window
 
-    def set_target_pose(self, x, y, z, r=None):
+    def set_target_pose(self, x, y, z, r=None, *, expected_epoch=None):
         """Set the desired tool pose the cartesian follower slews toward. R is held
         at its current value unless given."""
         with self._servo_lock:
-            if self._target is None:
-                self._target = [0.0, 0.0, 0.0, 0.0]
+            self._check_motion_epoch_locked(expected_epoch)
+            if self._target is None or not self._servo_running:
+                raise DobotError(-1, 'Follower is not synchronized. Reconnect.', 'motion')
             self._target[0] = float(x)
             self._target[1] = float(y)
             self._target[2] = float(z)
@@ -530,6 +606,10 @@ class DobotMG400:
     def hold(self):
         """Smooth stop: aim the target at the follower's natural braking point so
         it decelerates to rest instead of snapping (which would overshoot)."""
+        state = self.get_state()
+        if not state['motion_ready']:
+            self.reset_motion()
+            return
         with self._servo_lock:
             if self._setpoint is None:
                 return
@@ -556,7 +636,11 @@ class DobotMG400:
         """Per-axis accel caps for the active follower (used by hold)."""
         return tuple(a for _, a in self._caps_locked())
 
-    def start_servo(self, mode):
+    def start_servo(self, mode, *, expected_epoch=None):
+        with self._lifecycle_lock:
+            self._start_servo(mode, expected_epoch=expected_epoch)
+
+    def _start_servo(self, mode, *, expected_epoch=None):
         """Start the follower for `mode` ("joint" or "cartesian"). Seeds the
         setpoint from the live feedback (joint angles or pose) so the arm doesn't
         jump on the first frame. Stops any current follower first."""
@@ -564,18 +648,16 @@ class DobotMG400:
         if mode not in ("joint", "cartesian"):
             raise DobotError(-1, f"unknown servo mode {mode!r}", "start_servo")
         self.stop_servo()
-        deadline = time.time() + 1.0
-        while time.time() < deadline and not self.get_state()["feedback_ok"]:
-            time.sleep(0.02)
-        st = self.get_state()
+        st = self.wait_for_motion_feedback()
         seed = [float(v) for v in (st["pose"] if mode == "cartesian" else st["joints"])]
         with self._servo_lock:
+            self._check_motion_epoch_locked(expected_epoch)
             self._control_mode = mode
             self._setpoint = list(seed)
             self._target = list(seed)
             self._vel = [0.0, 0.0, 0.0, 0.0]
+            self._servo_running = True
         self._last_motion_ts = time.time()
-        self._servo_running = True
         with self._state_lock:
             self._state["servo_active"] = True
             self._state["servo_error"] = None
@@ -586,13 +668,21 @@ class DobotMG400:
         self._servo_thread.start()
 
     def stop_servo(self):
+        with self._lifecycle_lock:
+            self._stop_servo()
+
+    def _stop_servo(self):
         self._servo_running = False
         thread = self._servo_thread
         if thread and thread.is_alive() and threading.current_thread() is not thread:
             thread.join(timeout=1.0)
+            if thread.is_alive():
+                raise DobotError(-1, 'Previous servo command is still stopping. Reconnect after it stops.', 'stop_servo')
         self._servo_thread = None
         with self._servo_lock:
             self._control_mode = None
+            self._target = self._setpoint = None
+            self._vel = [0.0] * 4
         with self._state_lock:
             self._state["servo_active"] = False
             self._state["control_mode"] = None
@@ -600,14 +690,27 @@ class DobotMG400:
             self._state["stall_error"] = 0.0
 
     def _servo_loop(self):
+        try:
+            self._follow_servo()
+        except (DobotError, OSError) as exc:
+            with self._servo_lock:
+                self._invalidate_motion_locked()
+            with self._state_lock:
+                self._state['servo_error'] = str(exc)
+        finally:
+            self._servo_running = False
+            with self._state_lock:
+                self._state['servo_active'] = False
+
+    def _follow_servo(self):
         # ServoJ minimum cycle is ~80 ms (12.5 Hz); ServoP is ~30 ms (≤33 Hz).
         with self._servo_lock:
             cartesian = self._control_mode == "cartesian"
+            motion_epoch = self._motion_epoch
         interval = 0.04 if cartesian else 0.08
         t_param = 0.10    # ServoJ point duration; slightly > interval for overlap
         cmd = "ServoP" if cartesian else "ServoJ"
         consecutive_errors = 0
-        no_servo_count = 0
         next_t = time.monotonic()
         while self._servo_running:
             with self._servo_lock:
@@ -618,38 +721,20 @@ class DobotMG400:
             if target is None or setpoint is None:
                 time.sleep(interval)
                 continue
-            # Drag/unlock guard. If the arm leaves servo-follow (unlock button →
-            # BACKDRIVE, disabled, or faulted) it is NOT consuming our stream. We
-            # must NOT keep firing ServoJ/ServoP at it — continuing to do so does
-            # nothing (the points are ACKed but ignored) and, across unlock/lock
-            # cycles, wedges the controller. So: re-seed to the live position (so a
-            # one-frame glitch can't snap it), and if it stays out of servo mode,
-            # STOP the follower entirely. A fresh Enable re-arms a clean session.
             st = self.get_state()
-            if st.get("robot_mode") in NO_SERVO_MODES:
-                if st.get("feedback_ok"):
-                    actual = list(st["pose"] if cartesian else st["joints"])
-                    with self._servo_lock:
-                        self._setpoint = list(actual)
-                        self._target = list(actual)
-                        self._vel = [0.0, 0.0, 0.0, 0.0]
-                no_servo_count += 1
-                consecutive_errors = 0
-                if no_servo_count >= NO_SERVO_TRIP:
-                    with self._state_lock:
-                        self._state["servo_error"] = (
-                            "arm left servo mode (unlocked / disabled / faulted) — "
-                            "press Enable to resume control"
-                        )
-                    break   # stop the follower; an explicit Enable restarts it
-                next_t += interval
-                pause = next_t - time.monotonic()
-                if pause > 0:
-                    time.sleep(pause)
-                else:
-                    next_t = time.monotonic()
-                continue
-            no_servo_count = 0
+            actual = st['pose'] if cartesian else st['joints']
+            tolerance = [STALL_ERR_CART]*3+[STALL_ERR_JOINT] if cartesian else [STALL_ERR_JOINT]*4
+            # Allow normal tracking delay of two stream intervals at the current
+            # speed, while rejecting an unexpected hand-moved position.
+            tolerance = [limit + abs(v)*interval*2 for limit,v in zip(tolerance,vel)]
+            if (not st['motion_ready'] or st['motion_epoch'] != motion_epoch
+                    or any(abs(a-s) > limit for a,s,limit in zip(actual,setpoint,tolerance))):
+                with self._servo_lock:
+                    if self._motion_epoch == motion_epoch:
+                        self._invalidate_motion_locked()
+                with self._state_lock:
+                    self._state['servo_error'] = 'Arm feedback or position changed. Reconnect to synchronize controls.'
+                break
             dt = interval
             # Cartesian XYZ and joint J1-J4 each share one path-progress value.
             # Independent per-axis slewing bows away from the validated segment
@@ -698,15 +783,19 @@ class DobotMG400:
                 else:
                     setpoint[i] += step
             with self._servo_lock:
+                if not self._servo_running or self._motion_epoch != motion_epoch:
+                    break
                 self._setpoint = list(setpoint)
                 self._vel = list(vel)
             if cartesian:
-                errid, resp = self.servo_p(*setpoint)
+                errid, resp = self.servo_p(*setpoint, expected_epoch=motion_epoch)
             else:
-                errid, resp = self.servo_j(*setpoint, t=t_param)
+                errid, resp = self.servo_j(*setpoint, t=t_param, expected_epoch=motion_epoch)
             if errid != 0:
                 consecutive_errors += 1
                 if consecutive_errors >= 3:
+                    with self._servo_lock:
+                        self._invalidate_motion_locked()
                     with self._state_lock:
                         self._state["servo_error"] = f"{cmd} ErrorID {errid}: {resp}"
                     break
@@ -816,10 +905,21 @@ class DobotMG400:
             self._state["connected"] = False
             self._state["feedback_ok"] = False
             self._state["mode_name"] = "DISCONNECTED"
+        with self._servo_lock:
+            self._invalidate_motion_locked()
+            self._feedback_safe = False
 
     def _apply_feedback(self, parsed):
         mode = parsed["robot_mode"]
         now = time.time()
+        with self._state_lock:
+            previous_stamp = self._state['last_feedback']
+        # Latch even a brief unlock at feedback rate. The slower servo/browser
+        # loops must never miss it and resume a pre-unlock command.
+        with self._servo_lock:
+            if self._feedback_safe and (mode not in SERVO_MODES or now-previous_stamp > FEEDBACK_MAX_AGE):
+                self._invalidate_motion_locked()
+            self._feedback_safe = mode in SERVO_MODES
         # Snapshot the follower's intent first (avoid nesting the servo lock inside
         # the state lock — the servo loop never holds both at once).
         with self._servo_lock:

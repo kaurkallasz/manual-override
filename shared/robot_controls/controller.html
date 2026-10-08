@@ -637,6 +637,7 @@ const WEBCAM_TAGS = `${location.origin}/s/gamemaster/p/webcam/api/tags?space=cor
 const LTX = /\/p\/ltx(?:\/|$)/.test(location.pathname);
 const LTZ = LTX && new URLSearchParams(location.search).has('ltz');
 const MOBILE_LTZ = LTZ && new URLSearchParams(location.search).has('mobile');
+const ARM_STATUS_POLL_MS = MOBILE_LTZ && new URLSearchParams(location.search).has('bridge') ? 100 : 500;
 const LASER_RUN = `${location.origin}/s/gamemaster/p/${LTX ? "laser-tag-x" : "laser-tag"}/api/run`;
 const CART = `${location.origin}/s/${TEAM}/p/cartesian-xyz-test`;
 const AUTO_PPX = LTX || /\/p\/auto-pp-x(?:\/|$)/.test(location.pathname);
@@ -675,6 +676,7 @@ let autoRegistering = false;
 let gameCalibration = {};
 let gameCalibration2 = {};
 let cal2JointGuardCache = null;
+let cal2ReachBoundaryCache = null;
 let cal2PlanningBoundaryCache = null;
 let cal2BoundaryStop = null;
 let latestGameTags = null;
@@ -728,12 +730,18 @@ let userFlipOverride = HAS_STORED_FLIP;
 let latestVisibleArucoTags = [];
 const autoPpxRememberedTags = new Map();
 let autoPpxTagRefreshBusy = false;
+let autoPpxTagRefreshPromise = null;
+let autoPpxCueMap = null;
+let autoPpxVisionWait = null;
+let autoPpxCueOutcome = 'idle';
+let autoPpxCueError = null;
 let autoPpxOptionsSignature = "";
 let autoPpxRunning = false;
 let autoPpxAbort = false;
 let autoPpxCueRunning = false;
 let autoPpxPaused = false;
 let autoPpxPauseWaiting = false;
+let autoPpxPauseGeneration = 0;
 let autoPpxClickOverride = null;
 let autoPpxClickOverrideGeneration = 0;
 let autoPpxCueAtomicDepth = 0;
@@ -761,13 +769,13 @@ function throwIfMotionInterrupted(interruptWhen) {
   if (interruptWhen && interruptWhen()) throw motionInterruptedError();
 }
 
-function beginAutoPpxClickOverride(clickSeq) {
+function beginAutoPpxClickOverride(clickSeq, kind='point') {
   autoPpxClickOverrideGeneration += 1;
-  const override = { id:autoPpxClickOverrideGeneration, clickSeq };
+  const override = { id:autoPpxClickOverrideGeneration, clickSeq, kind };
   autoPpxClickOverride = override;
   autoPpxPauseWaiting = false;
-  setAutoPpxStatus("Click override requested. Finishing any pump command, then moving safely...");
-  log("Cue temporarily overridden by a video click.", "log-info");
+  setAutoPpxStatus(`${kind==='height'?'Height':'Click'} override requested. Finishing any pump command, then moving safely...`);
+  log(`Cue temporarily overridden by ${kind==='height'?'a height control':'a video click'}.`, "log-info");
   return override;
 }
 
@@ -776,11 +784,11 @@ function finishAutoPpxClickOverride(override, reached = false) {
   autoPpxClickOverride = null;
   if (!autoPpxCueRunning) return;
   if (autoPpxPaused) {
-    setAutoPpxStatus("Click override complete. Cue remains paused.", "ok");
+    setAutoPpxStatus("Override complete. Cue remains paused.", "ok");
   } else {
-    setAutoPpxStatus(reached ? "Clicked point reached. Resuming cue..." : "Click override ended. Resuming cue...");
+    setAutoPpxStatus(reached ? `${override.kind==='height'?'Selected height':'Clicked point'} reached. Resuming cue...` : "Override ended. Resuming cue...");
   }
-  log(reached ? "Clicked point reached; cue is resuming where it left off." : "Click override ended; cue is resuming.", reached ? "log-ok" : "log-info");
+  log(reached ? `${override.kind==='height'?'Selected height':'Clicked point'} reached; cue ${autoPpxPaused?'remains paused':'is resuming where it left off'}.` : "Override ended.", reached ? "log-ok" : "log-info");
 }
 
 function cancelAutoPpxClickOverride() {
@@ -795,7 +803,7 @@ async function waitForAutoPpxCueAtomic(override) {
     if (!autoPpxClickOverride || autoPpxClickOverride.id !== override.id || videoClickSeq !== override.clickSeq) {
       throw motionInterruptedError();
     }
-    setAutoPpxStatus(`Click override waiting for ${autoPpxCueAtomicLabel || "the current pump action"} to finish safely...`);
+    setAutoPpxStatus(`Override waiting for ${autoPpxCueAtomicLabel || "the current pump action"} to finish safely...`);
     await delay(50);
   }
 }
@@ -848,13 +856,18 @@ function laserIntent(kind, detail = {}, category = "intent") {
 
 document.body.classList.toggle('mobileLtz', MOBILE_LTZ);
 document.body.classList.toggle('ltzPlayer', LTZ);
-let mobileGame=null,mobileGameAt=0,mobileGameBusy=false,mobileViewActive=true,mobileOwnsMotion=false,mobileGameError='',mobileControlChoice=1,lastMobileTest=null,lastMobileCalibration=null;
+let mobileGame=null,mobileGameAt=0,mobileGameBusy=false,mobileViewActive=true,mobileOwnsMotion=false,mobileGameError='',mobileControlChoice=1,lastMobileControlAssignment=null,lastMobileCalibration=null;
 let mobileCalibrationLoading=null,lastMobileScope=null;
 function mobileConnectionReady(){return !mobileCalibrationLoading&&mobileViewActive&&!document.hidden&&mobileGame?.status==='ready'&&!mobileGame.virtual_play&&!mobileGame.paused&&performance.now()-mobileGameAt<2000&&(mobileGame.journey?.phase==='calibration'?mobileGame.mobile_calibration_connect===true:(!['upgrades','ready'].includes(mobileGame.journey?.phase)||Number.isInteger(mobileGame.virtual_test_control))&&['setup','running'].includes(mobileGame.phase));}
-function mobileRobotReady(){return mobileConnectionReady()&&(mobileGame.journey?.phase!=='calibration'||mobileGame.mobile_calibration_ready===true);}
+function mobileRobotReady(){return mobileConnectionReady()&&(mobileGame.journey?.phase==='calibration'?mobileGame.mobile_calibration_ready===true:mobileGame.mobile_safety?.status==='ready');}
+function mobileCalibrationKeepsSuction(pump){
+ return pump==='suck'&&!mobileGame?.virtual_play&&mobileGame?.journey?.phase==='calibration'
+  &&(mobileGame.journey.calibration_side??mobileGame.journey.active_side)===TEAM
+  &&mobileGame.mobile_calibration_connect===true&&mobileGame.mobile_calibration?.stage!=='complete';
+}
 function haltMobileRobot(){
  pauseUserMoves();autoPpxAbort=true;
- if(mobileOwnsMotion){mobileOwnsMotion=false;api('/api/stop',{});api('/api/pump',{mode:'off'});}
+ if(mobileOwnsMotion){mobileOwnsMotion=false;api('/api/stop',{});if(!mobileCalibrationKeepsSuction(playerJointStatus?.pump_mode))api('/api/pump',{mode:'off'});}
 }
 async function applyMobileGame(value){
   if(!value||value.contract!=='photon.game'||value.version!==2)throw Error('Photon Game contract mismatch');
@@ -869,6 +882,9 @@ async function applyMobileGame(value){
    try{await mobileCalibrationLoading;}finally{mobileCalibrationLoading=null;}
    lastMobileCalibration=calibrationRevision;
   }
+  // Latch a brief positive post-lift sighting from SSE even when the tag is
+  // hidden again before the slower acquisition poll. This can only stop a cue.
+  observeAutoPpxPickupFailure(autoPpxCueDisplayTags());
   renderMobileGameControls();
 }
 async function readMobileGame(){
@@ -878,24 +894,34 @@ async function readMobileGame(){
 async function pollMobileGame(){
  if(mobileGameBusy)return;mobileGameBusy=true;
  try{await applyMobileGame(await readMobileGame());}
- catch(error){mobileGame=null;mobileGameError=error.message;renderMobileGameControls();}
+ catch(error){window.mobileArmDiagnostic?.('game_poll_failed',error.message);mobileGame=null;mobileGameError=error.message;renderMobileGameControls();}
  finally{mobileGameBusy=false;}
 }
 function renderMobileGameControls(){
  const ready=mobileRobotReady(),player=mobileGame?.mobile_progress?.player;
- ltzTier=ready?Number((mobileGame.journey?.calibration_side===TEAM?(mobileGame.mobile_calibration?.stage==='tutorial'?3:2):mobileGame.virtual_test_control)??(mobileGame.phase==='running'?mobileGame.player_progression?.[TEAM]?.control_tier:null)??(mobileGame.journey?.calibration_side===TEAM?(mobileGame.mobile_calibration?.stage==='tutorial'?3:2):player?.current_control_tier)??0):0;
+ const journey=mobileGame?.journey,calibrationSide=journey?.phase==='calibration'?(journey.calibration_side??journey.queue?.[journey.turn??0]??journey.active_side):null;
+ const calibrationTier=calibrationSide===TEAM?(mobileGame.mobile_calibration?.stage==='tutorial'?3:2):null;
+ ltzTier=ready?Number(calibrationTier??mobileGame.virtual_test_control??(mobileGame.phase==='running'?mobileGame.player_progression?.[TEAM]?.control_tier:null)??player?.current_control_tier??0):0;
  if(!Number.isInteger(ltzTier)||ltzTier<0||ltzTier>4)ltzTier=0;
  // Keep the available controls visible while paused/ended; command admission
  // below still rejects motion until fresh physical gameplay is ready.
- const rawTier=Number((mobileGame?.journey?.calibration_side===TEAM?(mobileGame.mobile_calibration?.stage==='tutorial'?3:2):mobileGame?.virtual_test_control)??(mobileGame?.phase==='running'?mobileGame.player_progression?.[TEAM]?.control_tier:null)??player?.current_control_tier??0);
+ const rawTier=Number(calibrationTier??mobileGame?.virtual_test_control??(mobileGame?.phase==='running'?mobileGame.player_progression?.[TEAM]?.control_tier:null)??player?.current_control_tier??0);
  const shown=Number.isInteger(rawTier)&&rawTier>=1&&rawTier<=4?rawTier:1;
- if(mobileGame?.virtual_test_control!==lastMobileTest||mobileGame?.journey?.calibration_side===TEAM||mobileGame?.virtual_test_control==null)mobileControlChoice=shown;lastMobileTest=mobileGame?.virtual_test_control;
+ // Match the mobile player's assignment scope. Calibration temporarily uses
+ // XYZ/Targeting even with a Cue test unlock; leaving the lesson must restore
+ // that unlock so reconnect cannot leave the phone waiting for Cue forever.
+ // Preserve deliberate mode choices while the same assignment remains active.
+ if(mobileGame){
+  const assignment=JSON.stringify([mobileGame.virtual_test_control,player?.id,player?.current_control_tier,calibrationSide,journey?.active_side,journey?.session_id,mobileGame.mobile_calibration?.stage]);
+  if(assignment!==lastMobileControlAssignment||calibrationSide===TEAM||mobileGame.virtual_test_control==null)mobileControlChoice=shown;
+  lastMobileControlAssignment=assignment;
+ }
  const picker=gid('mobilePhysicalControl');picker.value=String(mobileControlChoice);
  for(const option of picker.options)option.disabled=mobileGame?.virtual_test_control==null?Number(option.value)!==shown:Number(option.value)>shown;
  const chosen=mobileControlChoice;
  applyLtxConfig({game_mode:'game_'+chosen,video_click_move:ready&&ltzTier>=3&&chosen>=3,visibility:{joint_angles:chosen===1,tcp_pose:chosen===2||chosen===3,auto_pick_place:chosen===3,auto_pp_x:chosen===4}});
  const heading=document.querySelector('header h1');if(heading)heading.textContent=TEAM[0].toUpperCase()+TEAM.slice(1)+' robot controls';
- gid('runStatus').textContent=ready?'Physical play · '+(player?.name||'Practice'):mobileGame?.paused?'Game paused':mobileGame?.phase==='overrun'||mobileGame?.phase==='won'?'Reset the game to resume controls':mobileGameError||'Waiting for fresh physical game state';
+ gid('runStatus').textContent=ready?'Physical play · '+(player?.name||'Practice'):mobileGame?.paused?'Game paused':mobileGame?.phase==='overrun'||mobileGame?.phase==='won'?'Reset the game to resume controls':mobileGameError||mobileGame?.mobile_safety?.error||'Waiting for fresh physical game state';
  if(mobileGame?.virtual_play)gid('runStatus').textContent='Simulation · use Mobile LTZ to drive the virtual arm';
  if(player){playerName=player.name;gid('playerName').textContent=player.name;}
  if(!ready)haltMobileRobot();
@@ -913,7 +939,7 @@ function connectLtzProgress() {
   ltzProgressEvents = new EventSource(`/s/gamemaster/p/mobile-ltz-api/api/events?side=${TEAM}`);
   const receive=event=>{try{gameState.receive(JSON.parse(event.data));}catch(error){mobileGame=null;mobileGameError=error.message;renderMobileGameControls();}};
   ltzProgressEvents.onmessage=receive;ltzProgressEvents.addEventListener('update',receive);
-  ltzProgressEvents.onerror=()=>{mobileGame=null;mobileGameError='Reconnecting to Photon Game';renderMobileGameControls();};
+  ltzProgressEvents.onerror=()=>{window.mobileArmDiagnostic?.('game_stream_error','Reconnecting to Photon Game');mobileGame=null;mobileGameError='Reconnecting to Photon Game';renderMobileGameControls();};
   pollMobileGame();
   const recovery=setInterval(()=>{if(!mobileGame||performance.now()-mobileGameAt>1000)pollMobileGame();if(!mobileRobotReady())haltMobileRobot();},200);
   window.addEventListener('pagehide', () => ltzProgressEvents.close());
@@ -1246,6 +1272,11 @@ function applyStoredCal2CameraView() {
 async function loadGameCalibration2({ syncCameraView = true } = {}) {
   const data = await gmFetch('/api/calibration2');
   gameCalibration2 = data.calibration || {};
+  const reach=cal2ConfiguredReach();
+  gameRadiusMin=reach ? reach.radius_min : radiusMin;
+  gameRadiusMax=reach ? reach.radius_max : Math.min(radiusMax,440);
+  const hint=document.getElementById('wsHint');
+  if(hint)hint.textContent=`Auto PP safe reach ring ${Math.max(gameRadiusMin,AUTO_PP_BASE_SAFE_RADIUS)}-${gameRadiusMax} mm; Z ${ws.z[0]}-${ws.z[1]} mm.`;
   gameActiveArea = cleanActiveArea((gameCalibration2.playfield || {}).active_area);
   if (syncCameraView) applyStoredCal2CameraView();
   cal2JointGuardCache = null;
@@ -1555,9 +1586,9 @@ function autoPpxTagInsideActiveArea(tag, requireCalibration = false) {
       const corrected = compensateCal2Parallax(Number(tag.nx), Number(tag.ny), tag.id);
       const samples = cal2CalibrationSamples();
       if (samples.length < 6) return !requireCalibration;
-      const boundary = cal2ReachBoundary(samples);
-      if (!pointInsideCalibratedBoundary(boundary, samples, corrected.u, corrected.v)) return false;
-      return robotPointReachable(cal2RawPose(samples, corrected.u, corrected.v));
+      const pose=cal2CameraTargetPose(cal2RawPose(samples, corrected.u, corrected.v),tag.id);
+      return robotPointReachable(pose)
+        && pointInsideRobotPolygon(pose.x,pose.y,cal2RobotPlanningBoundary(),0);
     } catch (_) {
       return !requireCalibration;
     }
@@ -1657,9 +1688,11 @@ function toggleAutoPpxPause() {
   if (!LTX || !autoPpxCueRunning || autoPpxAbort) return;
   autoPpxPaused = !autoPpxPaused;
   if (autoPpxPaused) {
+    autoPpxPauseGeneration += 1;
     autoPpxPauseWaiting = false;
-    setAutoPpxStatus("Pause requested. Finishing the current safe action...");
-    log("Cue pause requested; the current safe action will finish before the queue pauses.", "log-info");
+    setAutoPpxStatus("Pausing cue motion; keeping the current pump state...");
+    log("Cue pause requested; holding the current movement.", "log-info");
+    window.mobileArmDiagnostic?.('cue_pause_requested','Pausing the current cue movement.',{action:'cue_pause'});
   } else {
     setAutoPpxStatus("Resuming cue...");
     log("Cue resumed.", "log-ok");
@@ -1668,10 +1701,12 @@ function toggleAutoPpxPause() {
 }
 async function waitForAutoPpxResume(nextAction = "next action") {
   if (autoPpxAbort) throw new Error("stopped");
+  assertAutoPpxPickupNotFailed();
   if (!autoPpxCueRunning || (!autoPpxPaused && !autoPpxClickOverride)) return;
   let waitedForOverride = false;
   while (autoPpxPaused || autoPpxClickOverride) {
     if (autoPpxAbort) throw new Error("stopped");
+    assertAutoPpxPickupNotFailed();
     if (autoPpxPaused && !autoPpxPauseWaiting) {
       autoPpxPauseWaiting = true;
       setAutoPpxStatus("Cue paused safely. Press Resume to continue.", "ok");
@@ -1804,7 +1839,7 @@ function renderAutoPpxTagOptions(tags) {
     const source = row.querySelector(".autoPpxSource"), target = row.querySelector(".autoPpxTarget");
     if (tags.length > 1 && source.value === target.value) target.value = String(tags.find(tag => String(tag.id) !== source.value).id);
   });
-  if (!autoPpxRunning) {
+  if (!autoPpxRunning && !autoPpxCueError) {
     const liveCount = tags.filter(tag => !tag.obscured).length;
     const cachedCount = tags.length - liveCount;
     const parts = [];
@@ -1815,15 +1850,91 @@ function renderAutoPpxTagOptions(tags) {
   }
   updateAutoPpxControls(tags);
 }
-async function refreshAutoPpxTags() {
-  if (!AUTO_PPX || autoPpxTagRefreshBusy) return latestVisibleArucoTags;
+function autoPpxCueMapKey() {
+  return JSON.stringify([autoPpxCueMap?.epoch, autoPpxCueMap?.scope, gameCalibration2?.revision, gid('flipToggle').checked]);
+}
+function autoPpxCueMapReady() {
+  return autoPpxCueMap?.status === 'ready' && Date.now()-autoPpxCueMap.frameAtLocal <= 1500
+    && autoPpxCueMap.calibrationRevision === gameCalibration2?.revision
+    && (!mobileGame?.mobile_cue_targets || mobileGame.mobile_cue_targets.status==='ready'
+      && mobileGame.mobile_cue_targets.scope===autoPpxCueMap.scope
+      && mobileGame.mobile_cue_targets.epoch===autoPpxCueMap.epoch);
+}
+function autoPpxCueDisplayTags() {
+  if (!autoPpxCueMapReady()) return [];
+  const data=mobileGame?.mobile_cue_targets;
+  // Presentation follows the latest SSE observation, independently of the
+  // slower calibration/acquisition poll. Never promote these display tags to
+  // pickup evidence or restart a detection's age when receiving an update.
+  if (data && performance.now()-mobileGameAt<=1000) {
+    const received=Date.now()-(performance.now()-mobileGameAt);
+    try {
+      const tags=autoPpxCueProjectionTags(data,received);
+      if (data.frame_at>=autoPpxCueMap.frame_at && received-Math.max(0,data.server_time-data.frame_at)*1000>=Date.now()-1500) return tags;
+    } catch (_) { return []; }
+  }
+  return latestVisibleArucoTags;
+}
+function autoPpxCueCandidates(tags=autoPpxCueDisplayTags()) {
+  const owned = mobileGame?.movable_piece_codes?.[TEAM] || [];
+  // The owner labels cached coordinates in each observation. A 350 ms local
+  // timer was shorter than the 750 ms refresh and labelled healthy tags cached.
+  return {sources:owned.map(id=>({id})), destinations:tags.filter(t=>!owned.includes(t.id)).map(t=>({id:t.id,cached:!!t.fixed&&!t.visible}))};
+}
+function autoPpxCueProjectionTags(data,received) {
+  if (data.contract !== 'photon.board.cue-targets' || data.version !== 1
+      || data.status !== 'ready' || data.coordinate_space !== 'corrected-camera-normalized'
+      || !Number.isFinite(data.server_time) || !Number.isFinite(data.frame_at) || !Array.isArray(data.tags))
+    throw Error(data.error || 'Cue camera mapping unavailable.');
+  return data.tags.filter(t=>Number.isInteger(t.id)&&Number.isFinite(t.last_seen)&&Number.isFinite(t.nx)&&Number.isFinite(t.ny))
+    .map(t=>({...gameDisplayTag(t),lastSeenAt:received-Math.max(0,data.server_time-t.last_seen)*1000,
+      frameAt:data.frame_at,obscured:!t.visible}));
+}
+async function readAutoPpxCueTargets(force=false) {
+  const started=Date.now();
+  let data=mobileGame?.mobile_cue_targets, received=Date.now()-(performance.now()-mobileGameAt);
+  if (force || !data || Date.now()-received>1000) {
+    const res = await fetch('/s/gamemaster/p/mobile-ltz-api/api/cue-targets?side='+TEAM,
+      {cache:'no-store', signal:AbortSignal.timeout(1800)});
+    data = await res.json();
+    if (!res.ok) throw Error(data.error || 'Cue camera mapping unavailable.');
+    received=started; // Include the full request delay in the freshness budget.
+  }
+  const tags=autoPpxCueProjectionTags(data,received);
+  autoPpxCueMap = {...data, frameAtLocal:received-Math.max(0,data.server_time-data.frame_at)*1000,
+    calibrationRevision:gameCalibration2?.revision};
+  return tags;
+}
+async function refreshAutoPpxTags({strict=false} = {}) {
+  if (!AUTO_PPX) return latestVisibleArucoTags;
+  if (autoPpxTagRefreshPromise) {
+    const tags = await autoPpxTagRefreshPromise;
+    if (strict && LTZ && !autoPpxCueMapReady()) throw Error(autoPpxCueMap?.error || 'Cue camera mapping unavailable.');
+    return tags;
+  }
+  const pending = refreshAutoPpxTagsNow(strict);
+  autoPpxTagRefreshPromise = pending;
+  try {
+    const tags = await pending;
+    if (strict && LTZ && !autoPpxCueMapReady()) throw Error(autoPpxCueMap?.error || 'Cue camera mapping unavailable.');
+    return tags;
+  } finally { if (autoPpxTagRefreshPromise === pending) autoPpxTagRefreshPromise = null; }
+}
+async function refreshAutoPpxTagsNow(strict=false) {
   autoPpxTagRefreshBusy = true;
   try {
     // Keep this page synchronized with the currently selected calibration,
     // including while the calibration and player pages are already open.
     if (selectedAutoPpxCalibration() === "cal2") await loadGameCalibration2();
     else await loadGameCalibration({ syncCameraView:false });
-    const visibleTags = await readVisibleArucoTags();
+    const visibleTags = LTZ ? await readAutoPpxCueTargets(strict) : await readVisibleArucoTags();
+    if (LTZ) {
+      latestVisibleArucoTags = visibleTags;
+      observeAutoPpxSourceClearance();
+      observeAutoPpxPickupFailure();
+      renderAutoPpxTagOptions(visibleTags);
+      return visibleTags;
+    }
     const visibleIds = new Set(visibleTags.map(tag => Number(tag.id)));
     for (const tag of visibleTags) {
       const id = Number(tag.id);
@@ -1846,6 +1957,7 @@ async function refreshAutoPpxTags() {
     await refreshGameField();
     return latestVisibleArucoTags;
   } catch (e) {
+    if (LTZ) autoPpxCueMap = {...autoPpxCueMap,status:'unavailable',error:e.message};
     // Do not erase working detections or rebuild the dropdowns because of one
     // transient camera/calibration request failure.
     updateAutoPpxControls(latestVisibleArucoTags);
@@ -2233,7 +2345,7 @@ function renderCurrentArmPose(){
   try{
     const camera=cal2CameraForRobotPose(samples,currentArmPose),point=visibleFeedPointFromCamera(camera.u,camera.v);
     addArmTrailPoint(point,currentArmPose);
-    const radius=Math.hypot(currentArmPose.x,currentArmPose.y),radiusMin=autoPpxPlanningRadiusMin();
+    const radius=Math.hypot(currentArmPose.x,currentArmPose.y),radiusMin=Math.max(gameRadiusMin,AUTO_PP_BASE_SAFE_RADIUS);
     const outside=radius<radiusMin||radius>gameRadiusMax;
     marker.hidden=false;
     marker.classList.toggle("out",outside);
@@ -2241,9 +2353,29 @@ function renderCurrentArmPose(){
     marker.textContent=outside?`ARM OUT OF BOUNDS · ${radius.toFixed(1)} mm`:`ARM · ${radius.toFixed(1)} mm`;
   }catch(_){marker.hidden=true;}
 }
+function cal2ConfiguredReach() {
+  const value=gameCalibration2?.motion_envelope;
+  if(value==null)return null; // Older owner: retain the captured bounds.
+  const guard=value.guard;
+  if(value.contract!=='hhh.cal2.reach'||value.version!==1||value.status!=='ready'
+      || !guard || guard.format!=='auto-pp-calibration-2-v1'
+      || !Array.isArray(guard.polygon)||guard.polygon.length<3||guard.polygon.length>128
+      || guard.polygon.some(p=>!Array.isArray(p)||p.length!==2||!p.every(Number.isFinite))
+      || ![guard.radius_min,guard.radius_max,value.physical_radius_max,value.margin_mm].every(Number.isFinite)
+      || guard.radius_min<220||guard.radius_min>=guard.radius_max
+      || value.physical_radius_max>440||value.margin_mm<1
+      || guard.radius_max>value.physical_radius_max-value.margin_mm)
+    throw Error('Validated arm reach envelope unavailable.');
+  return guard;
+}
 function cal2ReachBoundary(samples) {
   if (samples.length < 6) return [];
+  const configured=cal2ConfiguredReach();
+  const key=JSON.stringify([samples,configured,gameRadiusMin,gameRadiusMax,gameReachWorkspace,LTZ]);
+  if(cal2ReachBoundaryCache?.key===key)return cal2ReachBoundaryCache.boundary;
   const poseAt=cal2PoseEvaluator(samples);
+  const polygon=configured?.polygon||calibrationConvexHull(samples.map(p=>({u:p.x,v:p.y}))).map(p=>[p.u,p.v]);
+  const reachable=(u,v)=>{const p=cal2CameraTargetPose(poseAt(u,v),null,configured);return robotPointReachable(p)&&pointInsideRobotPolygon(p.x,p.y,polygon,0);};
   const hull=calibrationConvexHull(samples);
   const center={
     u:hull.reduce((sum,p)=>sum+p.u,0)/hull.length,
@@ -2259,17 +2391,19 @@ function cal2ReachBoundary(samples) {
     let last=0, firstUnsafe=maxDistance;
     for(let step=1;step<=32;step+=1){
       const distance=maxDistance*step/32;
-      if(robotPointReachable(poseAt(center.u+du*distance,center.v+dv*distance))) last=distance;
+      if(reachable(center.u+du*distance,center.v+dv*distance)) last=distance;
       else if(distance>last){firstUnsafe=distance;break;}
     }
     let lo=last, hi=firstUnsafe;
     for(let i=0;i<10&&hi>lo;i+=1){
       const mid=(lo+hi)/2;
-      if(robotPointReachable(poseAt(center.u+du*mid,center.v+dv*mid)))lo=mid;else hi=mid;
+      if(reachable(center.u+du*mid,center.v+dv*mid))lo=mid;else hi=mid;
     }
     points.push({u:center.u+du*lo,v:center.v+dv*lo});
   }
-  return calibrationConvexHull(points);
+  const boundary=calibrationConvexHull(points);
+  cal2ReachBoundaryCache={key,boundary};
+  return boundary;
 }
 function cal2BoundarySvg(hull) {
   const points = hull.map(p => {
@@ -2288,7 +2422,7 @@ function cal2ArmLimitSvg(boundary) {
 }
 function cal2BaseNoGoSvg(samples,outerBoundary) {
   if(samples.length<6||outerBoundary.length<3)return "";
-  const poseAt=cal2PoseEvaluator(samples), radiusMin=autoPpxPlanningRadiusMin();
+  const poseAt=cal2PoseEvaluator(samples), radiusMin=Math.max(gameRadiusMin,AUTO_PP_BASE_SAFE_RADIUS);
   const us=outerBoundary.map(p=>p.u), vs=outerBoundary.map(p=>p.v);
   const minU=Math.max(0,Math.min(...us)), maxU=Math.min(1,Math.max(...us));
   const minV=Math.max(0,Math.min(...vs)), maxV=Math.min(1,Math.max(...vs));
@@ -2343,8 +2477,9 @@ function pointInsideCalibratedBoundary(hull, samples, u, v) {
 function compensateCal2Parallax(u, v, tagId) {
   // IDs in the 100s are the physical 3 cm-tall tags. Their observed camera
   // centres must be mapped through the captured raised-tag locations before
-  // converting them to a robot pose. Flat targets (including the 30s) use
-  // their ground-level camera locations directly.
+  // converting them to a robot pose. Flat targets (30s, 40s and 50s) use
+  // their ground-level camera locations directly. Select by this endpoint's
+  // marker ID, including on drop-off; the carried tag does not select its layer.
   if (Number(tagId) < 100) return {u, v};
   const arm=gameArmCal2(), points=Object.values(arm.parallax_points||{})
     .filter(p=>p&&p.ground&&p.raised).map(p=>{
@@ -2365,23 +2500,40 @@ function compensateCal2Parallax(u, v, tagId) {
     throw Error('Four raised-Atom perspective samples are required for this pickup.');
   }
 }
-function cal2ClickToPose(u, v) {
+function cal2CameraTargetPose(pose, tagId=null, validatedGuard=undefined) {
+  // The camera can place a raised Atom outside the nominal arc even after
+  // the arm dropped it at the edge. Extend the entire camera selection arc
+  // by at most 25 mm, using the same inward correction for pickups, drops,
+  // and image taps. This never expands the robot-space motion guard.
+  if(!LTZ)return pose;
+  const guard=validatedGuard===undefined?cal2ConfiguredReach():validatedGuard,radius=Math.hypot(pose.x,pose.y);
+  if(!guard||!Number.isFinite(radius)||radius<guard.radius_min||radius>guard.radius_max+25)return pose;
+  const inside=r=>pointInsideRobotPolygon(pose.x*r/radius,pose.y*r/radius,guard.polygon,0);
+  if(radius<=guard.radius_max&&inside(radius))return pose;
+  let lo=Math.max(guard.radius_min,guard.radius_max-5),hi=guard.radius_max;
+  if(!inside(lo))return pose; // Rear/base exclusions never gain an allowance.
+  for(let i=0;i<12;i++){
+    const mid=(lo+hi)/2;
+    if(inside(mid))lo=mid;else hi=mid;
+  }
+  const safeRadius=lo-.1,offset=radius-safeRadius;
+  if(offset<=0||offset>25)return pose;
+  return {...pose,x:pose.x*safeRadius/radius,y:pose.y*safeRadius/radius,placement_offset_mm:offset};
+}
+function cal2ClickToPose(u, v, tagId=null) {
   const samples = cal2CalibrationSamples();
   if (samples.length < 6) throw new Error("Auto PP Cal 2 needs all 6 captured outer-edge points");
-  const boundary = cal2ReachBoundary(samples);
-  if (!pointInsideCalibratedBoundary(boundary, samples, u, v)) {
-    throw cal2MotionLimit("target is outside the Auto PP Cal 2 arm limit");
-  }
+  // Validate the actual robot pose; the sampled screen outline is presentation.
   const shared = gameCalibration2.shared_z || {};
-  const z = Number(sliderEls.z && sliderEls.z.value) || Number(shared.transport_height) || 0;
-  const pose = { ...cal2RawPose(samples, u, v), z };
+  const z = Number(sliderEls.z && sliderEls.z.value) || Number(gameArmCal2().transport_height ?? shared.transport_height) || 0;
+  const pose = cal2CameraTargetPose({ ...cal2RawPose(samples, u, v), z },tagId);
   assertAutoPpxPoseSafe(pose, "Auto PP Cal 2 target");
   return pose;
 }
 function clickToPose(u, v, tagId=null) {
   if (AUTO_PPX && selectedAutoPpxCalibration() === "cal2") {
     const corrected=compensateCal2Parallax(u,v,tagId);
-    return cal2ClickToPose(corrected.u,corrected.v);
+    return cal2ClickToPose(corrected.u,corrected.v,tagId);
   }
   const cal = gameArmCal();
   const pts = cal.points || {};
@@ -2423,15 +2575,28 @@ function autoPpxClickOverrideWasSuperseded(override) {
     || !autoPpxCueRunning
     || autoPpxAbort;
 }
-async function performAutoPpxClickOverride(pose, override) {
+async function performAutoPpxClickOverride(pose, override, {heightOnly=false}={}) {
   const interruptWhen = () => autoPpxClickOverrideWasSuperseded(override);
   await waitForAutoPpxCueAtomic(override);
   throwIfMotionInterrupted(interruptWhen);
+  if (heightOnly) {
+    const held=await api('/api/stop',{});
+    if (!held.ok) throw Error(held.error||'Could not hold the arm for a height override.');
+    throwIfMotionInterrupted(interruptWhen);
+  }
   const status = await api("/api/status", null, "GET");
   throwIfMotionInterrupted(interruptWhen);
   if (!Array.isArray(status.pose) || status.pose.length < 3) throw new Error("live arm position is unavailable");
   const current = {x:Number(status.pose[0]), y:Number(status.pose[1]), z:Number(status.pose[2])};
   if (!Object.values(current).every(Number.isFinite)) throw new Error("live arm position is invalid");
+  if (heightOnly) {
+    const target={...current,z:pose.z};
+    assertAutoPpxPoseSafe(target,'Height override target');
+    setAutoPpxStatus('Height override: moving vertically at the current arm position...');
+    await moveToPose(target,'video override height',true,{clickOverride:override,allowDetour:false});
+    throwIfMotionInterrupted(interruptWhen);
+    return target;
+  }
   const transportZ = autoPpxTransportZ();
   if (Math.abs(current.z - transportZ) > 3) {
     setAutoPpxStatus("Click override: lifting vertically to transport height...");
@@ -3254,13 +3419,15 @@ function log(msg, cls="log-info") {
 }
 
 async function api(path, body, method, timeoutMs = 12000) {
+  if(['/api/stop','/api/disconnect','/api/joint-move'].includes(path)){try{window.mobileArmPath?.(null);}catch{}}
   const motion=path==='/api/move'||path==='/api/joint-move'||path==='/api/enable'||path==='/api/pump'&&body?.mode!=='off';
-  if(LTZ&&motion){if(!mobileRobotReady())return {ok:false,error:'Wait for an unpaused physical game and fresh game state.'};mobileOwnsMotion=true;}
+  if(LTZ&&motion){if(!mobileRobotReady())return {ok:false,error:mobileGame?.mobile_safety?.error||'Wait for an unpaused physical game and fresh game state.'};mobileOwnsMotion=true;}
   if (LTZ && (path === '/api/move' || path === '/api/joint-move')) {
     const action = path === '/api/joint-move' ? 'joint' : autoPpxRunning ? 'cue' : (autoPpxClickOverride || body?.ltz_action === 'image') ? 'image' : 'xyz';
     const practice=Number.isInteger(mobileGame?.virtual_test_control)||mobileGame?.journey?.active_side===TEAM;
     if (ltzTier < ({joint:1,xyz:2,image:3,cue:4}[action])||!practice&&ltzTier>1&&action==='joint') return {ok:false,error:'This LTZ control is locked'};
-    body = {...body, ltz_action:action};
+    body = {...body, ltz_action:action, control_session:playerJointStatus?.control_session,
+      motion_epoch:playerJointStatus?.motion_epoch};
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -3312,7 +3479,7 @@ function updateAutoZReadout() {
   if (!out) return;
   const arm = AUTO_PPX ? gameArmCal2() : gameArmCal();
   const cal2Pickup = arm.pickup_height;
-  const cal2Transport = (gameCalibration2.shared_z || {}).transport_height;
+  const cal2Transport = arm.transport_height ?? (gameCalibration2.shared_z || {}).transport_height;
   const pickup = AUTO_PPX
     ? (cal2Pickup == null || cal2Pickup === "" ? NaN : Number(cal2Pickup))
     : (arm.pickup_height && arm.pickup_height.set ? Number(arm.pickup_height.z) : NaN);
@@ -3441,17 +3608,20 @@ function autoPpxPlanningRadiusMin(){
 function cal2RobotPlanningBoundary(){
   const samples=cal2CalibrationSamples();
   if(samples.length<6)throw new Error("Auto PP Cal 2 needs all 6 captured outer-edge points");
-  const key=JSON.stringify([samples,gameRadiusMin,gameRadiusMax,gameReachWorkspace]);
+  const configured=cal2ConfiguredReach();
+  const key=JSON.stringify([samples,configured,gameRadiusMin,gameRadiusMax,gameReachWorkspace,LTZ]);
   if(cal2PlanningBoundaryCache?.key===key)return cal2PlanningBoundaryCache.boundary;
   assertCal2Geometry(samples);
-  // Match the calibration owner's relay envelope: the captured robot-space
-  // hull, not an extrapolation of the camera warp beyond the measured points.
-  const boundary=calibrationConvexHull(samples.map(point=>({u:point.x,v:point.y})))
+  // Camera captures establish the mapping. The owner separately publishes
+  // the permitted robot-space envelope used by the relay and reach display.
+  const boundary=configured?.polygon||calibrationConvexHull(samples.map(point=>({u:point.x,v:point.y})))
     .map(point=>[point.u,point.v]);
   if(boundary.length<3||boundary.some(point=>!point.every(Number.isFinite)))throw new Error("Auto PP Cal 2 planning boundary is invalid");
   cal2PlanningBoundaryCache={key,boundary};return boundary;
 }
-function cal2PathViolations(point,boundary,planning=true){
+// The optional planning margin selects interior detour waypoints. Starts,
+// destinations and executed segments use the same envelope as the relay.
+function cal2PathViolations(point,boundary,planning=false){
   if(!point||![point.x,point.y,point.z].every(Number.isFinite))return [Infinity];
   const radius=Math.hypot(point.x,point.y),minimum=Math.max(gameRadiusMin,AUTO_PP_BASE_SAFE_RADIUS)+(planning?10:0);
   const maximum=gameRadiusMax-(planning?AUTO_PP_OUTER_GUARD_MM:0);
@@ -3464,10 +3634,10 @@ function cal2PathViolations(point,boundary,planning=true){
     ...(gameReachWorkspace.x?[gameReachWorkspace.x[0]-point.x,point.x-gameReachWorkspace.x[1]]:[]),
     ...(gameReachWorkspace.y?[gameReachWorkspace.y[0]-point.y,point.y-gameReachWorkspace.y[1]]:[]),outside].map(v=>Math.max(0,v));
 }
-function cal2PathPointSafe(point,boundary=cal2RobotPlanningBoundary(),planning=true){
+function cal2PathPointSafe(point,boundary=cal2RobotPlanningBoundary(),planning=false){
   return boundary.length>=3&&cal2PathViolations(point,boundary,planning).every(v=>v<1e-7);
 }
-function cal2PathSegmentSafe(start,target,boundary=cal2RobotPlanningBoundary(),{allowCal2ExcludedStart=false,planning=true}={}){
+function cal2PathSegmentSafe(start,target,boundary=cal2RobotPlanningBoundary(),{allowCal2ExcludedStart=false,planning=false}={}){
   if(boundary.length<3||!cal2PathPointSafe(target,boundary,planning))return false;
   let enteredCal2=cal2PathPointSafe(start,boundary,planning);
   // A small measured overshoot can retreat monotonically into the valid field.
@@ -3557,7 +3727,7 @@ function cal2GridDetour(start,target,label,{allowCal2ExcludedStart=false}={}){
   const nodes=new Map();
   for(let x=minX;x<=maxX+.001;x+=step)for(let y=minY;y<=maxY+.001;y+=step){
     const point={x,y,z:start.z};
-    if(cal2PathPointSafe(point,boundary))nodes.set(`${Math.round((x-minX)/step)},${Math.round((y-minY)/step)}`,point);
+    if(cal2PathPointSafe(point,boundary,true))nodes.set(`${Math.round((x-minX)/step)},${Math.round((y-minY)/step)}`,point);
   }
   const anchors=[...nodes.entries()].map(([key,point])=>({key,point,distance:Math.hypot(point.x-start.x,point.y-start.y)}))
     .filter(item=>(allowCal2ExcludedStart||item.distance<=step*2.25)&&cal2PathSegmentSafe(start,item.point,boundary,{allowCal2ExcludedStart})).sort((a,b)=>a.distance-b.distance).slice(0,12);
@@ -3624,6 +3794,7 @@ function planCal2Movement(start,target,label,{allowCal2ExcludedStart=true,allowD
   return dense.concat({...target});
 }
 async function executeCal2Plan(plan,label,interruptWhen=null){
+  try{window.mobileArmPath?.(plan);}catch{}
   if(plan.length>1)log(`${label}: executing ${plan.length} checked waypoints at no more than ${AUTO_PP_PATH_STEP_MM} mm per axis`,"log-info");
   for(let index=0;index<plan.length;index+=1){
     if(autoPpxAbort)throw new Error("stopped");
@@ -3646,7 +3817,7 @@ async function routeCal2TransportAroundBase(start,target,label,interruptWhen=nul
   return executeCal2Plan(plan,label,interruptWhen);
 }
 async function recoverArmFromInnerBoundary(start,target,status){
-  const radiusMin=autoPpxPlanningRadiusMin();
+  const radiusMin=Math.max(gameRadiusMin,AUTO_PP_BASE_SAFE_RADIUS);
   const radius=Math.hypot(start.x,start.y);
   if(radius>=radiusMin)return start;
   if(status.error||Number(status.robot_mode)===9||!status.enabled){
@@ -3710,7 +3881,7 @@ async function guardCal2BaseApproach(status){
     finally{cal2BaseGuardBusy=false;}
     return;
   }
-  const radiusMin=autoPpxPlanningRadiusMin(),radius=Math.hypot(start.x,start.y),targetRadius=Math.hypot(target.x,target.y);
+  const radiusMin=Math.max(gameRadiusMin,AUTO_PP_BASE_SAFE_RADIUS),radius=Math.hypot(start.x,start.y),targetRadius=Math.hypot(target.x,target.y);
   if(radius>gameRadiusMax||targetRadius>gameRadiusMax){
     cal2BaseGuardBusy=true;
     try{
@@ -3776,15 +3947,47 @@ async function moveToPose(pose, label, wait = true, options = {}) {
     && (options.cueOwned === true || AUTO_PPX_CUE_MOTION_LABELS.has(label));
   while (true) {
     if (cueOwned) await waitForAutoPpxResume(label);
+    if (options.resolveTarget) pose = await options.resolveTarget();
     const cueGeneration = cueOwned ? autoPpxClickOverrideGeneration : null;
+    const pauseGeneration = cueOwned ? autoPpxPauseGeneration : null;
+    const mappingKey=cueOwned&&LTZ&&options.resolveTarget?autoPpxCueMapKey():null;
+    const endpointTag=options.endpointTag?.();
+    let visionInterruption=null;
+    const visionChanged=()=>{
+      if(mappingKey===null)return false;
+      // Latch the cause: a poll can recover between interruption and catch.
+      // Missing frames require a hold, not destruction of the acquired pose.
+      visionInterruption ||= !autoPpxCueMapReady() ? 'mapping_unavailable'
+        : autoPpxCueMapKey()!==mappingKey ? 'mapping_changed'
+        : autoPpxCueEndpointChanged(endpointTag) ? 'endpoint_changed' : null;
+      return visionInterruption!==null;
+    };
+    const cueInterrupted=()=>{
+      assertAutoPpxPickupNotFailed();
+      return autoPpxPaused || autoPpxPauseGeneration!==pauseGeneration
+        || autoPpxClickOverrideGeneration!==cueGeneration || visionChanged();
+    };
     const interruptWhen = options.clickOverride
       ? () => autoPpxClickOverrideWasSuperseded(options.clickOverride)
-      : (cueOwned ? () => autoPpxClickOverrideGeneration !== cueGeneration : options.interruptWhen || null);
+      : (cueOwned ? cueInterrupted : options.interruptWhen || null);
     try {
       return await moveToPoseAttempt(pose, label, wait, {...options, cueOwned, interruptWhen});
     } catch (error) {
+      try{window.mobileArmPath?.(null);}catch{}
       if (!cueOwned || !error.motionInterrupted) throw (autoPpxAbort&&cal2BoundaryStop)||error;
-      log(`${label}: click override interrupted this cue movement; it will be retried.`, "log-info");
+      const pauseInterrupted=autoPpxPaused||autoPpxPauseGeneration!==pauseGeneration;
+      if(autoPpxClickOverrideGeneration===cueGeneration && pauseInterrupted){
+        const held=await api('/api/stop',{});
+        if(!held.ok)throw Error(held.error||'Could not pause the arm safely.');
+        window.mobileArmDiagnostic?.('cue_motion_paused',`${label}: arm held; pump unchanged.`,{action:'cue_pause'});
+      }else if(autoPpxClickOverrideGeneration===cueGeneration && visionChanged()){
+        if(visionInterruption!=='mapping_unavailable')options.invalidateTarget?.(visionInterruption);
+        const held=await api('/api/stop',{});
+        if(!held.ok)throw Error(held.error||'Could not hold the arm while camera mapping recovers.');
+        window.mobileArmDiagnostic?.('cue_motion_held',`${label}: ${visionInterruption==='mapping_unavailable'?'camera mapping unavailable; acquired position retained':'target revalidation required'}.`,
+          {tag_id:endpointTag?.id,queue_index:(activeOperation?.queue_index||1)-1,phase:visionInterruption});
+      }
+      log(`${label}: movement held; validating recovery before resuming the current step.`, "log-info");
       await waitForAutoPpxResume(label);
     }
   }
@@ -3830,6 +4033,7 @@ async function moveToPoseAttempt(pose, label, wait = true, options = {}) {
   }
   if(!res){
     throwIfMotionInterrupted(interruptWhen);
+    try{window.mobileArmPath?.([target]);}catch{}
     syncTargetSliders(target, ["x", "y", "z"]);
     res=await api("/api/move", {...target, ...(LTZ ? {ltz_action:label==="video target"?"image":autoPpxRunning?"cue":"xyz"}: {})});
     throwIfMotionInterrupted(interruptWhen);
@@ -3845,9 +4049,10 @@ async function moveToPoseAttempt(pose, label, wait = true, options = {}) {
   }
   log(`${label} -> X ${fmtNum(accepted.x)} Y ${fmtNum(accepted.y)} Z ${fmtNum(accepted.z)}`, "log-ok");
   if (wait) {
-    const requiresTransportArrival=["source hover","lift to moving height","target hover","return to moving height"].includes(label);
-    const requiresExactArrival=requiresTransportArrival||label==="source pickup"||label==="target drop";
-    const settleTolerance=label==="target drop"?AUTO_PP_DROP_TOLERANCE_MM:(requiresExactArrival?3:10);
+    const requiresTransportArrival=["source hover","lift to moving height","target hover","return to moving height","clear view","clear view lift"].includes(label);
+    const heightOverride=label==='video override height';
+    const requiresExactArrival=heightOverride||requiresTransportArrival||label==="source pickup"||label==="target drop";
+    const settleTolerance=heightOverride?{x:3,y:3,z:.05}:label==="target drop"?AUTO_PP_DROP_TOLERANCE_MM:(requiresExactArrival?3:10);
     const arrived = await waitForPose(accepted,requiresExactArrival?30000:18000,settleTolerance,["x","y","z"],interruptWhen);
     if(!arrived.ok&&requiresTransportArrival){
       const firstDetail=poseErrorText(arrived.error);
@@ -3916,7 +4121,8 @@ async function moveToPoseAttempt(pose, label, wait = true, options = {}) {
   return accepted;
 }
 
-async function ensureAutoPpxPickupReady(pose,marker,label){
+async function ensureAutoPpxPickupReady(pose,marker,label,options={}){
+  if(options.resolveTarget)pose=await options.resolveTarget();
   const verify=async()=>{
     const status=await api("/api/status",null,"GET");
     if(!Array.isArray(status.pose)||status.pose.length<3)return null;
@@ -3926,7 +4132,8 @@ async function ensureAutoPpxPickupReady(pose,marker,label){
   if(!error||error.max>3){
     setAutoPpxStatus(`${label}: lowering onto ArUco ${marker} before suction...`);
     log(`ArUco ${marker}: enforcing pickup descent before vacuum`,"log-info");
-    await moveToPose(pose,"source pickup");
+    const restored=await moveToPose(pose,"source pickup",true,options);
+    if(options.resolveTarget)pose=restored;
     error=await verify();
   }
   if(!error||error.max>3){
@@ -3938,7 +4145,8 @@ async function ensureAutoPpxPickupReady(pose,marker,label){
   log(`ArUco ${marker}: pickup pose confirmed before vacuum`,"log-ok");
 }
 
-async function ensureAutoPpxCuePoseReady(pose,label,tolerance){
+async function ensureAutoPpxCuePoseReady(pose,label,tolerance,options={}){
+  if(options.resolveTarget)pose=await options.resolveTarget();
   const verify=async()=>{
     const status=await api("/api/status",null,"GET");
     if(!Array.isArray(status.pose)||status.pose.length<3)return null;
@@ -3947,7 +4155,8 @@ async function ensureAutoPpxCuePoseReady(pose,label,tolerance){
   let error=await verify();
   if(!error||!poseWithinTolerance(error,tolerance,["x","y","z"])){
     log(`${label}: restoring the cue pose after a temporary override`,"log-info");
-    await moveToPose(pose,label);
+    const restored=await moveToPose(pose,label,true,options);
+    if(options.resolveTarget)pose=restored;
     error=await verify();
   }
   if(!error||!poseWithinTolerance(error,tolerance,["x","y","z"])){
@@ -4061,9 +4270,9 @@ function autoPpxBasePickupZ() {
 }
 function autoPpxTransportZ() {
   if (selectedAutoPpxCalibration() === "cal2") {
-    const transport = (gameCalibration2.shared_z || {}).transport_height;
+    const transport = gameArmCal2().transport_height ?? (gameCalibration2.shared_z || {}).transport_height;
     const z = Number(transport);
-    if (transport == null || transport === "" || !Number.isFinite(z)) throw new Error("Auto PP Cal 2 shared transport Z is not calibrated");
+    if (transport == null || transport === "" || !Number.isFinite(z)) throw new Error("Auto PP Cal 2 transport Z is not calibrated");
     return z;
   }
   return calibratedZ("transport_height");
@@ -4116,22 +4325,36 @@ async function captureAutoPpxPoses() {
   return { sourceTag, targetTag, source, target, sourceBase, targetBase };
 }
 
-async function captureAutoPpxQueuePoses() {
+function autoPpxClearViewRow(row) {
+  if(!row||row.action!=='clear_view'||Object.keys(row).some(k=>!['action','direction','distance_cm'].includes(k)))throw Error('Invalid Clear view row.');
+  const direction=row.direction===undefined?'left':row.direction,distance_cm=row.distance_cm===undefined?5:row.distance_cm;
+  if(!['left','right'].includes(direction)||!Number.isFinite(distance_cm)||distance_cm<.1||distance_cm>50)throw Error('Clear view: choose left or right and a distance from 0.1 to 50 cm.');
+  return {action:'clear_view',direction,distance_cm};
+}
+
+async function captureAutoPpxQueuePoses(program=null) {
   if (selectedAutoPpxCalibration() === "cal2") await loadGameCalibration2();
   else await loadGameCalibration();
   await refreshGameField();
   const tags = await refreshAutoPpxTags();
-  return autoPpxQueueIds().map((ids, index) => {
+  const idsList=Array.isArray(program)?program.map(row=>row.action==='clear_view'?autoPpxClearViewRow(row):{source:String(row.piece),target:String(row.destination)}):autoPpxQueueIds();
+  return idsList.map((ids, index) => {
+    if(ids.action==='clear_view'){
+      if(index===0||idsList[index-1].action)throw Error('Clear view must follow a placement.');
+      return autoPpxClearViewRow(ids);
+    }
     if (!ids.source || !ids.target) throw new Error(`choose both ArUco codes on queue line ${index + 1}`);
     if (ids.source === ids.target) throw new Error(`source and target must differ on queue line ${index + 1}`);
     const sourceTag = tags.find(tag => String(tag.id) === ids.source);
     const targetTag = tags.find(tag => String(tag.id) === ids.target);
     if (!sourceTag && Number(ids.source) < 100) throw new Error(`queue line ${index + 1} has no known source tag position`);
-    if (!targetTag) throw new Error(`queue line ${index + 1} has no known target tag position`);
+    if (!targetTag && !LTZ) throw new Error(`queue line ${index + 1} has no known target tag position`);
     const resolvedSourceTag = sourceTag || { id:Number(ids.source), obscured:true };
-    const sourceBase = sourceTag ? clickToPose(sourceTag.nx, sourceTag.ny, sourceTag.id) : null;
-    const targetBase = clickToPose(targetTag.nx, targetTag.ny, targetTag.id);
-    return { sourceTag:resolvedSourceTag, targetTag, sourceBase, targetBase, source:sourceBase ? autoPpxOffsetPose(sourceBase) : null, target:autoPpxOffsetPose(targetBase) };
+    // LTZ acquires and validates only the current row when it starts.
+    const sourceBase = !LTZ && sourceTag ? clickToPose(sourceTag.nx, sourceTag.ny, sourceTag.id) : null;
+    const targetBase = !LTZ && targetTag ? clickToPose(targetTag.nx, targetTag.ny, targetTag.id) : null;
+    return { sourceTag:resolvedSourceTag, targetTag:targetTag || {id:Number(ids.target),obscured:true}, sourceBase, targetBase,
+      source:sourceBase ? autoPpxOffsetPose(sourceBase) : null, target:targetBase ? autoPpxOffsetPose(targetBase) : null };
   });
 }
 
@@ -4139,7 +4362,195 @@ function autoPpxIsPhysicalTag(tag) {
   return Number(tag && tag.id) >= 100;
 }
 
+function assertAutoPpxVisionSession() {
+  if (autoPpxAbort || !autoPpxCueRunning) throw Error('stopped');
+  assertAutoPpxPickupNotFailed();
+  if (!mobileRobotReady()) throw Error('Physical game or calibration unavailable. Connect to resume.');
+}
+function setAutoPpxVisionWait(id, endpoint, index, phase='mapping', detail='') {
+  const reason = phase === 'reach'
+    ? `Row ${index+1}: ${endpoint==='source'?'piece':'destination'} #${id} is mapped but outside this arm's permitted area. ${detail} ${endpoint==='source'?'Reposition the piece within the calibrated area.':'Stop and choose a reachable destination.'}`
+    : phase === 'confirming'
+    ? `Confirming ${endpoint==='source'?'piece':'destination'} #${id}: waiting for consistent recent sightings.${detail ? ' '+detail : ''} Brief detection gaps are allowed; keep the Atom in place.`
+    : phase === 'camera'
+    ? `Waiting for fresh camera mapping for #${id}.${detail ? ' '+detail : ''}`
+    : phase === 'camera_retained'
+    ? `Holding for camera mapping to recover. The acquired ${endpoint==='source'?'piece':'destination'} #${id} position is retained for this move; its tag can remain hidden.${detail?' '+detail:''}`
+    : phase === 'occupied'
+    ? `Destination #${id} is covered by an Atom. Clear the destination, or Stop and select that Atom as a stacking target. The cue will wait here.`
+    : phase === 'quarantined'
+    ? `Waiting to verify marker #${id} after a conflicting camera detection. Its old position cannot start a new approach; reveal the marker to acquire it again.`
+    : `Waiting for the camera to map ${endpoint === 'source' ? 'piece' : 'destination'} #${id}. If the arm is hiding the tag, you can tap another reachable point to reveal it; otherwise leave the arm in place.${id >= 100 ? ' Check the Atom battery if its tag stays dark.' : ''} The cue will continue when the tag is mapped.`;
+  const key = `${id}:${endpoint}:${index}:${phase}`;
+  if (autoPpxVisionWait?.key !== key) window.mobileArmDiagnostic?.('cue_waiting',reason,{tag_id:id,queue_index:index,phase});
+  autoPpxVisionWait = {key,tag_id:id,endpoint,index,phase,message:reason,operation_id:activeOperation?.operation_id||null};
+  setAutoPpxStatus(reason, 'err');
+}
+function autoPpxCueAcquisitionReady(tag, notBefore=0) {
+  if (!tag || tag.lastSeenAt<notBefore) return false;
+  const age=Date.now()-tag.lastSeenAt;
+  // New evidence qualifies several consistent sightings across short gaps.
+  // Old servers retain their original, stricter visible/stable requirement.
+  return age>=0 && (tag.acquirable===true ? age<=750
+    : tag.acquirable==null && tag.visible===true && tag.stable===true && age<=350);
+}
+async function waitForAutoPpxMappedEndpoint(saved, endpoint, index, notBefore=0) {
+  const tagKey=endpoint==='source'?'sourceTag':'targetTag',baseKey=endpoint==='source'?'sourceBase':'targetBase',id=Number(saved[tagKey].id);
+  let lastError='';
+  try {
+    while (true) {
+      assertAutoPpxVisionSession();
+      await waitForAutoPpxResume(`mapping ArUco ${id}`);
+      const generation=autoPpxClickOverrideGeneration;
+      try { await refreshAutoPpxTags({strict:true}); lastError=''; }
+      catch (error) { lastError=error.message; }
+      assertAutoPpxVisionSession();
+      if (generation!==autoPpxClickOverrideGeneration || autoPpxClickOverride || autoPpxPaused) continue;
+      const observed=autoPpxCueMapReady()&&latestVisibleArucoTags.find(t=>t.id===id);
+      const tag=observed&&(observed.fixed===true || autoPpxCueAcquisitionReady(observed,notBefore))&&observed;
+      const blocked=endpoint==='target'&&tag?.fixed&&(tag.covered_by||[]).some(other=>other!==Number(saved.sourceTag.id));
+      if (tag && !blocked) {
+        if (!autoPpxTagInsideActiveArea(tag,true)) {
+          setAutoPpxVisionWait(id,endpoint,index,'reach');
+          await delay(150);continue;
+        }
+        let base;
+        try { base=clickToPose(tag.nx,tag.ny,id); }
+        catch(error) {
+          if(error.code!=='motion_limit')throw Error(`Row ${index+1}: ${endpoint==='source'?'piece':'destination'} #${id}: ${error.message}`);
+          setAutoPpxVisionWait(id,endpoint,index,'reach',error.message);
+          await delay(150);continue;
+        }
+        saved[tagKey]={...tag};saved[baseKey]=base;saved[endpoint]=autoPpxOffsetPose(base);
+        saved.mappingKey=autoPpxCueMapKey();
+        if(autoPpxVisionWait){
+          window.mobileArmDiagnostic?.('cue_reacquired',`ArUco ${id} reacquired; replanning current step.`,{tag_id:id,queue_index:index});
+          setAutoPpxStatus(`Row ${index+1}: ${endpoint==='source'?'piece':'destination'} #${id} acquired. Resuming cue...`,'ok');
+        }
+        return tag;
+      }
+      const recent=observed&&id>=100&&Date.now()-observed.lastSeenAt<=1500;
+      const quarantined=autoPpxCueMapReady()&&autoPpxCueMap.quarantined_tags?.some(t=>t.id===id);
+      setAutoPpxVisionWait(id,endpoint,index,blocked?'occupied':lastError||!autoPpxCueMapReady()?'camera':quarantined?'quarantined':recent?'confirming':'mapping',
+        lastError||(recent?`Latest sighting ${Math.max(0,Date.now()-observed.lastSeenAt).toFixed(0)} ms ago.`:''));
+      await delay(150);
+    }
+  } finally { autoPpxVisionWait=null; }
+}
+
+function autoPpxCueEndpointChanged(tag) {
+  if (!tag) return false;
+  const current=latestVisibleArucoTags.find(item=>item.id===tag.id);
+  if (tag.fixed) {
+    const occupancy=current||autoPpxCueMap?.quarantined_tags?.find(item=>item.id===tag.id);
+    return !!occupancy?.covered_by?.some(id=>id!==activeOperation?.physical_tag);
+  }
+  // Missing/partial detections are expected near the arm. Only qualified,
+  // newer evidence at a different position can invalidate this acquisition.
+  return !!(current && current.lastSeenAt>tag.lastSeenAt && autoPpxCueAcquisitionReady(current)
+    && Math.hypot(current.nx-tag.nx,current.ny-tag.ny)>.004);
+}
+function observeAutoPpxSourceClearance() {
+  const operation=activeOperation,evidence=operation?.sourceEvidence;
+  if (!operation?.carryStartedAt || operation.sourceCleared || !evidence || !autoPpxCueMapReady()
+      || evidence.mappingKey!==autoPpxCueMapKey()) return;
+  const marker=latestVisibleArucoTags.find(tag=>evidence.coveredMarkers.includes(tag.id)
+    && tag.visible && tag.lastSeenAt>=operation.carryStartedAt && Date.now()-tag.lastSeenAt<=350);
+  if (!marker) return;
+  operation.sourceCleared=true;
+  // Supporting departure evidence only. Never move the Atom's stored position,
+  // confirm its grip, or emit gameplay placement from a revealed lower marker.
+  window.mobileArmDiagnostic?.('cue_source_clear',
+    `Marker #${marker.id} is visible again; supports Atom #${operation.physical_tag} leaving its source. Destination still needs visual confirmation.`,
+    {tag_id:operation.physical_tag,queue_index:operation.queue_index-1,phase:'source_clear'});
+}
+function observeAutoPpxPickupFailure(tags=latestVisibleArucoTags) {
+  const operation=activeOperation;
+  if(!LTZ||!autoPpxCueRunning||!operation?.pickupLiftedAt||operation.releaseStartedAt
+      ||operation.pickupFailure||!autoPpxCueMapReady())return;
+  const tag=tags.find(item=>item.id===operation.physical_tag && item.id>=100
+    && item.visible===true && item.lastSeenAt>=operation.pickupLiftedAt
+    && Date.now()-item.lastSeenAt>=0 && Date.now()-item.lastSeenAt<=350);
+  if(!tag)return;
+  operation.pickupFailure=`Pickup failed: piece #${tag.id} was seen on the playfield after the lift. Cue stopped. Check the piece and gripper, then press Play to retry.`;
+  window.mobileArmDiagnostic?.('cue_pickup_failed',operation.pickupFailure,
+    {tag_id:tag.id,queue_index:operation.queue_index-1,phase:'after_lift'});
+}
+function assertAutoPpxPickupNotFailed() {
+  observeAutoPpxPickupFailure();
+  if(activeOperation?.pickupFailure)throw Object.assign(Error(activeOperation.pickupFailure),{code:'pickup_failed'});
+}
+function createAutoPpxEndpointResolver(saved, endpoint, index) {
+  // Created inside one row/attempt, never stored in the queue or shared cache.
+  const operation=activeOperation;
+  const tagKey=endpoint==='source'?'sourceTag':'targetTag',baseKey=endpoint==='source'?'sourceBase':'targetBase';
+  let retained=null,notBefore=Date.now();
+  const invalidate=(reason='target_changed')=>{
+    let detail=reason;
+    if(retained&&reason==='mapping_changed'){
+      const before=JSON.parse(retained.mappingKey),after=JSON.parse(autoPpxCueMapKey());
+      detail+=': '+['camera/map epoch','layout','arm calibration','camera view'].filter((_,i)=>before[i]!==after[i]).join(', ');
+      if(before[0]!==after[0]&&autoPpxCueMap.epoch_reason==='fixed_marker_changed'&&Number.isInteger(autoPpxCueMap.epoch_marker_id))
+        detail+=`; fixed marker #${autoPpxCueMap.epoch_marker_id} moved`;
+    }
+    if(retained)window.mobileArmDiagnostic?.('cue_target_invalidated',
+      `Row ${index+1}: ${endpoint} #${saved[tagKey].id} requires a new acquisition (${detail}).`,
+      {tag_id:saved[tagKey].id,queue_index:index,phase:reason});
+    retained=null;notBefore=Date.now();
+  };
+  const resolve=async()=>{
+    let waitingForMap=false;
+    try {
+      while(true){
+        assertAutoPpxVisionSession();
+        if (!operation || activeOperation!==operation) throw Error('stopped');
+        await waitForAutoPpxResume(`approaching ArUco ${saved[tagKey].id}`);
+        assertAutoPpxVisionSession();
+        if (activeOperation!==operation) throw Error('stopped');
+        if(retained && retained.generation!==autoPpxClickOverrideGeneration)invalidate('player_intervention');
+        if(retained && !autoPpxCueMapReady()){
+          waitingForMap=true;
+          setAutoPpxVisionWait(saved[tagKey].id,endpoint,index,'camera_retained');
+          // A fresh map is required to resume, but the occluded tag need not
+          // reappear. Compare identities only after valid mapping returns.
+          try{await refreshAutoPpxTags({strict:true});}
+          catch(error){setAutoPpxVisionWait(saved[tagKey].id,endpoint,index,'camera_retained',error.message);}
+          if(!autoPpxCueMapReady())await delay(150);
+          continue;
+        }
+        if(retained && retained.mappingKey!==autoPpxCueMapKey())invalidate('mapping_changed');
+        if(retained && autoPpxCueEndpointChanged(retained.tag))invalidate('endpoint_changed');
+        if(!retained){
+          const tag=await waitForAutoPpxMappedEndpoint(saved,endpoint,index,notBefore);
+          assertAutoPpxVisionSession();
+          if(activeOperation!==operation)throw Error('stopped');
+          retained={tag:{...tag},base:{...saved[baseKey]},pose:{...saved[endpoint]},
+            mappingKey:autoPpxCueMapKey(),generation:autoPpxClickOverrideGeneration};
+          if(endpoint==='source')operation.sourceEvidence={mappingKey:retained.mappingKey,
+            coveredMarkers:latestVisibleArucoTags.filter(item=>item.fixed&&!item.visible&&item.covered_by?.includes(tag.id)).map(item=>item.id)};
+          const layer=tag.id>=100?'raised-tag':'ground';
+          const inset=retained.base.placement_offset_mm||0;
+          const tuning=Math.hypot(retained.pose.x-retained.base.x,retained.pose.y-retained.base.y);
+          window.mobileArmDiagnostic?.('cue_target_acquired',
+            `Row ${index+1}: ${endpoint} #${tag.id} retained with Cal 2 ${layer} layer; reach inset ${inset.toFixed(2)} mm; XY tuning ${tuning.toFixed(2)} mm.`,
+            {tag_id:tag.id,queue_index:index,phase:endpoint,calibration_layer:layer,
+              calibration_revision:gameCalibration2?.revision,placement_offset_mm:inset,tuning_offset_mm:tuning});
+        }else if(waitingForMap){
+          window.mobileArmDiagnostic?.('cue_mapping_recovered',`Camera mapping recovered; resuming ${endpoint} #${retained.tag.id} at its acquired position.`,
+            {tag_id:retained.tag.id,queue_index:index,phase:endpoint});
+          setAutoPpxStatus(`Camera mapping recovered. Resuming ${endpoint==='source'?'pickup':'drop-off'} at the acquired #${retained.tag.id} position...`,'ok');
+        }
+        saved[tagKey]={...retained.tag};saved[baseKey]={...retained.base};saved[endpoint]={...retained.pose};
+        return retained.tag;
+      }
+    }finally{autoPpxVisionWait=null;}
+  };
+  resolve.invalidate=invalidate;
+  return resolve;
+}
+
 async function refreshAutoPpxPhysicalEndpoint(saved, endpoint, queueIndex, trustedPlacement = null) {
+  if (LTZ) return waitForAutoPpxMappedEndpoint(saved,endpoint,queueIndex);
   const tagKey = endpoint === "source" ? "sourceTag" : "targetTag";
   const baseKey = endpoint === "source" ? "sourceBase" : "targetBase";
   const tag = saved[tagKey];
@@ -4506,32 +4917,50 @@ async function preflightAutoPpxQueue(queue,movingZ){
   return {segmentCount,adjustedCount};
 }
 
-async function runAutoPpx() {
+function autoPpxClearViewTarget(origin,viewRotation,row={action:'clear_view'}) {
+  const clear=autoPpxClearViewRow(row),distance=clear.distance_cm*10;
+  if(!origin||!['x','y','z'].every(k=>Number.isFinite(origin[k]))||(viewRotation!==0&&viewRotation!==180))throw Error('Clear view needs a measured arm position and valid camera view.');
+  const samples=cal2CalibrationSamples(),camera=cal2CameraForRobotPose(samples,origin),at=cal2PoseEvaluator(samples);
+  const sign=(viewRotation===180?1:-1)*(gid('flipToggle').checked?-1:1)*(clear.direction==='right'?-1:1);
+  const a=at(camera.u,camera.v),b=at(camera.u+sign*.001,camera.v),dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy);
+  if(!Number.isFinite(length)||length<1e-6)throw Error('Clear view camera direction is unavailable.');
+  const target={...origin,x:origin.x+distance*dx/length,y:origin.y+distance*dy/length};
+  assertAutoPpxPoseSafe(target,'Clear view');
+  return target;
+}
+
+async function runAutoPpx(program=null,{viewRotation=0}={}) {
   if (autoPpxRunning) return;
+  // DOM click events are not mobile programs. Only the authenticated bridge
+  // supplies an explicit program containing placement and Clear view rows.
+  if(!Array.isArray(program))program=null;
   autoPpxRunning = true;
   autoPpxAbort = false;
-  cancelAutoPpxClickOverride();
   autoPpxCueRunning = true;
   autoPpxCueAtomicDepth = 0;
   autoPpxCueAtomicLabel = "";
   autoPpxPaused = false;
+  autoPpxVisionWait = null;
+  autoPpxCueOutcome = 'running';
+  autoPpxCueError = null;
   autoPpxPauseWaiting = false;
-  gid("autoPpxGo").disabled = true;
-  gid("autoPpxStop").disabled = false;
-  updateAutoPpxPauseControl();
-  gid("autoPpxRefresh").disabled = true;
-  gid("autoPpxFineTune").disabled = true;
-  gid("autoPpxAddFinePoint").disabled = true;
-  gid("autoPpxClearFineCal").disabled = true;
-  gid("autoPpxQueue").querySelectorAll("select,button").forEach(el => { el.disabled = true; });
-  gid("autoPpxLoop").disabled = true;
-  activeOperation = null;
-  // Most recent robot-confirmed release for each physical tag.  This exists
-  // only for the current Go run and is used solely for an immediate repeated
-  // pickup while the returning arm obscures the tag from the camera.
+  // Keep startup failures inside the same cleanup/reporting path as motion.
+  // LTX may reuse a robot-confirmed release during its current run; LTZ
+  // acquires each new pickup from the camera instead.
   const trustedPhysicalPlacements = new Map();
   try {
-    await laserIntent("script_started", {queue:autoPpxQueueIds()}, "lifecycle");
+    cancelAutoPpxClickOverride();
+    gid("autoPpxGo").disabled = true;
+    gid("autoPpxStop").disabled = false;
+    updateAutoPpxPauseControl();
+    gid("autoPpxRefresh").disabled = true;
+    gid("autoPpxFineTune").disabled = true;
+    gid("autoPpxAddFinePoint").disabled = true;
+    gid("autoPpxClearFineCal").disabled = true;
+    gid("autoPpxQueue").querySelectorAll("select,button").forEach(el => { el.disabled = true; });
+    gid("autoPpxLoop").disabled = true;
+    activeOperation = null;
+    await laserIntent("script_started", {queue:program||autoPpxQueueIds()}, "lifecycle");
     await waitForAutoPpxResume("cue preflight");
     assertReadyForAutoAction();
     // Verify the complete browser -> player proxy -> relay receipt path before
@@ -4543,14 +4972,14 @@ async function runAutoPpx() {
     setAutoPpxStatus("Verifying operation-scoped pump receipts...");
     await runAutoPpxCueAtomic("pump receipt preflight", () => setPumpMode("off", "pump receipt preflight", receiptProbeId));
     setAutoPpxStatus("Saving queue positions from visible ArUco tags...");
-    const queue = await captureAutoPpxQueuePoses();
-    await recoverTrustedPhysicalPlacements(queue, trustedPhysicalPlacements);
+    const queue = await captureAutoPpxQueuePoses(program);
+    if (!LTZ) await recoverTrustedPhysicalPlacements(queue, trustedPhysicalPlacements);
     const unresolved = queue.findIndex(item => !item.source || !item.sourceBase);
-    if (unresolved >= 0) throw new Error(`physical ArUco ${queue[unresolved].sourceTag.id} on queue line ${unresolved + 1} has neither a fresh detection nor a robot-confirmed active-run placement`);
+    if (!LTZ && unresolved >= 0) throw new Error(`physical ArUco ${queue[unresolved].sourceTag.id} on queue line ${unresolved + 1} has neither a fresh detection nor a robot-confirmed active-run placement`);
     const movingZ = autoPpxTransportZ();
     const loop = gid("autoPpxLoop").checked;
     setAutoPpxStatus("Checking the complete movement plan for boundary collisions...");
-    await preflightAutoPpxQueue(queue,movingZ);
+    if (!LTZ) await preflightAutoPpxQueue(queue,movingZ);
     setAutoPpxStatus("Movement plan is safe. Starting Auto PP X...","ok");
     let pass = 0;
     do {
@@ -4560,6 +4989,23 @@ async function runAutoPpx() {
         const saved = queue[index];
         const progress = `Queue ${index + 1}/${queue.length}${loop ? ` · loop ${pass}` : ""}`;
         await waitForAutoPpxResume(progress);
+        if(saved.action==='clear_view'){
+          if(!LTZ||index===0||queue[index-1].action)throw Error('Clear view must follow a placement.');
+          const clear=autoPpxClearViewRow(saved);
+          activeOperation={queue_index:index+1,queue_length:queue.length,clear_view:true};
+          setAutoPpxStatus(`${progress}: Clear view · moving ${clear.distance_cm} cm ${clear.direction}...`);
+          const status=await api('/api/status',null,'GET');
+          if(status.pump_mode!=='off'||!Array.isArray(status.pose)||status.pose.length<3)throw Error('Clear view needs fresh arm position and the pump off.');
+          const origin={x:status.pose[0],y:status.pose[1],z:movingZ};
+          const clearTarget=autoPpxClearViewTarget(origin,viewRotation,clear);
+          // Lift before any lateral motion; keep this one target through Pause
+          // and intervention so a retry cannot add another displacement.
+          if(Math.abs(status.pose[2]-movingZ)>3)await moveToPose(origin,'clear view lift',true,{cueOwned:true});
+          await moveToPose(clearTarget,'clear view',true,{cueOwned:true});
+          window.mobileArmDiagnostic?.('cue_view_cleared',`Moved ${clear.distance_cm} cm ${clear.direction} after placement; camera can observe the destination.`,{queue_index:index,...clear});
+          activeOperation=null;
+          continue;
+        }
         let eventBase = null;
         let pickupAttempt = 0;
         let sourceHover;
@@ -4572,32 +5018,58 @@ async function runAutoPpx() {
           eventBase = activeOperation = {operation_id:operationId, queue_index:index + 1, queue_length:queue.length, loop:pass, attempt:pickupAttempt, physical_tag:Number(saved.sourceTag.id), target_marker:targetId, destination};
           await laserIntent("operation_started", eventBase, "lifecycle");
           if (autoPpxAbort) throw new Error("stopped");
-          await confirmTrustedPhysicalPlacements(trustedPhysicalPlacements);
-          await refreshAutoPpxPhysicalEndpoint(saved, "source", index, trustedPhysicalPlacements.get(Number(saved.sourceTag.id)));
+          const sourceEndpoint=LTZ?createAutoPpxEndpointResolver(saved,'source',index):null;
+          if (LTZ) {
+            await refreshAutoPpxPhysicalEndpoint(saved,"target",index);
+            // Acquire once, after destination validation, then keep this same
+            // resolver through hover, descent and the pre-vacuum pose check.
+            await sourceEndpoint();
+            await preflightAutoPpxQueue([saved],movingZ);
+          }else{
+            await confirmTrustedPhysicalPlacements(trustedPhysicalPlacements);
+            await refreshAutoPpxPhysicalEndpoint(saved,"source",index,trustedPhysicalPlacements.get(Number(saved.sourceTag.id)));
+          }
           sourceHover = { ...saved.source, z:movingZ };
-          const sourcePickup = { ...saved.source, z:autoPpxPickupZForPose(saved.sourceBase, true) };
+          let sourcePickup = { ...saved.source, z:autoPpxPickupZForPose(saved.sourceBase, true) };
+          const resolveSource=async(height)=>{
+            await sourceEndpoint();
+            sourceHover={...saved.source,z:movingZ};
+            sourcePickup={...saved.source,z:autoPpxPickupZForPose(saved.sourceBase,true)};
+            return height==='hover'?sourceHover:sourcePickup;
+          };
+          const sourceOptions=height=>LTZ?{resolveTarget:()=>resolveSource(height),endpointTag:()=>saved.sourceTag,invalidateTarget:sourceEndpoint.invalidate}:{};
           const attemptText = pickupAttempt > 1 ? ` (attempt ${pickupAttempt})` : "";
           setAutoPpxStatus(`${progress}: moving over ArUco ${saved.sourceTag.id}${attemptText}...`);
           await laserIntent("source_hover", eventBase);
-          await moveToPose(sourceHover, "source hover");
+          await moveToPose(sourceHover, "source hover",true,sourceOptions('hover'));
           await waitForAutoPpxResume("source pickup");
           setAutoPpxStatus(`${progress}: picking up ArUco ${saved.sourceTag.id}${attemptText}...`);
           await laserIntent("source_pickup", eventBase);
-          await moveToPose(sourcePickup, "source pickup");
+          await moveToPose(sourcePickup, "source pickup",true,sourceOptions('pickup'));
           await waitForAutoPpxResume("pickup confirmation");
           await waitForAutoPpxResume("vacuum start");
-          await ensureAutoPpxPickupReady(sourcePickup,saved.sourceTag.id,progress);
+          await ensureAutoPpxPickupReady(sourcePickup,saved.sourceTag.id,progress,sourceOptions('pickup'));
           await runAutoPpxCueAtomic("vacuum start", async () => {
             await laserIntent("suction_start", eventBase);
             const result = await setPumpMode("suck", "vacuum on", eventBase.operation_id);
+            if (LTZ) eventBase.carryStartedAt=Date.now();
             await laserIntent("suction_completed", {...eventBase, pump_command_seq:result.command_seq}, "command");
           });
           await delay(250);
           await waitForAutoPpxResume("lift to moving height");
           await laserIntent("lift", eventBase);
           await moveToPose(sourceHover, "lift to moving height");
+          if(LTZ){
+            eventBase.pickupLiftedAt=Date.now();
+            await refreshAutoPpxTags();
+            assertAutoPpxPickupNotFailed();
+            eventBase.pickupComplete=true;
+          }
           await waitForAutoPpxResume("pickup check");
-          if (!autoPpxIsPhysicalTag(saved.sourceTag)) break;
+          if (LTZ) observeAutoPpxSourceClearance();
+          // Hidden tags remain usable, but a fresh post-lift sighting stops
+          // this row. Do not retry automatically or claim a successful grip.
+          if (LTZ || !autoPpxIsPhysicalTag(saved.sourceTag)) break;
           setAutoPpxStatus(`${progress}: checking pickup of ArUco ${saved.sourceTag.id}...`);
           await delay(350);
           if (!(await autoPpxPhysicalTagIsVisible(saved.sourceTag))) break;
@@ -4608,19 +5080,29 @@ async function runAutoPpx() {
           await delay(250);
         } while (true);
         await waitForAutoPpxResume("target approach");
-        await refreshAutoPpxPhysicalEndpoint(saved, "target", index);
-        const targetHover = { ...saved.target, z:movingZ };
-        const targetDrop = { ...saved.target, z:autoPpxDropZForTarget(saved.targetBase, saved.targetTag, true) };
+        const targetEndpoint=LTZ?createAutoPpxEndpointResolver(saved,'target',index):null;
+        if(LTZ)await targetEndpoint();else await refreshAutoPpxPhysicalEndpoint(saved,"target",index);
+        let targetHover = { ...saved.target, z:movingZ };
+        let targetDrop = { ...saved.target, z:autoPpxDropZForTarget(saved.targetBase, saved.targetTag, true) };
+        const resolveTarget=async(height)=>{
+          await targetEndpoint();
+          targetHover={...saved.target,z:movingZ};
+          targetDrop={...saved.target,z:autoPpxDropZForTarget(saved.targetBase,saved.targetTag,true)};
+          return height==='hover'?targetHover:targetDrop;
+        };
+        const targetOptions=height=>LTZ?{resolveTarget:()=>resolveTarget(height),endpointTag:()=>saved.targetTag,invalidateTarget:targetEndpoint.invalidate}:{};
         setAutoPpxStatus(`${progress}: moving to ArUco ${saved.targetTag.id}...`);
         await laserIntent("target_hover", eventBase);
-        await moveToPose(targetHover, "target hover");
+        await moveToPose(targetHover, "target hover",true,targetOptions('hover'));
         await waitForAutoPpxResume("target descent");
         setAutoPpxStatus(`${progress}: dropping at ArUco ${saved.targetTag.id}...`);
         await laserIntent("target_descent_started", eventBase);
-        const acceptedDrop = await moveToPose(targetDrop, "target drop");
+        const acceptedDrop = await moveToPose(targetDrop, "target drop",true,targetOptions('drop'));
         await waitForAutoPpxResume("release");
-        await ensureAutoPpxCuePoseReady(targetDrop,"target drop",AUTO_PP_DROP_TOLERANCE_MM);
+        await ensureAutoPpxCuePoseReady(targetDrop,"target drop",AUTO_PP_DROP_TOLERANCE_MM,targetOptions('drop'));
         await runAutoPpxCueAtomic("release and blow", async () => {
+          assertAutoPpxPickupNotFailed();
+          if(LTZ)eventBase.releaseStartedAt=Date.now();
           await laserIntent("target_pose_reached", {...eventBase, release_pose:acceptedDrop}, "command");
           await laserIntent("release_started", {...eventBase, release_pose:acceptedDrop}, "command");
           const releaseResult = await setPumpMode("off", "vacuum off", eventBase.operation_id);
@@ -4638,7 +5120,7 @@ async function runAutoPpx() {
         await laserIntent("return_hover", eventBase);
         await moveToPose(targetHover, "return to moving height");
         await waitForAutoPpxResume("operation completion");
-        if (autoPpxIsPhysicalTag(saved.sourceTag)) {
+        if (!LTZ && autoPpxIsPhysicalTag(saved.sourceTag)) {
           trustedPhysicalPlacements.set(Number(saved.sourceTag.id), {
             physicalTag:Number(saved.sourceTag.id),
             targetMarker:Number(saved.targetTag.id),
@@ -4654,20 +5136,41 @@ async function runAutoPpx() {
       }
     } while (loop && !autoPpxAbort);
     setAutoPpxStatus(`Auto PP X queue complete (${queue.length} move${queue.length === 1 ? "" : "s"}).`, "ok");
+    autoPpxCueOutcome='completed';
     await laserIntent("script_completed", {queue_length:queue.length, loops:pass}, "lifecycle");
   } catch (e) {
+    autoPpxCueOutcome=autoPpxAbort||e.message==='stopped'?'stopped':'error';
+    if (autoPpxCueOutcome === 'error') {
+      // Do not keep the failure only in autoPpxStatus: periodic camera reads
+      // update that element, and activeOperation is cleared during cleanup.
+      autoPpxCueError = {message:e.message || String(e), stage:gid('autoPpxStatus')?.textContent || 'Starting cue',
+        index:Math.max(0,Number(activeOperation?.queue_index || 1)-1)};
+      window.mobileArmDiagnostic?.('cue_failed',autoPpxCueError.message,{action:'cue_play',queue_index:autoPpxCueError.index});
+    }
     autoPpxAbort = true;
     cancelAutoPpxClickOverride();
+    // Stop the physical follower before any reporting/cleanup can block.
+    try{
+      const held=await api('/api/stop',{});
+      if(!held.ok)log(`cue hold failed: ${held.error||'unknown error'}`,'log-err');
+    }catch(error){log(`cue hold failed: ${error.message}`,'log-err');}
     if(activeOperation)await laserIntent("operation_failed", {...activeOperation, reason:e.message}, "lifecycle");
     await laserIntent(e.message === "stopped" ? "script_stopped" : "script_failed", {error:e.message}, "lifecycle");
     // A rejected receipt means the last physical pump state cannot be trusted.
     // Stop progression and command the deterministic safe state without trying
     // to fabricate an operation receipt for the failed transaction.
-    const safeOff = await api("/api/pump", {mode:"off"});
-    if (!safeOff.ok) log(`emergency pump off ✗ ${safeOff.error || "failed"}`, "log-err");
+    try {
+      // A visible Atom may still be attached. Hold suction for the player's
+      // intervention; only their explicit Stop/off should release it here.
+      if(e.code!=='pickup_failed'){
+        const safeOff = await api("/api/pump", {mode:"off"});
+        if (!safeOff.ok) log(`emergency pump off ✗ ${safeOff.error || "failed"}`, "log-err");
+      }
+    } catch (cleanupError) { log(`emergency pump off ✗ ${cleanupError.message}`, "log-err"); }
     setAutoPpxStatus(e.message === "stopped" ? "Stopped." : e.message, e.message === "stopped" ? "" : "err");
     log(`Auto PP X ✗ ${e.message}`, e.message === "stopped" ? "log-info" : "log-err");
   } finally {
+    autoPpxVisionWait=null;
     activeOperation = null;
     ltxHeldTagId = null;
     autoPpxRunning = false;
@@ -4749,7 +5252,7 @@ function buildAxes() {
     });
   });
   document.getElementById("wsHint").textContent =
-    `Auto PP safe reach ring ${Math.max(radiusMin, AUTO_PP_BASE_SAFE_RADIUS)}-${radiusMax} mm; Z ${ws.z[0]}-${ws.z[1]} mm.`;
+    `Auto PP safe reach ring ${Math.max(gameRadiusMin, AUTO_PP_BASE_SAFE_RADIUS)}-${gameRadiusMax} mm; Z ${ws.z[0]}-${ws.z[1]} mm.`;
 }
 
 function showJointAxis(def, value) {
@@ -4811,15 +5314,11 @@ function cal2JointSafetyGuard() {
   if (cal2JointGuardCache) return cal2JointGuardCache;
   const samples = cal2CalibrationSamples();
   if (samples.length < 6) throw new Error("Auto PP Cal 2 needs all 6 captured outer-edge points");
-  const boundary = cal2ReachBoundary(samples);
+  const boundary = cal2RobotPlanningBoundary();
   if (boundary.length < 3) throw new Error("Auto PP Cal 2 arm boundary is unavailable");
-  const poseAt = cal2PoseEvaluator(samples);
   cal2JointGuardCache = {
     format:"auto-pp-calibration-2-v1",
-    polygon:boundary.map(point => {
-      const pose = poseAt(point.u, point.v);
-      return [Number(pose.x), Number(pose.y)];
-    }),
+    polygon:boundary.map(point=>[...point]),
     radius_min:Math.max(gameRadiusMin, AUTO_PP_BASE_SAFE_RADIUS),
     radius_max:gameRadiusMax,
     z_min:Number(ws.z[0]),
@@ -5009,6 +5508,7 @@ async function poll() {
   finally { armPollBusy = false; }
 }
 function applyStatus(s) {
+  applyRelayZLimits(s.z_limits);
   playerJointStatus=s;playerJointStatusAt=performance.now();
   const active = !!s.connected;
   const enabled = !!(active && s.enabled);
@@ -5283,6 +5783,25 @@ function wire() {
   }
 }
 
+function applyRelayZLimits(value) {
+  if(value?.contract!=='hhh.relay.z-limits'||value.version!==1||value.status!=='ready'
+      ||!Number.isFinite(value.minimum)||!Number.isFinite(value.maximum)
+      ||value.minimum>=value.maximum||value.minimum < -150||value.maximum > 230)return;
+  const limits=[value.minimum,value.maximum];
+  if(ws.z[0]===limits[0]&&ws.z[1]===limits[1])return;
+  // Updating a range never queues movement or substitutes a goal for the
+  // arm's measured position. The next deliberate gesture chooses the target.
+  pauseUserMoves();
+  ws={...ws,z:limits};
+  const slider=sliderEls.z,num=numEls.z;
+  for(const input of [slider,num])if(input){input.min=limits[0];input.max=limits[1];}
+  const labels=slider?.parentElement.querySelectorAll('.limits span');
+  if(labels?.length===2){labels[0].textContent=limits[0]+' mm';labels[1].textContent=limits[1]+' mm';}
+  const hint=document.getElementById('wsHint');
+  if(hint)hint.textContent=`Auto PP safe reach ring ${Math.max(gameRadiusMin,AUTO_PP_BASE_SAFE_RADIUS)}-${gameRadiusMax} mm; Z ${limits[0]}-${limits[1]} mm.`;
+  renderCraneControl('z');
+}
+
 async function init() {
   const cfg = await api("/api/config");
   if (cfg.workspace) ws = cfg.workspace;
@@ -5295,6 +5814,7 @@ async function init() {
   if (cfg.default_ip) document.getElementById("ip").value = cfg.default_ip;
   if (cfg.relay_host_default) document.getElementById("relayHost").value = cfg.relay_host_default;
   buildAxes();
+  applyRelayZLimits(cfg.z_limits);
   buildJointAxes();
   mountPlayerJointRig();
   wireCraneControls();
@@ -5304,7 +5824,7 @@ async function init() {
   applyIdentity(cfg.identity);
   setControlsEnabled(false);
   poll();
-  setInterval(() => poll().catch(() => null), 500);
+  setInterval(() => poll().catch(() => null), ARM_STATUS_POLL_MS);
   log("Ready. Put the robot in API mode, then Connect → Enable.", "log-info");
 }
 init();
@@ -5313,7 +5833,9 @@ window.addEventListener("pagehide", () => {
  pauseUserMoves();
  if(LTZ&&mobileOwnsMotion){
   autoPpxAbort=true;
-  for(const [path,body] of [['stop',{}],['pump',{mode:'off'}]])navigator.sendBeacon(BASE+'api/'+path,new Blob([JSON.stringify(body)],{type:'application/json'}));
+  const commands=[['stop',{}]];
+  if(!mobileCalibrationKeepsSuction(playerJointStatus?.pump_mode))commands.push(['pump',{mode:'off'}]);
+  for(const [path,body] of commands)navigator.sendBeacon(BASE+'api/'+path,new Blob([JSON.stringify(body)],{type:'application/json'}));
   mobileOwnsMotion=false;
  }
 });

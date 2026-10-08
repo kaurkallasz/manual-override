@@ -37,6 +37,9 @@ E-stop within reach and start at a low speed.
 - Start the hub (`python hub.py` in the repo root) and open the
   **Game Master** sandbox → **Dobot MG400 Relay**.
 - Press **Connect** for each side, then **Enable**.
+- In **Z soft limit**, **Enforce ceiling** defaults to **80 mm**. Adjust
+  **Ceiling Z (mm)** and choose **Save ceiling**, just below the floor setting.
+  The effective floor/ceiling sets the player height slider range for both teams.
 - Use **Following speed** below the Z soft limit to set the shared TCP path,
   TCP rotation, joint path, and ramp/braking limits for both arms.
 - Players: open the controller in your own sandbox and press **Connect** —
@@ -76,6 +79,31 @@ side's `move`/`pump` fail cleanly.
 
 ## Reference — the HTTP contract (what clients depend on)
 
+### Z soft limits
+
+The existing `z-floor.json` also stores `z_ceiling` (default `80`) and
+`ceiling_enabled` (default `true`). Older floor-only files retain their floor
+and receive the default ceiling. Writes are atomic. Both bounds must be finite,
+within the physical Z workspace `[-150, 230]`, and floor must be below ceiling.
+
+`GET/POST /api/z-ceiling` mirrors `/api/z-floor`: `{value, enabled}`; edits are
+operator-only. A changed limit first settles connected arms and revokes their
+leases; if stopping or saving fails, the old limits stay in force. Reconnect
+player controls after changing either bound. Disabling a soft bound restores
+that end of the physical workspace range.
+
+`GET /api/z-limits` and `z_limits` in config/state/heartbeat expose
+`{contract:"hhh.relay.z-limits", version:1, status:"ready", minimum, maximum}`.
+Green/Purple player adapters validate and relay this contract, including on
+initial configuration. Shared player controls update Z ranges and cancel queued
+input without issuing movement; Mobile LTZ uses the same range for its height
+slider, presets and cue height. The floor continues to use its existing clamps.
+Cartesian requests above the ceiling are rejected; joint paths are checked with
+controller forward kinematics, even without a learned floor model. From a
+manually placed position above the ceiling, only descending joint recovery is
+allowed. These are software target/path limits, not a replacement for hardware
+limit switches or an emergency stop.
+
 Sides: `purple`, `green`. Modes: `joint`, `cartesian`. `LEASE_SECS = 2.0`.
 Shared robot IP: `192.168.1.6` (both arms). Per-side default links (the fixed
 dongle IP each side's sockets are pinned to; interface name auto-detected):
@@ -90,9 +118,11 @@ dongle IP each side's sockets are pinned to; interface name auto-detected):
   "arms": {
     "purple": {"connected": bool, "enabled": bool, "mode_name": str,
                "joints": [j1,j2,j3,j4], "pose": [x,y,z,r],
+               "feedback_at": float, "feedback_ok": bool, "feedback_age": float|null,
+               "motion_epoch": int|null, "motion_ready": bool,
                "servo_active": bool, "servo_error": str|null,
                "alarm_ids": [int, ...],
-               "fault_kind": "emergency_lock|workspace_limit|collision|controller_fault|unknown_fault|null",
+               "fault_kind": "emergency_lock|joint4_positive_limit|joint4_negative_limit|workspace_limit|collision|controller_fault|unknown_fault|null",
                "fault_label": str|null,
                "pump_mode": "off|suck|blow|conflict",
                "control_mode": "joint|cartesian|null",
@@ -117,13 +147,44 @@ read-only background thread and uses `fault_kind` to distinguish an emergency
 lock from a workspace/joint-limit stop, collision stop, or another controller
 fault. A regular software hold remains enabled/idle and has no `fault_kind`.
 
+### J4 rotation diagnosis
+
+Each operator arm card shows the actual J4 tool-holder rotation in degrees,
+including complete turns (1577.5° stays 1577.5°). The readout uses `joints[3]`,
+not Cartesian `pose[3]` (TCP R) or base joint J1. It is red outside the published
+MG400 J4 range of −360° to +360°, green inside. These are diagnostic reference
+limits; the relay's existing, narrower command clamps remain in effect.
+
+Alarm 70 is identified as `joint4_positive_limit`; alarm 71 as
+`joint4_negative_limit`. The red status bar explains the condition, shows the
+degrees beyond the reference range, and says whether the value must decrease
+or increase toward that range. It also shows a measured out-of-range condition
+before an alarm code is available. Emergency and collision messages retain
+priority when several alarms occur together. A green angle never clears or
+hides a controller alarm that remains reported.
+
+The display requires connected feedback with `feedback_ok: true` and a finite
+`feedback_age` no older than 0.5 seconds, including time elapsed in the browser.
+Invalid timestamps yield a null age. Lost, malformed or silent SSE updates hide
+the angle and recovery direction; disconnected default zeroes are never shown
+as a valid angle. Monitoring adds no enable, reset, clear-fault or motion calls.
+
+This ports the condition documented in the “Fix Dobot remote enable error” chat
+in 3D printing Lab 1 2026. References:
+[Dobot alarm definitions](https://github.com/Dobot-Arm/TCP-IP-4Axis-CSharp/blob/main/alarm_controller.json),
+[MG400 motion specifications](https://www.dobot-robots.com/products/desktop-four-axis/mg400.html).
+
+Checks: `.venv/bin/python -m unittest discover -s tests -p test_relay_rotation_diagnostics.py`
+and `node tests/relay_rotation_diagnostics.cjs`. Browser layout smoke test:
+`node tests/relay_rotation_browser.cjs` with Playwright on `NODE_PATH`.
+
 ### Operator endpoints (no token)
 
 | Method | Path | Body | Effect |
 |---|---|---|---|
 | POST | `/api/connect` | `{side, local_ip?, ip?, iface?}` | Connect THAT side's arm via its pinned dongle, replacing any existing connection for it. Omitted fields fall back to that side's default dongle IP / the shared robot IP; `iface` overrides the auto-detection. |
 | POST | `/api/disconnect` | `{side}` | Disconnect that side's arm. |
-| POST | `/api/enable` | `{side}` | Enable that side's arm + start its follower in its current mode (else `joint`). Idempotent. Clears the arm's error first. (Also callable by clients.) |
+| POST | `/api/enable` | `{side}` | Enable, invalidate old movement and wait for fresh settled feedback. Returns `motion_epoch`; never starts the follower. Clears the arm's error first. Clients include their current token. |
 | POST | `/api/kick` | `{side}` | Force-release that side's controller; smooth-stop that side's arm. |
 | GET/POST | `/api/motion-settings` | `{tcp_xyz?, tcp_rotation?, joint?, ramp_secs?}` | Read or update the persistent follower settings shared by both arms. Updates apply immediately to connected arms and to later connects/mode switches. |
 
@@ -131,10 +192,10 @@ fault. A regular software hold remains enabled/idle and has no `fault_kind`.
 
 | Method | Path | Body | Effect |
 |---|---|---|---|
-| POST | `/api/acquire` | `{side, mode}` | Acquire THIS side's arm; mint a token. NEVER 409 across sides — both sides can hold concurrently. |
+| POST | `/api/acquire` | `{side, mode}` | Acquire THIS side's connected arm; discard previous movement and mint a token with `motion_epoch`. Both sides can hold concurrently. No servo stream starts. |
 | POST | `/api/release` | `{side, token}` | Release this side's arm. |
 | POST | `/api/heartbeat` | `{side, token}` | Refresh this side's lease; returns the full state. Stale token → `{ok:false, error:"stale token"}`. |
-| POST | `/api/move` | `{side, token, mode, joints?\|pose?}` | Safety-clamp then set that side's follower target. |
+| POST | `/api/move` | `{side, token, motion_epoch, mode, joints?\|pose?}` | Validate the lease generation, fresh feedback and complete path before starting the follower and setting a target. |
 | POST | `/api/pump` | `{side, token, mode}` | Set that side's pump `suck\|blow\|off`. |
 | POST | `/api/hold` | `{side, token}` | Smooth-stop that side's arm, keep its lease. |
 
@@ -195,6 +256,15 @@ available. `stop_side`
 returns `hhh.relay.stop` v1 only after fresh finite settled feedback. The
 watchdog starts in `hub_init` and stops in `hub_stop`, never at import.
 
+`disable_side(side)` returns `hhh.relay.disabled` v1 with `inhibited`, `connected`
+and `disabled`. It revokes that side's controller, confirms settled motion,
+stops the follower and disables connected servos. `disabled: true` requires
+fresh feedback. Offline returns `connected: false, disabled: false` with control
+inhibited; it neither connects nor asserts an unobserved physical stop. Cal 2
+uses this function before and throughout the other player's turn, and when a
+measured calibration completes. A failed shutdown retains the durable motion
+gate; saving calibration measurements can still finish while disconnected.
+
 Operator display exit can leave Cal 2's durable `pending_stops` populated. Relay
 then rejects both arms' motion/enable/acquire requests even when no target display
 is reserved. Stop, disconnect, release and pump-off remain available. Operator
@@ -219,3 +289,41 @@ before acquire/enable; unresolved pending stops continue to block those actions.
 A side with a pending stop may open feedback sockets solely so the stop can be
 confirmed. Another side cannot use this exception to acquire or move. Player
 identity and the existing per-arm lease remain authoritative.
+
+
+## Reconnect and physical unlock
+
+Connect/Enable never resumes a target. Enable waits for feedback received after
+its request: finite joint and TCP coordinates, idle/running mode, age <=250 ms,
+and joint measurements stable within 0.2 degrees for at least 80 ms. The first
+validated movement repeats that synchronization and seeds the follower from the
+measured position with zero velocity. A one-second timeout leaves it stopped.
+The feedback reader latches even a single unlock/disabled/fault/paused packet by
+incrementing `motion_epoch` and clearing pending targets. Feedback loss, socket
+failure and unexpected follower/actual displacement also invalidate movement.
+The stream checks that epoch again at the socket send boundary. A previous
+follower must finish stopping before another one can start.
+
+Each lease binds to the motion epoch established by Acquire/Enable. An old move
+fails even if unlock and relock happen between browser polls or while its path
+is being checked. Mobile adds a connection identity to every movement request,
+so an HTTP request delayed across replacement of the player connection cannot
+bind to the new arm session. Player adapters preserve the robot feedback time
+and mode, reject reordered telemetry and never invent freshness from a live HTTP
+connection. Green and Purple use the same behavior.
+
+Mobile clears joint/XYZ goals, gestures and queued commands on disconnect,
+unlock and resynchronization. It ignores delayed replies and old-connection
+status, publishes a new control revision, and follows the measured position on
+reconnect. Stop closes the player lease before the next Connect. Motion requires
+a new deliberate gesture. Outside-boundary feedback remains visible; existing
+path validation still controls any recovery move, and no connection operation
+moves to a boundary or silently clamps an out-of-range joint/rotation goal.
+
+Hardware-free regressions:
+
+```sh
+.venv/bin/python -B -m unittest discover -s tests -p 'test_relay_reconnect.py'
+node tests/mobile_arm_bridge_smoke.cjs
+MOBILE_TEST_TEAM=purple node tests/mobile_arm_bridge_smoke.cjs
+```

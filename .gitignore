@@ -33,3 +33,4 @@ Thumbs.db
 
 # Private mobile relay credentials and generated deployment bundles
 .mobile-ltz-runtime/
+sandboxes/gamemaster/prototypes/mobile-ltz-api/data/connection-events.jsonl*

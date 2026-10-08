@@ -41,7 +41,7 @@ const origin='http://127.0.0.1:8117';
    await gm.locator('#'+button).click();await gm.waitForFunction(s=>ui.state.journey?.active_side===s,side);
    assert.equal(await gm.locator('#calibrationDisplay').count(),0,'GM observes the camera, never the projected target editor');
    await gm.waitForFunction(()=>{const image=document.getElementById('boardCamera');return !image.hidden&&image.naturalWidth>0&&document.getElementById('stage').classList.contains('calibration-camera');});
-   assert.equal(await gm.locator('#boardCamera').getAttribute('src'),'/s/gamemaster/p/photon-board/api/preview');
+   assert.match(await gm.locator('#boardCamera').getAttribute('src'),/^data:image\/jpeg;base64,/);
    assert.equal(await gm.locator('.camera-view').evaluate(el=>getComputedStyle(el).transform),'none','All outer targets remain in the full camera frame');
    await screen.waitForSelector('#calibrationDisplay');
    assert.equal(await screen.locator('#calibrationDisplay').getAttribute('src'),'/s/gamemaster/p/playfield-areas/screen?presentation=1');

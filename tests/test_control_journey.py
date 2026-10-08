@@ -109,10 +109,12 @@ class JourneyTests(unittest.TestCase):
             self.assertTrue(p['lesson']['complete']);self.assertEqual(p['credits'],600)
         with patch('time.time',return_value=deadline+1):self.journey.tick()
         self.assertEqual(self.journey.state['phase'],'ready')
-    def test_target_completion_keeps_turn_reserved_until_stop_confirmation(self):
+    def test_target_completion_advances_offline_but_keeps_motion_gate_until_stop_confirmation(self):
         self.gate();self.cal.stopped=False
-        with self.assertRaisesRegex(ValueError,'stopped'):self.journey.complete_calibration('green')
-        self.assertEqual(self.journey.state['active_side'],'green');self.assertEqual(self.journey.state['turn'],0)
+        self.journey.complete_calibration('green')
+        self.assertIsNone(self.journey.state['active_side']);self.assertEqual(self.journey.state['turn'],1)
+        self.assertTrue(self.cal.state['pending_stops'])
+        self.assertTrue(self.progress.progress_snapshot()['roster']['green']['lesson']['complete'])
         self.cal.stopped=True;self.journey.tick();self.journey.tick()
         self.assertEqual(self.journey.state['active_side'],'purple');self.assertEqual(self.journey.state['turn'],1)
         self.assertEqual(self.progress.progress_snapshot()['roster']['green']['credits'],600)
@@ -291,6 +293,22 @@ class CalibrationDraftTests(unittest.TestCase):
         for i in range(30,36):self.store.capture('green',{'id':'lesson','marker':i},self.measurement(i))
         self.assertEqual(self.store.snapshot()['sessions']['lesson']['stage'],'perspective')
         with self.assertRaises(ValueError):self.store.capture('green',{'id':'lesson','marker':30},self.measurement(frame=1))
+    def test_heights_average_six_positions_and_recalculate_after_recapture(self):
+        for marker,z in zip(range(30,36),(5,10,15,20,25,30)):
+            measured=self.measurement(marker);measured['pose'][2]=z
+            session=self.store.capture('green',{'id':'lesson','marker':marker},measured)['sessions']['lesson']
+            if marker<35:self.assertIsNone(session['pickup_height'])
+        self.assertEqual(session['pickup_height'],17.5)
+        self.assertEqual(session['transport_height'],57.5)
+        measured=self.measurement(30);measured['pose'][2]=65
+        session=self.store.capture('green',{'id':'lesson','marker':30},measured)['sessions']['lesson']
+        self.assertEqual(session['pickup_height'],27.5)
+        self.assertEqual(session['draft']['transport_height'],67.5)
+        # A pre-update unfinished draft resumes without separate Z captures.
+        old=self.store.state['sessions']['lesson'];old.pop('pickup_height');old.pop('transport_height')
+        self.module.atomic_json(self.store.path,self.store.state)
+        fresh=self.module.LessonStore(self.store.path).snapshot()['sessions']['lesson']
+        self.assertEqual((fresh['pickup_height'],fresh['transport_height']),(27.5,67.5))
     def test_frame_from_before_target_loading_cannot_be_a_capture(self):
         activation=self.store.snapshot()['sessions']['lesson']['activated_at']
         with self.assertRaisesRegex(ValueError,'targets loaded'):

@@ -633,6 +633,25 @@ def display_command(value):
                 if area['marker'] == value['marker']:
                     area.update(color='#33ff88',glow=2.5,show_area=True)
             _touch()
+        elif action == 'progress':
+            if not _display_session or _display_session['id'] != value.get('id'):
+                raise ValueError('display session changed')
+            visible,highlighted=value.get('visible'),value.get('highlighted')
+            known={area['marker'] for area in _store.values()}
+            for markers in (visible,highlighted):
+                if not isinstance(markers,list) or any(type(m) is not int for m in markers) or len(set(markers))!=len(markers) or not set(markers)<=known:
+                    raise ValueError('unique display marker IDs required')
+            if not set(highlighted)<=set(visible):
+                raise ValueError('highlighted markers must be visible')
+            changed=False
+            for area in _store.values():
+                glow=area['marker'] in highlighted
+                appearance=dict(show_aruco=area['marker'] in visible,show_area=glow,
+                                show_links=False,color='#33ff88' if glow else '#82baff',glow=2.5 if glow else 0)
+                if any(area.get(k)!=v for k,v in appearance.items()):
+                    area.update(appearance);changed=True
+            if not changed:return display_snapshot()
+            _touch()
         elif action == 'restore':
             if _display_session and _display_session['id'] == value['id']:
                 previous = _display_session['previous']

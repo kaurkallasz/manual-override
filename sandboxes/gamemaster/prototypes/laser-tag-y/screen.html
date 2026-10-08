@@ -13,14 +13,37 @@
 </head>
 <body>
 <main class="viewport" aria-label="Laser Tag Y external Photon Game screen"><section class="stage"><canvas id="mapCanvas" width="1696" height="960" aria-label="Photon Game playfield"></canvas><canvas id="gameCanvas" width="1696" height="960" aria-label="Live Photon Game presentation"></canvas><div id="status" class="status" role="status" aria-live="polite">Loading Photon Game output…</div></section></main>
-<script src="tower-defence-view.js?v=14"></script>
+<script src="tower-defence-view.js?v=18"></script>
 
 <script>
-const ROOT=location.pathname.split('/p/')[0],SELF=`${ROOT}/p/laser-tag-y`,status=document.getElementById('status');let view=null,events=null,artError='';
+const ROOT=location.pathname.split('/p/')[0],SELF=`${ROOT}/p/laser-tag-y`,status=document.getElementById('status');let view=null,events=null,artError='',latestState=null,artStatus=null;
 async function json(url){const response=await fetch(url),text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch(error){status.textContent=`Invalid game snapshot: ${error.message}`;status.className='status error'}if(!response.ok)throw Error(data.error||text||`HTTP ${response.status}`);return data}
 const calibrationDisplay=CalibrationDisplay.create(document.querySelector('.viewport'),ROOT);
-function applyState(state){calibrationDisplay.update(state);if(!view)return;view.applyState(state);if(state.status!=='ready'){status.textContent=`Photon Game unavailable: ${state.error||'not ready'}`;status.className='status error';return}status.textContent=`${state.paused?'Paused':state.phase||'Setup'} · Wave ${state.wave||0} / ${state.wave_count||0} · ${state.active_enemies||0} orcs`;const warning=artError||(state.presentation?.status!=='ready'?(state.presentation?.error||'Artwork unavailable'):'');if(warning)status.textContent+=` · Artwork fallback: ${warning}`;status.className=warning?'status error':'status ready';document.title=`Laser Tag Y · ${state.level?.name||'Photon Game'}`}
-async function boot(){view=TowerDefenceView.create({sandboxRoot:ROOT,onAssetError:message=>{artError=message;},mapCanvas:document.getElementById('mapCanvas'),gameCanvas:document.getElementById('gameCanvas')});try{applyState(await json(`${SELF}/api/state`))}catch(error){status.textContent=`Game feed unavailable: ${error.message}`;status.className='status error'}const receive=TowerDefenceView.presentation.snapshotReceiver(applyState);events=new EventSource(`${SELF}/api/events`);events.addEventListener('update',event=>{try{receive.update(JSON.parse(event.data))}catch(error){status.textContent=`Invalid game update: ${error.message}`;status.className='status error'}});events.onopen=()=>view.setFeedConnected(true);events.onmessage=event=>{try{view.setFeedConnected(true);receive.full(JSON.parse(event.data))}catch(error){status.textContent=`Invalid game snapshot: ${error.message}`;status.className='status error'}};events.onerror=()=>{view.setFeedConnected(false);status.textContent='Photon Game stream reconnecting…';status.className='status'}}
+function paintStatus(){const state=latestState;if(!state)return;if(state.status!=='ready'){status.textContent=`Photon Game unavailable: ${state.error||'not ready'}`;status.className='status error';return}status.textContent=`${state.paused?'Paused':state.phase||'Setup'} · Wave ${state.wave||0} / ${state.wave_count||0} · ${state.active_enemies||0} orcs`;const warning=artError||(state.presentation?.status!=='ready'?(state.presentation?.error||'Artwork unavailable'):'');if(warning)status.textContent+=` · Artwork fallback: ${warning}`;const loading=artStatus&&!artStatus.ready;if(!warning&&loading)status.textContent+=` · Loading artwork (${artStatus.loaded}/${artStatus.loaded+artStatus.pending+artStatus.failed})`;status.className=warning?'status error':loading?'status':'status ready';document.title=`Laser Tag Y · ${state.level?.name||'Photon Game'}`}
+function applyState(state){latestState=state;calibrationDisplay.update(state);view?.applyState(state);paintStatus()}
+function connectGameEvents(){
+ if(events||artStatus?.pending>0)return;
+ const receive=TowerDefenceView.presentation.snapshotReceiver(applyState);
+ const source=events=new EventSource(`${SELF}/api/events`);
+ source.addEventListener('update',event=>{try{receive.update(JSON.parse(event.data))}catch(error){status.textContent=`Invalid game update: ${error.message}`;status.className='status error'}});
+ source.onopen=()=>view.setFeedConnected(true);
+ source.onmessage=event=>{try{view.setFeedConnected(true);receive.full(JSON.parse(event.data))}catch(error){status.textContent=`Invalid game snapshot: ${error.message}`;status.className='status error'}};
+ source.onerror=()=>{if(events!==source)return;view.setFeedConnected(false);status.textContent='Photon Game stream reconnecting…';status.className='status'};
+}
+function artworkStatus(assets){
+ artStatus=assets;
+ if(assets.ready)artError='';
+ // HTTP/1 browsers share a small connection pool across tabs. Do not occupy
+ // the last connection with SSE while this screen still needs image files.
+ if(assets.pending>0){events?.close();events=null;view?.setFeedConnected(false)}
+ else if(latestState&&assets.requested>0)connectGameEvents();
+ paintStatus();
+}
+async function boot(){
+ view=TowerDefenceView.create({sandboxRoot:ROOT,onAssetError:message=>{artError=message;paintStatus();},onAssetStatus:artworkStatus,mapCanvas:document.getElementById('mapCanvas'),gameCanvas:document.getElementById('gameCanvas')});
+ try{applyState(await json(`${SELF}/api/state`))}catch(error){status.textContent=`Game feed unavailable: ${error.message}`;status.className='status error'}
+ connectGameEvents();
+}
 window.addEventListener('beforeunload',()=>{events?.close();view?.destroy()});boot();
 </script>
 </body>

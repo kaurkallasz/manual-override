@@ -13,7 +13,7 @@ from werkzeug.serving import make_server
 from test_photon_framework import load, FakeContext, ROOT
 
 def create_app(folder):
-    level=load('photon-level');game=load('photon-game');renderer=load('laser-tag-y')
+    level=load('photon-level');game=load('photon-game');renderer=load('laser-tag-y');board=load('photon-board')
     progress=load('photon-progress');progress.DATA_DIR=Path(folder)/'progress';progress.hub_init(None)
     for side in ('green','purple'):
         player=progress.player_command(side,{'action':'create','name':side+' pilot','operation_id':uuid.uuid4().hex})['result']['player_id']
@@ -38,25 +38,35 @@ def create_app(folder):
     def observation():
         level_data=game._level_projection
         targets=([dict(id=a['marker'],nx=.5+a['x']/(16*1280/720),ny=.5+a['z']/16,missing=0,tracked=True) for a in field.list_areas()] if game._journey.snapshot()['phase']=='calibration' else [dict(id=s['aruco_id'],nx=.1+.8*s['marker_x']/level_data['width'],ny=.05+.9*s['marker_y']/level_data['height'],missing=0,tracked=True) for s in level_data['sockets']])
-        targets=[t for t in targets if t['id'] not in camera_state.get('hidden_markers',[])]
+        hidden=set(camera_state.get('hidden_markers',[]))
+        if game._journey.snapshot()['phase']=='calibration':hidden.update(a['marker'] for a in field.list_areas() if a.get('show_aruco') is False)
+        targets=[t for t in targets if t['id'] not in hidden]
+        for tag in targets:
+            size=camera_state.get('marker_sizes',{}).get(str(tag['id']),36)
+            tag['ncorners']=[[tag['nx']+dx*size/1280,tag['ny']+dy*size/720]
+                             for dx,dy in ((-.5,-.5),(.5,-.5),(.5,.5),(-.5,.5))]
         return dict(contract='photon.board.runtime',version=1,status='ready' if not camera_state['stale'] else 'unavailable',error='camera stale' if camera_state['stale'] else None,source='camera',corrected=True,revision=1,observed_at=time.time(),
             placement=dict(contract='photon.board.placement',version=1,status='ready',sampled_at=time.time(),source_epoch='fixture',revision=1,relations=[]),
-            frame_at=time.time()-(10 if camera_state['stale'] else 0),width=1280,height=720,
-            tags=targets)
+            frame_at=time.time()-(10 if camera_state['stale'] else camera_state.get('delay',0)),width=1280,height=720,
+            tags=[] if camera_state.get('qualifying') else targets,
+            detections=targets,visible_ids=[t['id'] for t in targets])
+    board.runtime_observation=observation
     def camera_frame():
         import cv2
         import numpy as np
         frame=np.full((720,1280,3),(30,46,35),dtype=np.uint8)
-        saved={a['marker'] for a in field.list_areas() if a['color']=='#33ff88'}
-        for tag in observation()['tags']:
+        saved={a['marker'] for a in field.list_areas() if a['color']=='#33ff88' and a.get('show_area') and a.get('glow',0)>0}
+        for tag in observation()['detections']:
             x,y=int(tag['nx']*1280),int(tag['ny']*720)
             if tag['id'] in saved:cv2.rectangle(frame,(x-23,y-23),(x+23,y+23),(70,235,85),3)
-            cv2.rectangle(frame,(x-18,y-18),(x+18,y+18),(230,240,230),-1)
+            half=int(camera_state.get('marker_sizes',{}).get(str(tag['id']),36)/2)
+            cv2.rectangle(frame,(x-half,y-half),(x+half,y+half),(230,240,230),-1)
             cv2.putText(frame,str(tag['id']),(x-14,y+5),cv2.FONT_HERSHEY_SIMPLEX,.5,(0,0,0),1)
         return dict(contract='hhh.camera-frame',version=1,status='ready',coordinate_space='corrected-camera-normalized',
                     frame_at=time.time(),width=1280,height=720,jpeg=cv2.imencode('.jpg',frame)[1].tobytes())
     def camera_descriptor():
         return dict(contract='hhh.camera-preview',version=1,status='ready' if camera_state['enabled'] else 'unavailable',coordinate_space='corrected-camera-normalized')
+    board._hub_ctx=FakeContext({'camera-calibration':SimpleNamespace(preview_frame=lambda:camera_frame() if camera_state['enabled'] and not camera_state['stale'] else dict(contract='hhh.camera-frame',version=1,status='unavailable',error='Camera unavailable'))})
     @app.get('/s/gamemaster/p/photon-board/api/preview')
     def operator_preview():
         if not camera_state['enabled'] or camera_state['stale']:
@@ -94,9 +104,26 @@ def create_app(folder):
         seed(owner)
         return jsonify(ok=True)
     calibration_feedback={'connected':True}
+    arm_enabled={'green':True,'purple':True}
+    def disable_calibration_arm(side):
+        arm_enabled[side]=False
+        return dict(contract='hhh.relay.disabled',version=1,status='ready',inhibited=True,
+                    connected=calibration_feedback['connected'],disabled=calibration_feedback['connected'])
     @app.post('/__test/calibration-feedback')
     def calibration_feedback_control():
         calibration_feedback.update(request.get_json());return jsonify(ok=True)
+    @app.post('/__test/calibration-milestone')
+    def calibration_milestone():
+        # Real progression APIs, isolated profiles: three Joint and three XYZ wins.
+        game._engine.set_virtual_test_loadout(None,None)
+        for _ in range(6):
+            run_id=uuid.uuid4().hex
+            progress.begin_attempt({'run_id':run_id,'reward_enabled':True,'metadata':{}})
+            attempt=progress.finalize_attempt({'run_id':run_id,'sequence':1,'kills':100,
+                'outcome':'won','active_seconds':1500,'finished_at':time.time(),'released_orcs':100})['attempt']
+        game._journey.result(attempt)
+        game._journey.tick()
+        return jsonify(ok=True,journey=game._journey.snapshot())
     @app.post('/__test/calibration-restart')
     def calibration_restart():
         previous=owner._lessons.snapshot().get('active_id')
@@ -111,9 +138,10 @@ def create_app(folder):
         return [260+100*u,-80+160*v,calibration_feedback.get('z',10),0]
     owner._hub_ctx=FakeContext({'playfield-areas':field,
       'webcam':SimpleNamespace(tag_snapshot=lambda:dict(contract='hhh.webcam.tags',version=1,status='ready',frame_at=observation()['frame_at'],width=1280,height=720,tags=observation()['tags'],detections=observation()['tags'])),
-      'camera-calibration':SimpleNamespace(corrected_tag_snapshot=lambda tags,detections:dict(contract='hhh.camera-correction',version=1,status='ready',corrected=True,calibration_revision='fixture',tags=tags,detections=detections)),
+      'camera-calibration':SimpleNamespace(corrected_tag_snapshot=lambda tags,detections:dict(contract='hhh.camera-correction',version=1,status='ready',corrected=True,calibration_revision=camera_state.get('calibration_revision','fixture'),tags=tags,detections=detections)),
       'dobot-mg400-relay':SimpleNamespace(
-        arms_snapshot=lambda:dict(contract='hhh.relay.arms',version=1,status='ready',observed_at=time.time(),arms={side:dict(connected=calibration_feedback['connected'],enabled=True,feedback_at=time.time(),pose=measured_pose(),device={'ip':'fixture'}) for side in ('green','purple')}),
+        arms_snapshot=lambda:dict(contract='hhh.relay.arms',version=1,status='ready',observed_at=time.time(),arms={side:dict(connected=calibration_feedback['connected'],enabled=arm_enabled[side],feedback_at=time.time(),pose=measured_pose(),device={'ip':'fixture'}) for side in ('green','purple')}),
+        disable_side=disable_calibration_arm,
         stop_side=lambda side:dict(contract='hhh.relay.stop',version=1,status='ready' if calibration_feedback['connected'] else 'unavailable',stopped=calibration_feedback['connected']))})
     real_measurement=owner._fresh_calibration_measurement
     def calibration_measurement(side,marker=None):
@@ -121,20 +149,23 @@ def create_app(folder):
         measured_marker[0]=marker
         return real_measurement(side,marker)
     owner._fresh_calibration_measurement=calibration_measurement
-    modules.update({'photon-board':SimpleNamespace(runtime_observation=observation),'auto-pickup-game':owner})
+    modules.update({'photon-board':board,'auto-pickup-game':owner})
     game._progress.start()
-    facade=load('mobile-ltz-api');facade.hub_init(FakeContext({'photon-game':game,'photon-progress':progress,'photon-level':level,'laser-tag-y':renderer, 'photon-board':SimpleNamespace(runtime_observation=observation),
+    facade=load('mobile-ltz-api');facade.hub_init(FakeContext({'photon-game':game,'photon-progress':progress,'photon-level':level,'laser-tag-y':renderer, 'photon-board':board,
         'camera-calibration':SimpleNamespace(preview_snapshot=camera_descriptor,preview_frame=camera_frame),'auto-pickup-game':owner}))
     def tracking_snapshot():
         raw=observation()
         return dict(contract='photon.board.tracking',version=1,status=raw['status'],source='camera',
                     coordinate_space='corrected-camera-normalized',width=1280,height=720,
                     sampled_at=time.time(),frame_at=raw['frame_at'],limits={'stale_s':1.5},tags=[])
+    board.tracking_snapshot=tracking_snapshot
     renderer.hub_init(FakeContext({'photon-game':game,'photon-level':level,'auto-pickup-game':owner,
-                                 'photon-board':SimpleNamespace(tracking_snapshot=tracking_snapshot)}))
+                                 'photon-board':board}))
     app.register_blueprint(field.bp,url_prefix='/s/gamemaster/p/playfield-areas')
     app.register_blueprint(game.bp,url_prefix='/s/gamemaster/p/photon-game')
+    app.register_blueprint(level.bp,url_prefix='/s/gamemaster/p/photon-level')
     app.register_blueprint(renderer.bp,url_prefix='/s/gamemaster/p/laser-tag-y')
+    facade.connection_log.LOG_PATH=Path(folder)/'connection-events.jsonl'
     app.register_blueprint(facade.bp,url_prefix='/s/gamemaster/p/mobile-ltz-api')
     app.register_blueprint(ui.bp,url_prefix='/s/green/p/mobile-ltz')
     app.register_blueprint(purple_ui.bp,url_prefix='/s/purple/p/mobile-ltz')
@@ -156,12 +187,15 @@ def create_app(folder):
         data=request.get_json(silent=True) or {}
         if request.method=='POST':
             robot_commands.append({'side':side,'action':action,'data':data})
-            if action=='connect':calibration_feedback['connected']=True
+            if action=='connect':calibration_feedback['connected']=True;arm_enabled[side]=True
+            if action=='enable':arm_enabled[side]=True
             if action=='joint-move':robot_targets[side]=[data[k] for k in ('j1','j2','j3','j4')]
-        return jsonify(ok=True,connected=True,enabled=True,feedback_ok=True,last_feedback=time.time(),
+        return jsonify(ok=True,connected=True,enabled=arm_enabled[side],feedback_ok=True,last_feedback=time.time(),
                        joints=[0.,20.,30.,9.],target=robot_targets[side],control_mode='joint',pose=[300.,100.,60.,9.],pump_mode='off')
     @app.get('/__test/robot-commands')
     def commands():return jsonify(robot_commands)
+    @app.get('/__test/arm-enabled')
+    def enabled_arms():return jsonify(arm_enabled)
     @app.get('/s/gamemaster/p/auto-pickup-game/api/<action>')
     def fake_pickup(action):
         if action=='calibration2':return jsonify(ok=True,calibration=owner._calibration2_public())

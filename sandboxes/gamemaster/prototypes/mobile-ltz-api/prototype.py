@@ -3,10 +3,16 @@ import json
 import time
 import threading
 import uuid
-from flask import Blueprint, Response, abort, jsonify, request
+import logging
+import hashlib
+from pathlib import Path
+from flask import Blueprint, Response, abort, current_app, g, jsonify, request, send_from_directory
 from camera_view import registration
+from delivery_diagnostics import DeliveryDiagnostics
 import live
-MANIFEST = {'name':'Mobile LTZ API','description':'Authenticated Green and Purple mobile presentation adapter.','group':'Photon Engine'}
+import connection_log
+MANIFEST = {'name':'Mobile LTZ API','description':'Player payloads, delivery statistics and API diagnostics.',
+            'group':'Photon Engine','default_page':'','pages':[{'path':'','label':'Delivery diagnostics'}]}
 bp=Blueprint('mobile_ltz_api',__name__)
 _live=live.LiveState()
 _team_live={'green':_live,'purple':live.LiveState()}
@@ -15,14 +21,101 @@ _delivery_lock=threading.Lock()
 _delivery_epoch=uuid.uuid4().hex
 _delivery_sequence=0
 _delivery_at=None
+_diagnostics=DeliveryDiagnostics()
+_diagnostic_errors=0
+_diagnostic_error_logged_at=0.0
+_cue_scope_lock = threading.Lock()
+_cue_scope = None
+_cue_scope_since = 0.0
 
 def hub_init(ctx):
-    global _ctx
+    global _ctx, _diagnostics, _diagnostic_errors, _cue_scope, _cue_scope_since
     _ctx=ctx
+    _diagnostics=DeliveryDiagnostics()
+    _diagnostic_errors=0
+    _cue_scope, _cue_scope_since = None, 0.0
 
 def hub_stop():
     global _ctx
     _ctx=None
+
+
+def _observe(method, *args, **kwargs):
+    """Observability must never interrupt player delivery."""
+    global _diagnostic_errors, _diagnostic_error_logged_at
+    try:
+        getattr(_diagnostics, method)(*args, **kwargs)
+    except Exception:
+        _diagnostic_errors += 1
+        if time.monotonic() - _diagnostic_error_logged_at > 60:
+            _diagnostic_error_logged_at = time.monotonic()
+            logging.getLogger(__name__).exception('Mobile delivery diagnostics failed')
+
+
+def _operator_guard():
+    if 'gamemaster' not in (request.environ.get('hhh.roles') or ()):
+        abort(403)
+
+
+@bp.route('/')
+def index():
+    _operator_guard()
+    return send_from_directory(Path(__file__).parent, 'index.html')
+
+
+@bp.route('/monitor.js')
+@bp.route('/monitor.css')
+def monitor_asset():
+    _operator_guard()
+    return send_from_directory(Path(__file__).parent, request.path.rsplit('/', 1)[-1])
+
+
+@bp.route('/api/monitor')
+def delivery_monitor_api():
+    _operator_guard()
+    side = request.args.get('side')
+    channel = request.args.get('channel')
+    if side not in (None, 'green', 'purple') or channel not in (None, 'generated', 'sse', 'http'):
+        abort(400)
+    result = _diagnostics.snapshot(side=side, payloads=request.args.get('payloads') == '1', channel=channel)
+    result['observer_errors'] = _diagnostic_errors
+    response = jsonify(result)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.before_request
+def begin_measurement():
+    g.mobile_request_started = time.perf_counter()
+
+
+@bp.after_request
+def record_response(response):
+    started = getattr(g, 'mobile_request_started', None)
+    if started is None:
+        # Hub authentication may return before this blueprint's before_request.
+        return response
+    endpoint = (request.endpoint or '').rsplit('.', 1)[-1]
+    if endpoint in {'index', 'monitor_asset', 'delivery_monitor_api', 'connection_diagnostics_api'}:
+        return response
+    if endpoint == 'mobile_events_api' and response.mimetype == 'text/event-stream':
+        return response
+    side = request.args.get('side', 'green')
+    if side not in ('green', 'purple'):
+        return response
+    value = response.get_json(silent=True) if response.is_json and not response.is_streamed else None
+    route = request.method + ' ' + (request.url_rule.rule if request.url_rule else request.path)
+    _observe('http_response', side, route, response.status_code, response.content_length or 0,
+             response.mimetype, (time.perf_counter() - started) * 1000,
+             value=value, action=getattr(g, 'mobile_action', None))
+    return response
+
+
+def _record_action(data):
+    # Use only a body the authenticated route already parsed. Never consume a
+    # rejected or streaming request body just to add diagnostics.
+    if isinstance(data, dict) and isinstance(data.get('action'), str):
+        g.mobile_action = data['action'][:80]
 
 def _module(slug):
     return _ctx.get_prototype(slug) if _ctx and _ctx.is_prototype_enabled(slug) else None
@@ -40,6 +133,8 @@ def _game():
     return module,value
 
 def camera_view(game):
+    alignment = None
+    tracking = None
     try:
         board = _module('photon-board')
         camera = _module('camera-calibration')
@@ -50,13 +145,19 @@ def camera_view(game):
                 or descriptor['version'] != 1 or descriptor.get('status') != 'ready'
                 or descriptor.get('coordinate_space') != 'corrected-camera-normalized'):
             raise ValueError('Corrected camera view is unavailable.')
-        observation = board.runtime_observation()
         if game.get('journey',{}).get('phase')=='calibration':
+            observation = board.runtime_observation()
             if observation.get('contract')!='photon.board.runtime' or type(observation.get('version')) is not int or observation['version']!=1 or observation.get('status')!='ready' or not observation.get('corrected') or not -1<=time.time()-observation.get('frame_at',0)<=1.5:
                 raise ValueError('Fresh corrected camera required for calibration')
             matrix,markers=[1,0,0,0,1,0,0,0],[30,31,32,33,34,35]
         else:
-            matrix, markers = registration(game['level'], observation)
+            alignment = {'status':'unavailable'}
+            observation = board.camera_markers_snapshot()
+            # Current detections are presentation evidence even while alignment
+            # or the independent cue map is held. Never use them as cue targets.
+            tracking = {**observation, 'server_time':time.time()}
+            matrix, markers = registration(game['level'], observation, diagnostics=alignment)
+            alignment['status'] = 'ready'
         tags=[]
         if game.get('journey',{}).get('phase')=='calibration':
             for tag in observation.get('tags',[]):
@@ -65,9 +166,27 @@ def camera_view(game):
                     tags.append({'id':tag['id'],'u':tag['nx'],'v':tag['ny']})
         return {'status':'ready', 'matrix':matrix, 'markers':markers,'tags':tags,
                 'width':observation['width'], 'height':observation['height'],
-                'frame_at':observation['frame_at'], 'frame_path':'assets/mobile-camera.jpg'}
+                'frame_at':observation['frame_at'], 'frame_path':'assets/mobile-camera.jpg',
+                'alignment':alignment, 'tracking':tracking}
     except Exception as exc:
-        return {'status':'unavailable', 'error':str(exc)}
+        return {'status':'unavailable', 'error':str(exc), 'alignment':alignment, 'tracking':tracking}
+
+
+def _motion_safety(side):
+    """Read the same owner as Relay, without exposing guards or other sessions."""
+    try:
+        owner = _module('auto-pickup-game')
+        if owner is None or not callable(getattr(owner,'calibration_safety_snapshot',None)):
+            raise ValueError('Cal 2 safety owner unavailable')
+        value = owner.calibration_safety_snapshot(side)
+        if not isinstance(value,dict) or value.get('contract')!='hhh.cal2.safety' or type(value.get('version')) is not int or value['version']!=1:
+            raise ValueError('Cal 2 safety contract unavailable')
+        if value.get('status')!='ready':
+            reason=value.get('error')
+            raise ValueError(reason if isinstance(reason,str) and reason else 'Validated Cal 2 safety limits unavailable')
+        return {'status':'ready','revision':value.get('revision')}
+    except Exception as exc:
+        return {'status':'unavailable','error':str(exc)}
 
 
 def mobile_snapshot(side='green'):
@@ -77,13 +196,18 @@ def mobile_snapshot(side='green'):
     try:
         _, value = _game()
     except ValueError as exc:
-        return {'status':'unavailable','error':str(exc)}
+        value = {'status':'unavailable','error':str(exc)}
+        if side in ('green', 'purple'):
+            _observe('generated', side, value, (time.perf_counter()-started)*1000)
+        return value
     if side not in ('green', 'purple'):
         raise ValueError('Unknown mobile team.')
     arms = value.pop('mobile_arms', {})
     value['mobile_arm'] = arms.get(side, value.get('mobile_arm') if side == 'green' else None)
     value['mobile_team'] = side
     value['mobile_camera'] = camera_view(value) if not value.get('virtual_play') else {'status':'unused'}
+    value['mobile_safety'] = _motion_safety(side) if not value.get('virtual_play') else {'status':'unused'}
+    value['mobile_cue_targets'] = _cue_targets_projection(value) if not value.get('virtual_play') else {'status':'unused'}
     for key in ('configuration', 'storage', 'inputs', 'progress', 'level_presets'):
         value.pop(key, None)
     # Movement packets retain authoritative health/effects and short guides,
@@ -140,6 +264,9 @@ def mobile_snapshot(side='green'):
                         uv=point.get('camera') or {}
                         if marker in {str(i) for i in range(30,36)} and int(marker) not in visible and all(type(uv.get(k)) in (int,float) and 0<=uv[k]<=1 for k in ('u','v')):
                             tags.append({'id':int(marker),'u':uv['u'],'v':uv['v'],'cached':True})
+                    if session and session.get('stage')=='perspective':
+                        # Hidden centre targets must not return as cached labels.
+                        camera['tags']=[tag for tag in tags if tag['id'] not in (30,32)]
                 if value['mobile_calibration_ready'] and session['stage']=='tutorial':
                     target=owner.calibration_lesson_target(side,session['id'])
                     if not isinstance(target,dict) or target.get('contract')!='hhh.cal2.target' or type(target.get('version')) is not int or target['version']!=1 or target.get('status')!='ready':
@@ -159,6 +286,7 @@ def mobile_snapshot(side='green'):
                            'source_gap_ms':round((now-_delivery_at)*1000,2) if _delivery_at is not None else None,
                            'build_ms':round((now-started)*1000,2)}
         _delivery_at=now
+    _observe('generated', side, value, (now-started)*1000)
     return value
 
 
@@ -183,6 +311,82 @@ def mobile_state_api():
     return jsonify(mobile_snapshot(side))
 
 
+def _cue_targets_projection(game):
+    """Read cached evidence for SSE and commands, scoped to the actual layout."""
+    global _cue_scope, _cue_scope_since
+    try:
+        board = _module('photon-board')
+        if not board or not callable(getattr(board, 'cue_targets_snapshot', None)):
+            raise ValueError('Cue target mapping unavailable.')
+        level, journey = game.get('level') or {}, game.get('journey') or {}
+        layout = {k: level.get(k) for k in ('id', 'layout_revision', 'width', 'height', 'sockets', 'core')}
+        fixed_ids = [s['aruco_id'] for s in level.get('sockets', [])]
+        core = level.get('core') or {}
+        if 'marker_x' in core and 'marker_y' in core:
+            fixed_ids.append(38)
+        if journey.get('phase') == 'calibration':
+            field = _module('playfield-areas')
+            field = field.display_snapshot() if field else {}
+            if field.get('contract') != 'hhh.playfield' or type(field.get('version')) is not int or field['version'] != 1 or field.get('status') != 'ready':
+                raise ValueError('Calibration display unavailable.')
+            layout = {'calibration': journey.get('id'), 'areas': field.get('areas'), 'settings': field.get('settings')}
+            fixed_ids = [area['marker'] for area in field['areas']]
+        scope = hashlib.sha256(json.dumps(layout, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        with _cue_scope_lock:
+            if scope != _cue_scope:
+                _cue_scope, _cue_scope_since = scope, time.time()
+            since = _cue_scope_since
+        # Filter at the camera owner BEFORE learning/conflict detection. Merely
+        # hiding unrelated tags here leaves their global hold/epoch in effect.
+        value = board.cue_targets_snapshot(scope=scope, fixed_ids=fixed_ids)
+        if (value.get('contract') != 'photon.board.cue-targets' or type(value.get('version')) is not int
+                or value['version'] != 1 or value.get('layout_scope') != scope
+                or value.get('fixed_ids') != sorted(fixed_ids)):
+            raise ValueError('Cue target mapping contract mismatch.')
+        value.update(scope=scope, scope_since=since, server_time=time.time())
+        value['tags'] = [tag for tag in value['tags'] if tag['last_seen'] >= since]
+        return value
+    except Exception as exc:
+        return dict(contract='photon.board.cue-targets', version=1, status='unavailable', tags=[], error=str(exc))
+
+
+@bp.route('/api/cue-targets')
+def cue_targets_api():
+    _mobile_guard()
+    try:
+        _, game = _game()
+        value = _cue_targets_projection(game)
+    except ValueError as exc:
+        value = dict(contract='photon.board.cue-targets', version=1, status='unavailable', tags=[], error=str(exc))
+    response = jsonify(value)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/diagnostics', methods=['POST', 'GET'])
+def connection_diagnostics_api():
+    side = _mobile_guard(mutation=request.method == 'POST')
+    if request.method == 'GET' and 'gamemaster' not in (request.environ.get('hhh.roles') or ()):
+        abort(403)
+    try:
+        if request.method == 'GET':
+            return Response(connection_log.export(), mimetype='application/x-ndjson', headers={
+                'Content-Disposition': 'attachment; filename=mobile-connection-events.jsonl',
+                'Cache-Control': 'no-store'})
+        # Bound reads even if Content-Length is omitted.
+        raw = request.stream.read(4097)
+        if len(raw) > 4096:
+            abort(413)
+        if not connection_log.append(side, json.loads(raw)):
+            return jsonify(ok=False, error='Diagnostic rate limit.'), 429
+        return jsonify(ok=True)
+    except (ValueError, UnicodeDecodeError) as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except OSError:
+        current_app.logger.exception('Could not persist mobile connection diagnostics')
+        return jsonify(ok=False, error='Connection log storage unavailable.'), 503
+
+
 def _purple_mobile_snapshot():
     return mobile_snapshot('purple')
 
@@ -190,18 +394,40 @@ def _purple_mobile_snapshot():
 @bp.route('/api/events')
 def mobile_events_api():
     side = _mobile_guard()
-    return _team_live[side].stream(mobile_snapshot if side == 'green' else _purple_mobile_snapshot, interval=.15, shared=True,
+    response = _team_live[side].stream(mobile_snapshot if side == 'green' else _purple_mobile_snapshot, interval=.15, shared=True,
                         # Start/reset must deliver a complete scene to every
                         # team, even when the map itself has not changed.
                         identity_fields=('run_id', 'level_revision'), envelope=True,
                         static_fields=('level', 'presentation', 'settings', 'loadout',
                                        'force_field_blockers', 'row_barrier_geometry', 'mobile_progress'))
+    original = response.response
+    def measured_stream():
+        failed = False
+        _observe('stream_open', side)
+        try:
+            for chunk in original:
+                _observe('emitted', side, chunk)
+                yield chunk
+        except GeneratorExit:
+            raise
+        except Exception:
+            failed = True
+            raise
+        finally:
+            try:
+                if callable(getattr(original, 'close', None)):
+                    original.close()
+            finally:
+                _observe('stream_close', side, failed=failed)
+    response.response = measured_stream()
+    return response
 
 
 @bp.route('/api/command', methods=['POST'])
 def mobile_command_api():
     side = _mobile_guard(mutation=True)
     data = request.get_json(silent=True)
+    _record_action(data)
     if not isinstance(data, dict) or len(json.dumps(data)) > 2048:
         return jsonify(ok=False, error='Invalid mobile command.'), 400
     if data.get('side', side) != side:
@@ -240,6 +466,7 @@ def _progress_owner():
 def player_api():
     side=_mobile_guard(mutation=True)
     data=request.get_json(silent=True)
+    _record_action(data)
     try:
         if not isinstance(data,dict) or len(json.dumps(data))>2048:
             raise ValueError('invalid player command')
@@ -271,6 +498,7 @@ def journey_api():
     side=_mobile_guard(mutation=True)
     try:
         data=request.get_json(silent=True)
+        _record_action(data)
         if not isinstance(data,dict) or len(json.dumps(data))>2048:
             raise ValueError('invalid journey command')
         game,_=_game()

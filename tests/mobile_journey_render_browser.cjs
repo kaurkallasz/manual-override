@@ -21,8 +21,8 @@ const { chromium } = require('playwright');
      },
     };
     window.request = async (path, value) => {
-     if (path === 'journey' && value.action === 'height') {
-      sample.mobile_calibration[value.height] = 60;
+     if (path === 'journey' && value.action === 'commit') {
+      sample.mobile_calibration.transport_height = 50;
       MobileJourney.update(sample, request, async () => {});
       return {};
      }
@@ -33,20 +33,30 @@ const { chromium } = require('playwright');
    }, side);
    assert.equal(await page.locator('#calibrationComplete').isDisabled(), true);
    await page.evaluate(() => {
-    sample.mobile_calibration.transport_height = 60;
+    sample.mobile_calibration.transport_height = 50;
     MobileJourney.update(sample, request, async () => {});
    });
-   assert.equal(await page.locator('#calibrationComplete').isEnabled(), true, `${side}: final height must immediately enable completion after the countdown ends`);
+   assert.equal(await page.locator('#calibrationComplete').isEnabled(), true, `${side}: derived heights must immediately enable completion after the countdown ends`);
    assert.match(await page.locator('.calibrationCompletionHint').textContent(), /All measurements saved/);
+   assert.equal(await page.locator('[data-height]').count(), 0);
+   assert.match(await page.locator('.calibrationHeightSummary').textContent(), /Pickup Z 10.0 mm.*Transport Z 50.0 mm/);
    await page.evaluate(() => {
     sample.mobile_calibration.transport_height = null;
     MobileJourney.update(sample, request, async () => {});
    });
    assert.equal(await page.locator('#calibrationComplete').isDisabled(), true);
-   await page.locator('[data-height="transport_height"]').click();
+   await page.locator('#calibrationCommit').click();
    assert.equal(await page.locator('#calibrationComplete').isEnabled(), true, `${side}: updates received while saving must enable completion when the request finishes`);
+   await page.evaluate(() => {
+    sample.mobile_calibration_ready=false;
+    sample.mobile_calibration.paused=true;
+    sample.mobile_camera.status='unavailable';
+    MobileJourney.update(sample,request,async()=>{});
+   });
+   assert.equal(await page.locator('#calibrationComplete').isEnabled(),true,`${side}: saved measurements can complete while disconnected`);
+   assert.equal(await page.locator('#calibrationCommit').isDisabled(),true,'Optional movement still requires live access');
    await page.close();
   }
-  console.log('Green and Purple completion update immediately after the final height capture.');
+  console.log('Green and Purple completion update immediately when derived heights arrive.');
  } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

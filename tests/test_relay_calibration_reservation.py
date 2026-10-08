@@ -2,10 +2,38 @@
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from test_photon_framework import load, FakeContext, Flask
 
 
 class RelayCalibrationReservationTests(unittest.TestCase):
+    def test_waiting_arm_revokes_controller_and_disables_servos_after_measured_stop(self):
+        relay=load('dobot-mg400-relay');events=[]
+        state={'enabled':True,'servo_active':True,'last_feedback':time.time(),'joints':[0,0,0,0]}
+        def disable():events.append('disable');state['enabled']=False;return 0,'ok'
+        def stop_servo():events.append('stop_servo');state['servo_active']=False
+        robot=SimpleNamespace(is_connected=lambda:True,get_state=lambda:dict(state),
+                              hold=lambda:events.append('hold'),stop_servo=stop_servo,disable=disable)
+        for side in ('green','purple'):
+            state.update(enabled=True,servo_active=True,last_feedback=time.time());events.clear()
+            relay._sides[side]['token']='old-controller'
+            with patch.object(relay,'_arm',return_value=robot),patch.object(relay,'_log_command'):
+                result=relay.disable_side(side)
+            self.assertEqual(result['status'],'ready');self.assertTrue(result['disabled'])
+            self.assertIsNone(relay._sides[side]['token'])
+            self.assertLess(events.index('hold'),events.index('disable'))
+            self.assertLess(events.index('stop_servo'),events.index('disable'))
+
+    def test_offline_or_stale_waiting_arm_never_gets_enabled_or_claimed_stopped(self):
+        relay=load('dobot-mg400-relay')
+        with patch.object(relay,'_arm',return_value=None):
+            result=relay.disable_side('purple')
+        self.assertEqual(result['status'],'ready');self.assertTrue(result['inhibited'])
+        self.assertFalse(result['connected']);self.assertFalse(result['disabled'])
+        robot=SimpleNamespace(is_connected=lambda:True,get_state=lambda:dict(enabled=False,servo_active=False,last_feedback=0))
+        with patch.object(relay,'_arm',return_value=robot):result=relay.disable_side('green')
+        self.assertEqual(result['status'],'unavailable');self.assertFalse(result['disabled'])
+
     def test_selected_player_can_connect_before_activation_without_admitting_motion(self):
         relay=load('dobot-mg400-relay');app=Flask('calibration-connect')
         value={'contract':'hhh.cal2.session','version':1,'status':'ready','active_side':'green',

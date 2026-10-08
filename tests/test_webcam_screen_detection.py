@@ -93,6 +93,11 @@ class ScreenDetectionTests(unittest.TestCase):
     def test_immediate_public_snapshot_uses_the_confirmation_gate(self):
         manager = self.webcam.CameraManager()
         frame = np.zeros((200,500,3),np.uint8)
+        # This fixture drives detection directly but represents a live capture.
+        manager._cap = object()
+        manager._running = True
+        manager._latest_raw = frame
+        manager._latest_raw_at = self.webcam.time.time()
         manager._detection_fps_limit = 10
         with mock.patch.object(self.webcam,'_detect',return_value=self.detection()), \
                 mock.patch.object(self.webcam.time,'monotonic') as clock:

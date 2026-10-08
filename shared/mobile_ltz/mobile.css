@@ -322,7 +322,11 @@ button:active{transform:none;background:#91efbc24}
 #app:is([data-control-mode=xyz],[data-control-mode=targeting],[data-control-mode=cue]) .mode{top:auto;bottom:calc(var(--bottom) + 134px);left:104px;right:var(--right-edge);width:auto;justify-content:flex-end}
 #xyzBullseyes{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:3;fill:none;stroke-linecap:round}
 .xyzTarget{stroke:#63ff97;stroke-width:2.5;filter:drop-shadow(0 0 3px #35ff79) drop-shadow(0 0 7px #35ff7980)}
+.xyzPickup{stroke:#36f5ff;stroke-width:2.5;filter:drop-shadow(0 0 3px #00eaff) drop-shadow(0 0 7px #00eaff80)}
+.xyzPickup[hidden]{display:none}
 .xyzActual{stroke:#ff737d;stroke-width:1.1;filter:drop-shadow(0 0 3px #ff293b) drop-shadow(0 0 6px #ff293b99)}
+#xyzArmTrajectory{stroke:#ff737d;stroke-width:1.5;stroke-dasharray:8 6;fill:none;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 2px #ff293b80)}
+#xyzArmTrajectory[hidden]{display:none}
 #xyzBullseyes[data-aligned=true] .xyzTarget,#xyzBullseyes[data-aligned=true] .xyzActual{stroke:#ffaf4f;filter:drop-shadow(0 0 3px #ff9429) drop-shadow(0 0 7px #ff942980)}
 #xyzBullseyes[data-stale=true]{opacity:.35}
 .mobileControlLabel{display:grid;gap:8px;max-width:360px;font-size:13px}.mobileControlLabel select{min-height:44px;border-radius:6px;border:1px solid #ffffff30;background:#152b20;color:#effff4;padding:8px;font:inherit}
@@ -400,7 +404,7 @@ button:active{transform:none;background:#91efbc24}
 #app[data-control-mode=cue] .markerNumber{display:block}
 .markerNumber[data-kind=piece]{color:#8affaf;border-color:#8affaf}
 .cuePanel[hidden]{display:none}
-.cuePanel{position:absolute;right:var(--right-edge);bottom:calc(var(--bottom) + 68px);width:min(142px,calc(100% - var(--edge) - var(--right-edge) - 132px));z-index:6;display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:4px;background:#0e1b16eb;animation:cueSlide .2s ease-out;overflow:hidden}
+.cuePanel{position:absolute;right:var(--right-edge);bottom:calc(var(--bottom) + 68px);width:min(142px,calc(100% - var(--edge) - var(--right-edge) - 132px));z-index:6;display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:4px;background:rgba(0,0,0,.2);animation:cueSlide .2s ease-out;overflow:hidden}
 @keyframes cueSlide{from{transform:translateX(110%)}to{transform:translateX(0)}}
 .cuePanel button{min-width:0;width:32px;height:32px;min-height:32px;padding:0;border-radius:3px;border:1px solid #9bc7ae66;font-size:17px;background:#1c3027;color:#e6f5ec}
 .cueHeading{display:flex;justify-content:space-between;align-items:center;flex:none;font-size:12px;min-height:28px}.cueHeading button{height:28px;min-height:28px}
@@ -408,8 +412,23 @@ button:active{transform:none;background:#91efbc24}
 .cueRow{display:grid;grid-template-columns:minmax(0,1fr) 10px minmax(0,1fr) 24px;align-items:center;gap:2px;padding:5px 2px;border:1px solid transparent;border-radius:2px;min-height:44px;margin-bottom:4px}
 .cueRow select{min-width:0;width:100%;height:32px;padding:2px;font:12px ui-monospace,monospace;border:1px solid #819c8b80;border-radius:2px;background:#102219;color:#e6f5ec}
 .cueRow button{width:24px}.cueRow .cueArrow{font-size:12px;text-align:center}.cueSummary{display:none;white-space:nowrap;font:12px ui-monospace,monospace}
+.cueRow .cueClearAdd{grid-column:1/-1;width:100%;height:26px;min-height:26px;font-size:11px;color:#b5e9cf;background:#183a2b}
+.cueRow .cueClearAdd[hidden]{display:none}
+.cueRow[data-kind=clear_view]{grid-template-columns:24px minmax(0,1fr) 24px;background:#23483766}
+.cueRow[data-kind=clear_view] .cueSummary{white-space:nowrap;font:10px/1.4 system-ui,sans-serif}
+.cueClearTitle{grid-column:1/3;grid-row:1;font:11px system-ui,sans-serif}
+.cueRow[data-kind=clear_view] .cueRemove{grid-column:3;grid-row:1;height:24px;min-height:24px}
+.cueClearDirection[data-direction=left]{grid-column:1;grid-row:2}.cueClearDirection[data-direction=right]{grid-column:3;grid-row:2}
+.cueRow .cueClearDirection[aria-pressed=true]{border-color:#72ffb0;background:#28593f;color:#afffd0;box-shadow:inset 0 0 0 1px #72ffb0}
+.cueClearDistance{grid-column:2;grid-row:2;display:flex;align-items:center;gap:2px;min-width:0;font:10px system-ui,sans-serif}
+.cueClearDistance input{width:100%;min-width:0;height:32px;padding:2px;border:1px solid #819c8b80;border-radius:2px;background:#102219;color:#e6f5ec;font:12px ui-monospace,monospace;text-align:center;appearance:textfield;-moz-appearance:textfield}
+.cueClearDistance input::-webkit-inner-spin-button,.cueClearDistance input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .cueRow[data-active=true]{border-color:#ffb75e;background:#76552b66;box-shadow:inset 2px 0 #ffb75e}.cueRow[data-done=true]{border-color:#71b98d55;color:#91efbc}
-.cueTransport{display:flex;gap:6px;flex:none}.cueTransport #cuePlay{flex:1}.cueTransport #cueStop{color:#ffaaa9}
+.cueTransport{display:flex;gap:6px;flex:none}.cueTransport #cuePlay{flex:1}.cueTransport #cueStop{color:#ffaaa9;width:40px;line-height:18px}
+#cueStopLabel{display:block;font-size:8px;line-height:10px;white-space:nowrap}
+#cueReadiness{display:grid;flex:none;font-size:10px;line-height:12px;color:#9fccb0}
+#cueReadiness[data-blocked=true],.cuePanel[data-failed=true] #cueRunState{color:#ffb4ae}
+.cuePanel[data-failed=true] #cueHint{color:#ffb4ae}
 #cueHint{font-size:11px;line-height:14px;margin:0;color:#c7dbcf;max-height:42px;overflow:auto;flex:none;overflow-wrap:anywhere}
 .cuePanel[data-minimized=true]{width:110px;bottom:auto;max-height:var(--cue-available)}.cuePanel[data-minimized=true] .cueRow{display:block;min-height:32px;padding:7px 3px}.cuePanel[data-minimized=true] .cueRow>:not(.cueSummary){display:none}.cuePanel[data-minimized=true] .cueSummary{display:block}.cuePanel[data-minimized=true] #cueAdd{display:none}
 #app[data-control-mode=cue] #feedback{left:calc(var(--edge) + 140px);bottom:var(--bottom);font-size:10px;max-height:56px;overflow:hidden}
@@ -511,3 +530,16 @@ body:is([data-calibration-stage=points],[data-calibration-stage=perspective]) #x
 
 .gameJourney.playerPrompt{inset:50% auto auto 50%;transform:translate(-50%,-50%);width:min(360px,calc(100vw - 32px));max-height:calc(100dvh - 110px);padding:22px;border:1px solid #ffffff26;border-radius:20px;background:linear-gradient(145deg,#14242af2,#0a151bf2);backdrop-filter:blur(18px);box-shadow:0 24px 70px #0008}
 .playerPrompt h2{font-size:22px;letter-spacing:-.02em;margin:0 0 18px}.playerPrompt label{font-size:12px;color:#b7cbd0;margin-top:14px}.playerPrompt select{width:100%;margin:6px 0}.playerPrompt .journeyNameRow{display:flex;gap:6px;align-items:center}.playerPrompt input{min-width:0;width:100%;margin:6px 0}.playerPrompt #journeyCreate{margin:0}.playerPrompt #journeyReady{width:100%;margin:16px 0 0;background:#daf2e8;color:#122722;border:0;border-radius:12px;font-weight:700}.playerPrompt #journeyToggle{float:right;min-height:28px;font-size:11px;padding:4px 8px;margin:-12px -12px 8px 8px;color:#bcd4cd;background:transparent;border-color:transparent}.playerPrompt p{font-size:12px;line-height:1.5}.playerPrompt #journeyMessage:empty{display:none}.playerPrompt .journeyPlayerSummary{color:#bcd4cd}.playerPrompt button:disabled{opacity:.5}
+
+/* Current alignment stays visible beside the connection log. */
+#cameraStatus{font-size:11px;line-height:1.4;margin:4px 0;color:#d8bd78}#cameraStatus[data-ready="true"]{color:#9dddb3}
+
+.cuePanel[data-recovering=true] #cueHint,.cuePanel[data-failed=true] #cueHint{max-height:56px;white-space:normal;overflow:auto;flex:0 1 auto}
+.cuePanel[data-recovering=true] #cueRows,.cuePanel[data-failed=true] #cueRows{min-height:28px}
+@media(orientation:portrait){
+ #app[data-control-mode=cue] .playerLog{width:calc(100vw - var(--edge) - var(--right-edge) - 150px)}
+}
+@media(orientation:landscape) and (max-height:480px){
+ #cueReadiness{font-size:9px;line-height:10px}
+ .cuePanel[data-recovering=true] #cueHint,.cuePanel[data-failed=true] #cueHint{max-height:24px}
+}

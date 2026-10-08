@@ -18,6 +18,8 @@ reports the prototype as failed to load while the others keep running; install
 this folder's requirements.txt to enable it.
 """
 
+import base64
+import ctypes
 import json
 import math
 import os
@@ -58,6 +60,7 @@ DEFAULT_INDEX = 0
 PROBE_MAX = 6          # probe camera indices 0..PROBE_MAX-1 when listing
 JPEG_QUALITY = 80      # MJPEG frame quality (0-100)
 STREAM_FPS = 30        # cap on how fast the stream route pushes frames
+FRAME_MAX_AGE = 1.5    # an allocated capture is not proof of a live camera
 DEFAULT_W = 1920       # resolution we ask the camera for (it may pick another)
 DEFAULT_H = 1080
 DEFAULT_DETECTION_FPS = 15
@@ -75,6 +78,9 @@ SETTINGS_PATH = os.path.join(HERE, "camera-settings.json")
 NATIVE_FOCUS_APP = os.path.join(
     HERE, "native-focus-lock", "dist", "Focus Lock.app", "Contents", "MacOS",
     "focus-lock")
+NATIVE_CAMERA_LIBRARY = os.path.join(os.path.dirname(NATIVE_FOCUS_APP), "camera-devices.dylib")
+_camera_library = None
+_camera_library_lock = threading.Lock()
 
 # ---- ArUco tag tracking ----------------------------------------------------
 # Detect DICT_4X4_50 markers each frame and keep a debounced list of tags:
@@ -150,6 +156,54 @@ def _usb_camera_devices():
 
     visit(roots)
     return devices
+
+
+def _capture_devices():
+    """AVFoundation names/IDs in the same order OpenCV uses, without probing.
+
+    None means inventory is unavailable; [] is a valid, empty device list.
+    Never label capture indices using the unrelated USB bus ordering.
+    """
+    if sys.platform != "darwin" or not os.path.isfile(NATIVE_CAMERA_LIBRARY):
+        return None
+    try:
+        global _camera_library
+        with _camera_library_lock:
+            if _camera_library is None:
+                library = ctypes.CDLL(NATIVE_CAMERA_LIBRARY)
+                library.hhh_camera_devices.argtypes = []
+                library.hhh_camera_devices.restype = ctypes.c_void_p
+                library.hhh_camera_devices_free.argtypes = [ctypes.c_void_p]
+                library.hhh_camera_devices_free.restype = None
+                _camera_library = library
+            pointer = _camera_library.hhh_camera_devices()
+            if not pointer:
+                return None
+            try:
+                data = json.loads(ctypes.string_at(pointer))
+            finally:
+                _camera_library.hhh_camera_devices_free(pointer)
+        devices = data.get("devices")
+        if not data.get("ok") or not isinstance(devices, list):
+            return None
+        if any(not isinstance(d, dict) or type(d.get("index")) is not int
+               or d["index"] != i or not isinstance(d.get("unique_id"), str)
+               or not d["unique_id"] or not isinstance(d.get("name"), str)
+               for i, d in enumerate(devices)):
+            return None
+        return devices
+    except (OSError, AttributeError, ValueError, TypeError):
+        return None
+
+
+def _usb_device_for_capture(device):
+    if not device:
+        return None
+    uid = device["unique_id"].lower()
+    matches = [usb for usb in _usb_camera_devices()
+               if (usb["vendor"].removeprefix("0x") +
+                   usb["product"].removeprefix("0x")).lower() in uid]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _native_focus(device, command="status", value=None):
@@ -329,6 +383,10 @@ class TagTracker:
         self._lock = threading.Lock()
         self._tags = {}      # id -> record
 
+    def reset(self):
+        with self._lock:
+            self._tags.clear()
+
     def update(self, dets, now):
         with self._lock:
             for mid, d in dets.items():
@@ -403,13 +461,13 @@ _tracker = TagTracker()
 def get_tags():
     """Programmatic API for other prototypes (via the hub): the confirmed list of
     tracked ArUco tags — [{id, x, y, nx, ny, rotation, missing}]."""
-    return _tracker.tags(time.monotonic())
+    return _tracker.tags(time.monotonic()) if _mgr.status()["open"] else []
 
 
 def get_tag(tag_id):
     """One tracked tag by id, or None if it isn't currently tracked."""
     tag_id = int(tag_id)
-    for t in _tracker.tags(time.monotonic()):
+    for t in get_tags():
         if t["id"] == tag_id:
             return t
     return None
@@ -447,6 +505,8 @@ class CameraManager:
         self._cap = None
         self._index = None
         self._device_info = None
+        self._capture_device = None
+        self._manually_stopped = False
         self._native_focus_state = None
         self._native_focus_error = None
         self._native_focus_process = None
@@ -475,26 +535,47 @@ class CameraManager:
         self._overlay_detections = {}
         self._last_detections_at = 0.0
         self._screen_confirmation = ScreenConfirmation()
-        self._no_signal = _placeholder("No camera selected")
+        self._no_signal = _placeholder("No live camera signal")
 
     # -- lifecycle ------------------------------------------------------------
     def open(self, index, width=None, height=None, tracking_width=None,
              tracking_height=None, detection_fps=None):
         with self._lifecycle_lock:
+            self._manually_stopped = False
             return self._open(index, width, height, tracking_width,
                               tracking_height, detection_fps)
 
     def ensure_open(self):
         """Start the remembered camera once, shared by hub startup and viewers."""
         with self._lifecycle_lock:
+            if self._manually_stopped:
+                return False, "Camera stopped; press Reconnect in Webcam"
             if self.active_index() is not None:
                 return True, None
             remembered = _load_settings()
             if remembered is None:
                 return False, "No camera selected; choose one in Webcam"
-            return self.open(remembered["index"], remembered["width"],
+            index = remembered["index"]
+            if remembered.get("unique_id"):
+                devices = _capture_devices()
+                match = next((d for d in devices or []
+                              if d["unique_id"] == remembered["unique_id"]), None)
+                if match is None:
+                    with self._lock:
+                        self._error = (f"Selected camera {remembered.get('name') or index} "
+                                       "unavailable. Reconnect it, then press Reconnect.")
+                    return False, self._error
+                index = match["index"]
+            return self.open(index, remembered["width"],
                              remembered["height"], remembered["tracking_width"],
                              remembered["tracking_height"], remembered["detection_fps"])
+
+    def reconnect(self):
+        """Explicitly reopen the selected identity, even if its index changed."""
+        with self._lifecycle_lock:
+            self._close()
+            self._manually_stopped = False
+            return self.ensure_open()
 
     def _open(self, index, width=None, height=None, tracking_width=None,
               tracking_height=None, detection_fps=None):
@@ -511,8 +592,12 @@ class CameraManager:
         capture_height = max(height, tracking_height)
         with self._lock:
             self._stop_locked()
-            devices = _usb_camera_devices()
-            device_info = devices[index] if 0 <= index < len(devices) else None
+            devices = _capture_devices()
+            if devices is not None and not 0 <= index < len(devices):
+                self._error = f"Camera {index} is unavailable. Reconnect it or select an available camera."
+                return False, self._error
+            capture_device = devices[index] if devices is not None else None
+            device_info = _usb_device_for_capture(capture_device)
             native_state = None
             native_error = None
             native_process = None
@@ -522,8 +607,26 @@ class CameraManager:
                 except RuntimeError as exc:
                     native_error = str(exc)
             remembered = _load_settings() or {}
-            if (native_state and
-                    int(remembered.get("index", -1)) == int(index)):
+            same_device = (remembered.get("unique_id") == (capture_device or {}).get("unique_id")
+                           if remembered.get("unique_id") else
+                           int(remembered.get("index", -1)) == int(index))
+            cap = cv2.VideoCapture(index, _backend())
+            if not cap.isOpened():
+                cap.release()
+                if native_process is not None:
+                    native_process.terminate()
+                self._error = f"could not open camera {index}"
+                return False, self._error
+            # Request MJPG first: most UVC webcams only expose 1080p+/4K and
+            # higher frame rates through the MJPG codec, not raw (YUY2) frames.
+            try:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            except (cv2.error, AttributeError):
+                pass
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
+            # Restore optical controls after AVFoundation configures the device.
+            if native_state and same_device:
                 try:
                     autofocus = remembered.get("autofocus")
                     focus = remembered.get("focus")
@@ -545,23 +648,7 @@ class CameraManager:
                             int(round(float(exposure))))
                 except (RuntimeError, TypeError, ValueError) as exc:
                     native_error = str(exc)
-            cap = cv2.VideoCapture(index, _backend())
-            if not cap.isOpened():
-                cap.release()
-                if native_process is not None:
-                    native_process.terminate()
-                self._error = f"could not open camera {index}"
-                return False, self._error
-            # Request MJPG first: most UVC webcams only expose 1080p+/4K and
-            # higher frame rates through the MJPG codec, not raw (YUY2) frames.
-            try:
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            except (cv2.error, AttributeError):
-                pass
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
-            if (not native_state and
-                    int(remembered.get("index", -1)) == int(index)):
+            if not native_state and same_device:
                 autofocus = remembered.get("autofocus")
                 focus = remembered.get("focus")
                 try:
@@ -578,8 +665,10 @@ class CameraManager:
             except cv2.error:
                 pass
             self._cap = cap
+            self._source_epoch = str(time.time_ns())
             self._index = index
             self._device_info = device_info
+            self._capture_device = capture_device
             self._native_focus_state = native_state
             self._native_focus_error = native_error
             self._native_focus_process = native_process
@@ -603,11 +692,12 @@ class CameraManager:
             )
             self._thread.start()
         _save_settings(index, width, height, tracking_width, tracking_height,
-                       detection_fps)
+                       detection_fps, capture_device=capture_device)
         return True, None
 
     def close(self):
         with self._lifecycle_lock:
+            self._manually_stopped = True
             self._close()
 
     def _close(self):
@@ -626,9 +716,11 @@ class CameraManager:
         native_process = self._native_focus_process
         self._thread = None
         self._cap = None
-        self._latest = None
-        self._latest_raw = None
-        self._overlay_detections = {}
+        self._index = None
+        self._device_info = None
+        self._capture_device = None
+        self._error = None
+        self._clear_frames_locked()
         self._native_focus_process = None
         # release the lock while joining so the grab loop can exit its read()
         if thread is not None and thread.is_alive() and threading.current_thread() is not thread:
@@ -645,18 +737,46 @@ class CameraManager:
                 native_process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 native_process.kill()
+        self._clear_frames_locked()
+
+    def _clear_frames_locked(self):
+        self._latest = None
+        self._latest_raw = None
+        self._latest_raw_at = 0.0
+        self._w = self._h = self._actual_preview_w = self._actual_preview_h = 0
+        self._fps = self._detection_fps = 0.0
+        self._last_ts = self._last_detection_ts = self._last_detections_at = 0.0
+        self._last_detections = {}
+        self._overlay_detections = {}
+        self._screen_confirmation.reset()
+        _tracker.reset()
+
+    def _fresh_locked(self):
+        return bool(self._running and self._cap is not None and not self._error
+                    and self._latest_raw is not None
+                    and 0 <= time.time() - self._latest_raw_at <= FRAME_MAX_AGE)
 
     # -- capture loop ---------------------------------------------------------
     def _grab_loop(self):
         cap = self._cap
-        while self._running and cap is not None:
-            ok, frame = cap.read()
+        while self._running and cap is not None and self._cap is cap:
+            try:
+                ok, frame = cap.read()
+            except cv2.error:
+                ok, frame = False, None
             if not ok or frame is None:
                 with self._lock:
-                    self._error = "camera returned no frame"
+                    if not self._running or self._cap is not cap:
+                        return
+                    if not self._error:
+                        self._source_epoch = str(time.time_ns())
+                    self._clear_frames_locked()
+                    self._error = "Camera disconnected or returned no frame. Reconnect the webcam, then press Reconnect."
                 time.sleep(0.05)
                 continue
             with self._lock:
+                if not self._running or self._cap is not cap:
+                    return
                 self._latest_raw = frame.copy()
                 self._latest_raw_at = time.time()
             capture_h, capture_w = frame.shape[:2]
@@ -668,6 +788,8 @@ class CameraManager:
                 continue
             now = time.monotonic()
             with self._lock:
+                if not self._running or self._cap is not cap:
+                    return
                 self._latest = buf.tobytes()
                 self._w, self._h = capture_w, capture_h
                 self._actual_preview_h, self._actual_preview_w = preview.shape[:2]
@@ -714,13 +836,8 @@ class CameraManager:
                     "exposure_max": 0,
                     "exposure_step": 1,
                 }
-            autofocus_supported, autofocus = self._control_supported(
-                cap, cv2.CAP_PROP_AUTOFOCUS)
-            focus_supported, focus = self._control_supported(cap, cv2.CAP_PROP_FOCUS)
-            focus_min, focus_max, focus_step = 0, 255, 1
-            control_backend = "opencv"
             native = self._native_focus_state
-            if native and not (autofocus_supported and focus_supported):
+            if native:
                 autofocus_supported = bool(native.get("autofocus_supported"))
                 focus_supported = bool(native.get("focus_supported"))
                 autofocus = native.get("autofocus")
@@ -729,13 +846,19 @@ class CameraManager:
                 focus_max = native.get("focus_max", 255)
                 focus_step = native.get("focus_step", 1)
                 control_backend = "native-focus-lock"
+            else:
+                autofocus_supported, autofocus = self._control_supported(
+                    cap, cv2.CAP_PROP_AUTOFOCUS)
+                focus_supported, focus = self._control_supported(cap, cv2.CAP_PROP_FOCUS)
+                focus_min, focus_max, focus_step = 0, 255, 1
+                control_backend = "opencv"
             autoexposure_supported = bool(
                 native and native.get("autoexposure_supported"))
             exposure_supported = bool(native and native.get("exposure_supported"))
             return {
                 "camera_open": True,
                 "camera_index": self._index,
-                "camera_name": (self._device_info or {}).get("name"),
+                "camera_name": (self._capture_device or {}).get("name"),
                 "autofocus_supported": autofocus_supported,
                 "focus_supported": focus_supported,
                 "autofocus": bool(round(autofocus)) if autofocus_supported else None,
@@ -797,6 +920,8 @@ class CameraManager:
                 self._native_focus_state = native
             return True, None, self.focus_controls()
 
+        if autoexposure is not None or exposure is not None:
+            return False, "this camera does not expose exposure control", None
         with self._lock:
             cap = self._cap
             try:
@@ -873,7 +998,7 @@ class CameraManager:
     # -- readers --------------------------------------------------------------
     def latest_jpeg(self):
         with self._lock:
-            return self._latest or self._no_signal
+            return (self._latest if self._fresh_locked() else None) or self._no_signal
 
     def latest_frame(self):
         """Return a copy of the newest unannotated BGR frame, or None.
@@ -882,11 +1007,14 @@ class CameraManager:
         Calibration) do OpenCV work without fighting over the physical device.
         """
         with self._lock:
-            return None if self._latest_raw is None else self._latest_raw.copy()
+            return self._latest_raw.copy() if self._fresh_locked() else None
 
     def status(self):
         with self._lock:
-            open_ = self._cap is not None and self._running
+            open_ = self._fresh_locked()
+            error = self._error
+            if not open_ and self._cap is not None and self._running and not error:
+                error = "Waiting for fresh camera frames. Reconnect the webcam if this persists."
             tracking_scale = min(
                 1.0,
                 self._tracking_w / self._w if self._w else 1.0,
@@ -895,20 +1023,24 @@ class CameraManager:
             return {
                 "open": open_,
                 "index": self._index,
-                "width": self._w,
-                "height": self._h,
+                "name": (self._capture_device or {}).get("name"),
+                "unique_id": (self._capture_device or {}).get("unique_id"),
+                "frame_at": self._latest_raw_at if open_ else 0.0,
+                "source_epoch": getattr(self, '_source_epoch', None),
+                "width": self._w if open_ else 0,
+                "height": self._h if open_ else 0,
                 "requested_width": self._req_w,
                 "requested_height": self._req_h,
-                "preview_width": self._actual_preview_w or self._preview_w,
-                "preview_height": self._actual_preview_h or self._preview_h,
-                "tracking_width": round(self._w * tracking_scale) if self._w else 0,
-                "tracking_height": round(self._h * tracking_scale) if self._h else 0,
+                "preview_width": self._actual_preview_w if open_ else 0,
+                "preview_height": self._actual_preview_h if open_ else 0,
+                "tracking_width": round(self._w * tracking_scale) if open_ else 0,
+                "tracking_height": round(self._h * tracking_scale) if open_ else 0,
                 "requested_tracking_width": self._tracking_w,
                 "requested_tracking_height": self._tracking_h,
-                "detection_fps": round(self._detection_fps, 1),
+                "detection_fps": round(self._detection_fps, 1) if open_ else 0,
                 "detection_fps_limit": self._detection_fps_limit,
-                "fps": round(self._fps, 1),
-                "error": self._error,
+                "fps": round(self._fps, 1) if open_ else 0,
+                "error": error,
                 "rotate180": False,
                 "backend": "AVFoundation" if sys.platform == "darwin"
                 else ("DirectShow" if sys.platform.startswith("win") else "default"),
@@ -917,6 +1049,8 @@ class CameraManager:
     def detection_snapshot(self, now):
         """Held positions plus IDs present in the latest processed frame."""
         with self._lock:
+            if not self._fresh_locked():
+                return [], []
             missing = now - self._last_detections_at
             if missing > DETECTION_HOLD_SECS:
                 out = []
@@ -1001,8 +1135,7 @@ def raw_frame_snapshot():
     with _mgr._lock:
         frame_at = _mgr._latest_raw_at
         frame = None if _mgr._latest_raw is None else _mgr._latest_raw.copy()
-        ready = bool(_mgr._running and _mgr._cap is not None and frame is not None
-                     and 0 <= time.time() - frame_at <= 1.5)
+        ready = _mgr._fresh_locked()
     return {"contract": "hhh.webcam.frame", "version": 1,
             "status": "ready" if ready else "unavailable", "frame_at": frame_at,
             "frame": frame if ready else None}
@@ -1057,10 +1190,11 @@ def tag_snapshot():
         "contract": TAG_CONTRACT,
         "version": TAG_VERSION,
         "frame_at": _mgr.detection_frame_at(),
+        "camera_identity": str(status.get("index")) + ':' + str(status.get("source_epoch")),
         "status": "ready" if ready else "unavailable",
         "error": None if ready else str(status.get("error") or "camera is not open"),
         "observed_at": time.time(),
-        "tags": tags,
+        "tags": tags if ready else [],
         "detections": detections,
         "visible_ids": visible_ids,
         "width": int(status.get("width") or 0),
@@ -1075,36 +1209,46 @@ def probe_cameras(max_index=PROBE_MAX):
 
 
 def _probe_cameras(max_index):
-    """Probe indices 0..max_index-1 and report which ones open.
+    """List AVFoundation devices without opening cameras; probe other platforms.
 
     The currently-active camera is reported from live state (not reopened, which
     would fight the grab thread). Probing is best-effort: missing indices may emit
     OpenCV warnings to stderr — that's normal."""
     active = _mgr.active_index()
     st = _mgr.status()
-    device_names = _usb_camera_devices()
+    devices = _capture_devices()
+    if devices is not None:
+        # Listing must not open every device (or probe nonexistent indices).
+        return [{**d, "active": bool(st["open"] and d["unique_id"] == st.get("unique_id")),
+                 "width": st["width"] if d["unique_id"] == st.get("unique_id") else 0,
+                 "height": st["height"] if d["unique_id"] == st.get("unique_id") else 0,
+                 "label": d["name"] + (f" · {st['width']}×{st['height']} (active)"
+                       if st["open"] and d["unique_id"] == st.get("unique_id") else "")}
+                for d in devices]
     found = []
     for i in range(max_index):
-        device_name = (
-            device_names[i]["name"] if i < len(device_names) else f"Camera {i}")
+        device_name = f"Camera {i}"
         if i == active:
-            found.append({
-                "index": i, "active": True,
-                "width": st["width"], "height": st["height"],
-                "name": device_name,
-                "label": device_name + (f" · {st['width']}×{st['height']}"
-                                        if st["width"] else "") + " (active)",
-            })
+            if st["open"]:
+                found.append({
+                    "index": i, "active": True,
+                    "width": st["width"], "height": st["height"],
+                    "name": device_name,
+                    "label": device_name + (f" · {st['width']}×{st['height']}"
+                                            if st["width"] else "") + " (active)",
+                })
             continue
         cap = cv2.VideoCapture(i, _backend())
         opened = cap.isOpened()
         w = h = 0
+        readable = False
         if opened:
             ok, frame = cap.read()
-            if frame is not None:
+            readable = ok and frame is not None
+            if readable:
                 h, w = frame.shape[:2]
         cap.release()
-        if opened:
+        if readable:
             found.append({
                 "index": i, "active": False, "width": w, "height": h,
                 "name": device_name,
@@ -1132,6 +1276,9 @@ def _load_settings():
             "detection_fps": float(data.get("detection_fps") or
                                    DEFAULT_DETECTION_FPS),
         }
+        for key in ("unique_id", "name"):
+            if isinstance(data.get(key), str) and data[key]:
+                settings[key] = data[key]
         if isinstance(data.get("autofocus"), bool):
             settings["autofocus"] = data["autofocus"]
         if isinstance(data.get("autoexposure"), bool):
@@ -1169,7 +1316,7 @@ def _write_settings(value):
 
 
 def _save_settings(index=None, width=None, height=None, tracking_width=None,
-                   tracking_height=None, detection_fps=None):
+                   tracking_height=None, detection_fps=None, capture_device=None):
     """Merge the given fields into camera-settings.json."""
     cur = {}
     try:
@@ -1179,6 +1326,10 @@ def _save_settings(index=None, width=None, height=None, tracking_width=None,
         cur = {}
     if index is not None:
         cur["index"] = index
+        for key in ("unique_id", "name"):
+            cur.pop(key, None)
+            if capture_device and capture_device.get(key):
+                cur[key] = capture_device[key]
     if width:
         cur["width"] = width
     if height:
@@ -1233,6 +1384,7 @@ def api_cameras():
         "cameras": probe_cameras(),
         "resolutions": RESOLUTIONS,
         "remembered": _load_settings(),
+        "status": _mgr.status(),
     })
 
 
@@ -1249,15 +1401,28 @@ def _events_dict():
     now = time.monotonic()
     return {
         "status": st,
-        "tags": _tracker.tags(now),
+        "tags": _tracker.tags(now) if st["open"] else [],
         "detections": _mgr.detections(now),
     }
 
 
+def _preview_events_dict():
+    """One connection for the controller's image and state, one capture owner."""
+    value = _events_dict()
+    value["preview"] = "data:image/jpeg;base64," + base64.b64encode(
+        _mgr.latest_jpeg()).decode("ascii")
+    return value
+
+
 @bp.route("/api/events")
 def api_events():
-    """Push the camera status + tracked tags ~3x/s while they change. (The live
-    video is the separate MJPEG /api/stream.)"""
+    """Push status/tags ~3x/s, or include preview frames at up to 10 FPS."""
+    if request.args.get("preview") == "1":
+        # Multiple hub tabs can exhaust HTTP/1.1's per-origin connection pool.
+        # Do not make the controller compete with its own status stream for a
+        # second, indefinitely open MJPEG connection. Existing consumers retain
+        # the small state-only payload; the clean-view MJPEG endpoint is unchanged.
+        return _live.stream(_preview_events_dict, interval=0.1, shared=True)
     return _live.stream(_events_dict, interval=0.3)
 
 
@@ -1298,7 +1463,11 @@ def api_select():
     """Open a camera with independent preview and ArUco tracking settings."""
     data = request.get_json(silent=True) or {}
     try:
+        if type(data.get("index")) not in (int, str):
+            raise ValueError("invalid index")
         index = int(data["index"])
+        if index < 0:
+            raise ValueError("invalid index")
     except (KeyError, ValueError, TypeError):
         return jsonify({"ok": False, "error": "expected integer 'index'"}), 400
     remembered = _load_settings() or {}
@@ -1331,6 +1500,12 @@ def api_rotate():
     """Deprecated: source frames stay unrotated so tag tracking remains stable."""
     _mgr.set_rotate(False)
     return jsonify({"ok": True, "rotate180": False})
+
+
+@bp.route("/api/reconnect", methods=["POST"])
+def api_reconnect():
+    ok, error = _mgr.reconnect()
+    return jsonify({"ok": ok, "error": error, "status": _mgr.status()}), 200 if ok else 502
 
 
 @bp.route("/api/stop", methods=["POST"])

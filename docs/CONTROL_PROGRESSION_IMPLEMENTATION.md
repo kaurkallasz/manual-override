@@ -35,7 +35,8 @@ lesson. Camera/device changes invalidate physical readiness.
 
 Targeting teaches tap to preview, then explicit **Go**. Height and pump actions
 remain separate. As updated on 2 October, **Complete calibration** validates six
-fresh arm captures, four raised samples, and pickup/transport heights, then
+fresh arm captures and four raised samples, calculates pickup Z from the mean
+of the six captured Z positions and transport Z as pickup plus 40 mm, then
 advances the shared journey after a confirmed stop. Guided arrivals, pickup and
 Board-verified placement remain optional practice. A browser claim alone cannot
 finish the lesson; the calibration owner validates the measurements and issues

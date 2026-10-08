@@ -14,6 +14,7 @@
   const TOWER_ACTIVATION_FRAMES = 72;
   const TOWER_ACTIVATION_FPS = 24;
   const TOWER_ACTIVATION_DURATION_S = 3;
+  const TOWER_DEPLOYMENT_FLASH_S = 0.8;
   const TOWER_REPLENISH_PULSE_S = 0.35;
   const ARUCO_FIELD_CLEARANCE = 20;
   const CORE_MARKER_VISUAL_SIZE = 116;
@@ -564,12 +565,19 @@
       ? 1 - damageAge / TOWER_DAMAGE_FLASH_S
       : 0;
     const damageAmount = Math.max(0, Number(tower.last_damage_amount || 0));
+    const buffed = tower.atom_buff_state === "active" && Number(tower.atom_health_multiplier) === 2;
+    const barFractions = buffed
+      ? [Math.min(1, healthRatio * 2), Math.max(0, healthRatio * 2 - 1)]
+      : [healthRatio];
+    const damageRow = buffed && healthRatio > 0.5 ? 1 : 0;
     return {
       healthRatio,
-      fillWidth: TOWER_HEALTH_BAR_WIDTH * healthRatio,
+      barFractions,
+      damageRow,
+      fillWidth: TOWER_HEALTH_BAR_WIDTH * barFractions[damageRow],
       damageAlpha,
       damageNotchWidth: damageAlpha > 0 && damageAmount > 0
-        ? Math.max(1, Math.min(TOWER_HEALTH_BAR_WIDTH, TOWER_HEALTH_BAR_WIDTH * damageAmount / maximum))
+        ? Math.max(1, Math.min(TOWER_HEALTH_BAR_WIDTH, TOWER_HEALTH_BAR_WIDTH * damageAmount / maximum * (buffed ? 2 : 1)))
         : 0,
     };
   }
@@ -664,7 +672,8 @@
     let assetPaths = {};
     let assetRevision = null;
     let assetGeneration = 0;
-    let assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null};
+    let assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null, ready:false};
+    const assetFailures = new Map();
     const mapCanvas = options.mapCanvas;
     const gameCanvas = options.gameCanvas;
     if (!mapCanvas || !gameCanvas) {
@@ -688,6 +697,7 @@
     let bruteScale = null;
     const enemyTrailHistory = new Map();
     const towerRenderAngles = new Map();
+    const towerDeploymentFlashes = new Map();
     let socketRecordCache = null;
     let socketRecordMapCache = null;
     let staticFieldKeepOutCache = null;
@@ -716,6 +726,7 @@
     let levelRequest = 0;
     let pendingLevelKey = null;
     let retryLevelAt = 0;
+    let levelRetryTimer = null;
 
     mapCanvas.width = WIDTH;
     mapCanvas.height = HEIGHT;
@@ -754,15 +765,20 @@
         assetLoads.requested++; assetLoads.pending++; assetLoads.last_url=url;
         reportAssetLoads();
         image.onload = () => {
-          if(generation !== assetGeneration) { reject(new Error("superseded asset request")); return; }
+          if(destroyed || generation !== assetGeneration) { reject(new Error("superseded asset request")); return; }
           assetLoads.loaded++; assetLoads.pending--; assetLoads.last_url=url;
+          assetFailures.delete(url);
+          assetLoads.failed = assetFailures.size;
+          assetLoads.last_error = [...assetFailures.values()].at(-1) || null;
           reportAssetLoads(); resolve(image);
         };
         image.onerror = () => {
-          if (generation === assetGeneration) {
+          if (!destroyed && generation === assetGeneration) {
             images.delete(url);
-            assetLoads.failed++; assetLoads.pending--; assetLoads.last_url=url;
+            assetLoads.pending--; assetLoads.last_url=url;
             assetLoads.last_error=`Artwork failed to load: ${url}`;
+            assetFailures.set(url, assetLoads.last_error);
+            assetLoads.failed = assetFailures.size;
             reportAssetLoads();
             const report = options.onAssetError || console.warn;
             report(`Artwork failed to load: ${url}`);
@@ -790,9 +806,12 @@
       assetRoot = next.base ? sandboxRoot + String(next.base).replace(/\/$/, "") : "";
       assetPaths = next.assets || {};
       images.clear();
+      assetFailures.clear();
       gameImagesLoading = null;
+      if (levelRetryTimer != null) clearTimeout(levelRetryTimer);
+      levelRetryTimer = null;
       retryLevelAt = 0;
-      assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null};
+      assetLoads = {requested:0, loaded:0, failed:0, pending:0, last_url:null, last_error:null, ready:false};
       reportAssetLoads();
       return true;
     }
@@ -936,11 +955,13 @@
           if (item.kind === "sprite" && item.asset_id) assetIds.add(String(item.asset_id));
         }
       }
-      await Promise.all([...assetIds].map((assetId) => (
+      const results = await Promise.allSettled([...assetIds].map((assetId) => (
         loadImage(assetUrl(`map/${assetId}`)).then((image) => {
           nextSceneImages.set(assetId, image);
         })
       )));
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure) throw failure.reason;
       return nextSceneImages;
     }
 
@@ -1763,6 +1784,67 @@
       return true;
     }
 
+    function drawTowerDeploymentFlash(context, tower, runtimeVisualTime, now) {
+      if (tower.activation_started_at == null) return;
+      const activationAge = towerActivationAge(tower, runtimeVisualTime);
+      if (!Number.isFinite(activationAge) || activationAge < 0) return;
+      const id = towerPlacementId(tower);
+      const identity = `${tower.aim_instance || ""}:${tower.activation_started_at}`;
+      let flash = towerDeploymentFlashes.get(id);
+      if (flash?.identity !== identity) {
+        // Start the cue on its first visible frame: an SSE update can arrive
+        // after the brief flash window, while deployment is still in progress.
+        flash = {identity, startedAt: towerIsActivating(tower, runtimeVisualTime) ? now : null};
+        towerDeploymentFlashes.set(id, flash);
+      }
+      if (flash.startedAt == null) return;
+      const age = (now - flash.startedAt) / 1000;
+      if (age < 0 || age >= TOWER_DEPLOYMENT_FLASH_S) return;
+      const progress = age / TOWER_DEPLOYMENT_FLASH_S;
+      const fade = (1 - Math.max(0, (progress - 0.15) / 0.85)) ** 2;
+      const expansion = 1 - (1 - progress) ** 3;
+      const radius = 84 + expansion * 24;
+      context.save();
+      const glow = context.createRadialGradient(tower.x, tower.y, 0, tower.x, tower.y, radius);
+      glow.addColorStop(0, `rgba(174,255,195,${0.8 * fade})`);
+      glow.addColorStop(0.45, `rgba(73,255,136,${0.65 * fade})`);
+      glow.addColorStop(1, "rgba(73,255,136,0)");
+      context.fillStyle = glow;
+      context.beginPath();
+      context.arc(tower.x, tower.y, radius, 0, Math.PI * 2);
+      context.fill();
+      context.strokeStyle = `rgba(112,255,157,${fade})`;
+      context.lineWidth = 4 * (1 - progress) + 1;
+      context.beginPath();
+      context.arc(tower.x, tower.y, 64 + expansion * 30, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
+    }
+
+    function drawTowerAtomBuff(context, tower, visualTime) {
+      if (tower.destroyed || tower.atom_buff_state !== "active") return;
+      const scale = towerUnitScale(tower);
+      context.save();
+      // Clip using the authored marker footprints, accounting for companion scale.
+      context.beginPath();
+      context.rect(tower.x - 57, tower.y - 57, 114, 114);
+      for (const box of arucoFieldKeepOuts()) {
+        context.rect(tower.x + (box.left - tower.x) / scale,
+          tower.y + (box.top - tower.y) / scale,
+          (box.right - box.left) / scale, (box.bottom - box.top) / scale);
+      }
+      context.clip("evenodd");
+      const pulse = 0.65 + 0.15 * Math.sin(visualTime * Math.PI * 1.5);
+      for (const [radius, width, alpha] of [[49, 12, .1], [50, 7, .22], [51, 2, .85]]) {
+        context.strokeStyle = `rgba(73,255,136,${alpha * pulse})`;
+        context.lineWidth = width;
+        context.beginPath();
+        context.arc(tower.x, tower.y, radius, 0, Math.PI * 2);
+        context.stroke();
+      }
+      context.restore();
+    }
+
     function drawTowerIdleStatus(context, tower, visualTime) {
       const phase = (Math.sin(visualTime * Math.PI * 1.5 + Number(tower.aruco_id || 0)) + 1) / 2;
       const color = tower.owner === "green" ? "53,208,127" : "192,132,252";
@@ -2510,7 +2592,12 @@
           context.restore();
           continue;
         }
-        if (drawTowerActivation(context, tower, runtimeVisualTime, visualState)) { context.restore(); continue; }
+        if (drawTowerActivation(context, tower, runtimeVisualTime, visualState)) {
+          drawTowerAtomBuff(context, tower, runtimeVisualTime);
+          drawTowerDeploymentFlash(context, tower, runtimeVisualTime, now);
+          context.restore();
+          continue;
+        }
         const socket = socketsById.get(String(tower.socket_id));
         const coverSize = livePodVisualSize(socket);
         const cover = gameImages.get("tower:socket-cover");
@@ -2584,10 +2671,17 @@
         context.font = "900 11px ui-monospace";
         context.fillText(linkBonus.label, tower.x, tower.y - 59);
         const health = towerHealthBarMetrics(tower, visualTime);
-        context.fillStyle = "#240b10";
-        context.fillRect(tower.x - 34, tower.y - 51, TOWER_HEALTH_BAR_WIDTH, 6);
-        context.fillStyle = health.healthRatio > 0.5 ? "#35d07f" : health.healthRatio > 0.2 ? "#ffb347" : "#ff5367";
-        context.fillRect(tower.x - 34, tower.y - 51, health.fillWidth, 6);
+        health.barFractions.forEach((fraction, row) => {
+          context.fillStyle = "#240b10";
+          context.fillRect(tower.x - 34, tower.y - 51 + row * 7, TOWER_HEALTH_BAR_WIDTH, 6);
+          context.fillStyle = health.healthRatio > 0.5 ? "#35d07f" : health.healthRatio > 0.2 ? "#ffb347" : "#ff5367";
+          context.fillRect(tower.x - 34, tower.y - 51 + row * 7, TOWER_HEALTH_BAR_WIDTH * fraction, 6);
+        });
+        if (health.barFractions.length === 2) {
+          context.fillStyle = "#aaffbf";
+          context.font = "900 9px ui-monospace";
+          context.fillText("×2", tower.x + 44, tower.y - 42);
+        }
         if (health.damageAlpha > 0) {
           const notchX = tower.x - 34 + Math.max(
             0,
@@ -2597,7 +2691,7 @@
             ),
           );
           context.fillStyle = `rgba(255,179,71,${0.72 + health.damageAlpha * 0.28})`;
-          context.fillRect(notchX, tower.y - 51, health.damageNotchWidth, 6);
+          context.fillRect(notchX, tower.y - 51 + health.damageRow * 7, health.damageNotchWidth, 6);
           context.save();
           context.strokeStyle = `rgba(255,83,103,${health.damageAlpha * 0.9})`;
           context.shadowColor = "#ff5367";
@@ -2613,6 +2707,8 @@
         drawTowerReplenishPulse(
           context, tower, runtimeVisualTime, effectQuality
         );
+        drawTowerDeploymentFlash(context, tower, runtimeVisualTime, now);
+        drawTowerAtomBuff(context, tower, runtimeVisualTime);
         context.restore();
       }
       markPass("towerMs");
@@ -2705,6 +2801,10 @@
 
     function applyState(nextState) {
       if (!motion.push(nextState, performance.now())) return;
+      if (nextState?.run_id !== state?.run_id
+          || Number(nextState?.runtime_time) < Number(state?.runtime_time)) {
+        towerDeploymentFlashes.clear();
+      }
       state = nextState;
       visualStateCache = null;
       const nextGeometry = JSON.stringify([state?.aruco_code_footprint_px, state?.core_aruco_code_footprint_px, state?.force_field_marker_clearance_px]);
@@ -2716,6 +2816,7 @@
       const placements = new Set([...(state?.towers || []), ...(state?.companions || [])].map(towerPlacementId));
       for (const id of towerRenderAngles.keys()) if (!placements.has(id)) towerRenderAngles.delete(id);
       for (const id of towerAimPreview.keys()) if (!placements.has(id)) towerAimPreview.delete(id);
+      for (const id of towerDeploymentFlashes.keys()) if (!placements.has(id)) towerDeploymentFlashes.delete(id);
       stateReceivedAt = performance.now();
       frozenVisualAge = 0;
       const assetsChanged = setPresentation(nextState?.presentation);
@@ -2744,7 +2845,10 @@
       ) throw new Error("Photon Game level projection is invalid");
       const key = JSON.stringify([assetGeneration, revision]);
       if (pendingLevelKey === key || performance.now() < retryLevelAt) return level;
+      if (levelRetryTimer != null) clearTimeout(levelRetryTimer);
+      levelRetryTimer = null;
       pendingLevelKey = key;
+      assetLoads.ready = false;
       const request = ++levelRequest, generation = assetGeneration;
       // First arrival can draw the existing vector fallback immediately.
       // Once a scene is visible, retain it until a replacement is ready.
@@ -2753,8 +2857,11 @@
         invalidateSocketGeometry();
         renderMap();
       }
-      Promise.all([loadGameImages(), loadSceneImages(nextLevel.scene)]).then(([game, scene]) => {
+      Promise.allSettled([loadGameImages(), loadSceneImages(nextLevel.scene)]).then(results => {
         if (destroyed || request !== levelRequest || generation !== assetGeneration) return;
+        const failure = results.find(result => result.status === 'rejected');
+        if (failure) throw failure.reason;
+        const [game, scene] = results.map(result => result.value);
         pendingLevelKey = null;
         // Commit one complete presentation; asynchronous loads never replace
         // visible markers/sprites one at a time or publish an old map.
@@ -2766,10 +2873,22 @@
         levelRevision = Number.isFinite(Number(revision)) ? Number(revision) : null;
         invalidateSocketGeometry();
         renderMap();
+        assetLoads.ready = true;
+        assetLoads.last_error = null;
+        reportAssetLoads();
       }).catch(error => {
         if (destroyed || generation !== assetGeneration || request !== levelRequest) return;
         pendingLevelKey = null;gameImagesLoading = null;retryLevelAt = performance.now() + 5000;
+        assetLoads.ready = false;
         (options.onAssetError || console.warn)(`Artwork is not ready: ${error.message}`);
+        // Recovery must not depend on another full game snapshot arriving.
+        levelRetryTimer = setTimeout(() => {
+          levelRetryTimer = null;
+          if (!destroyed && request === levelRequest && generation === assetGeneration) {
+            retryLevelAt = 0;
+            setLevel(nextLevel, revision);
+          }
+        }, 5000);
       });
       return level;
     }
@@ -2919,10 +3038,12 @@
       applyState,
       destroy() {
         destroyed = true;
+        if (levelRetryTimer != null) clearTimeout(levelRetryTimer);
         if (animationFrame) global.cancelAnimationFrame(animationFrame);
         document.removeEventListener?.("visibilitychange", resetFpsSample);
         enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear(); tintedEffectCache.clear();
         enemyTrailHistory.clear(); towerRenderAngles.clear(); towerAimPreview.clear();
+        towerDeploymentFlashes.clear();
         motion.clear();
       },
       get level() {

@@ -61,7 +61,7 @@ WORKSPACE = {
     "r": [-160.0, 160.0],
 }
 RADIUS_MIN = 150.0   # mm — inside this the arm can't reach (too folded)
-RADIUS_MAX = 450.0   # mm — max horizontal reach
+RADIUS_MAX = 440.0   # mm — MG400 nominal reach; Cal 2 applies its working margin.
 JOINT_LIMITS = {
     "j1": [-160.0, 160.0],
     "j2": [-25.0, 85.0],
@@ -313,9 +313,22 @@ def index():
 def config():
     # link_defaults pre-fill the relay Host + Side from the player-side game-link
     # machine when it's installed (both null otherwise — the UI keeps its defaults).
+    limits = None
+    if _identity()['is_player']:
+        robot = _current()
+        if isinstance(robot, RelayClient):
+            limits = robot.read_z_limits()
+        else:
+            host = (getattr(_hub_ctx, 'internal_base', '') or getattr(_hub_ctx, 'local_base', '') or '')
+            if host:
+                limits = RelayClient(host, _identity()['side'], auth=getattr(_hub_ctx, 'service_token', None)).read_z_limits()
+    workspace = {key:list(bounds) for key,bounds in WORKSPACE.items()}
+    if limits and limits.get('status') == 'ready':
+        workspace['z'] = [limits['minimum'], limits['maximum']]
     return jsonify(
         {
-            "workspace": WORKSPACE,
+            "workspace": workspace,
+            "z_limits": limits,
             "radius_min": RADIUS_MIN,
             "radius_max": RADIUS_MAX,
             "joint_limits": JOINT_LIMITS,
@@ -456,12 +469,14 @@ def connect():
                     robot.close()
                     return _fail(f"Relay arm enable failed: {_relay_resp_error(resp)}",
                                  errid=errid, resp=resp)
-                robot.start_servo()
+                # Relay Enable synchronizes feedback; the first validated move
+                # starts the follower. Connecting never restores an old target.
                 _apply_motion(robot)
             _robot = robot
             _link = "relay"
             _relay_side = side
-        return _ok(link="relay", host=host, side=side, enabled=bool(ident["is_player"]))
+        return _ok(link="relay", host=host, side=side, enabled=bool(ident["is_player"]),
+                   control_session=robot.control_session)
 
     # direct (default)
     ip = data.get("ip", DEFAULT_IP)
@@ -519,7 +534,8 @@ def enable():
     except DobotError as e:
         return _fail(str(e), errid=e.errid)
     if errid == 0:
-        robot.start_servo()
+        if _link != "relay":
+            robot.start_servo()
         _apply_motion(robot)   # push current speed + smoothness to the follower
     elif _link == "relay":
         return _fail(_relay_resp_error(resp), errid=errid, resp=resp)
@@ -619,6 +635,16 @@ def pump():
         return _fail(str(e))
 
 
+def _ltz_control_error(robot, data):
+    if 'ltz_action' not in data and 'control_session' not in data:
+        return None
+    if (data.get('control_session') != getattr(robot, 'control_session', None)
+            or not isinstance(data.get('control_session'), str)
+            or type(data.get('motion_epoch')) is not int):
+        return 'Controls changed. Reconnect to synchronize the arm position.'
+    return None
+
+
 @bp.route("/api/move", methods=["POST"])
 def move():
     """Update the Cartesian target pose. Clamped to the reachable workspace; the
@@ -627,6 +653,9 @@ def move():
     if robot is None or not robot.is_connected():
         return _fail("Not connected")
     data = request.json or {}
+    error = _ltz_control_error(robot, data)
+    if error:
+        return _fail(error, code='motion_resync_required')
     try:
         x = float(data["x"])
         y = float(data["y"])
@@ -634,8 +663,11 @@ def move():
         r = float(data.get("r", robot.get_state()["pose"][3]))
     except (KeyError, ValueError, TypeError):
         return _fail("Expected numeric x, y, z (r optional)")
+    requested = (x, y, z, r)
     x, y, z, r = _clamp_pose(x, y, z, r)
-    result = (robot.set_target_pose(x, y, z, r, ltz_action=data.get("ltz_action", "xyz"))
+    if data.get('control_session') and any(abs(a-b)>1e-6 for a,b in zip(requested,(x,y,z,r))):
+        return _fail('Target is outside the robot workspace. Reposition the arm or choose a valid target.', code='motion_limit')
+    result = (robot.set_target_pose(x, y, z, r, ltz_action=data.get("ltz_action", "xyz"), motion_epoch=data.get("motion_epoch"))
               if _link == "relay" else robot.set_target_pose(x, y, z, r))
     if isinstance(result, tuple) and result and result[0] is False:
         return _fail(result[1] or "relay move failed")
@@ -653,10 +685,15 @@ def joint_move():
     if _link != "relay" or not hasattr(robot, "set_target_joints_guarded"):
         return _fail("LTX joint control requires the player relay connection")
     data = request.json or {}
+    error = _ltz_control_error(robot, data)
+    if error:
+        return _fail(error, code='motion_resync_required')
     try:
         joints = [float(data[f"j{index}"]) for index in range(1, 5)]
     except (KeyError, TypeError, ValueError):
         return _fail("Expected numeric j1, j2, j3, j4")
+    if data.get('control_session') and any(not math.isfinite(value) or not JOINT_LIMITS[f'j{index+1}'][0] <= value <= JOINT_LIMITS[f'j{index+1}'][1] for index,value in enumerate(joints)):
+        return _fail('Joint position is outside the robot limits. Reposition the arm before moving.', code='motion_limit')
     joints = [
         _clamp(value, *JOINT_LIMITS[f"j{index + 1}"])
         for index, value in enumerate(joints)
@@ -664,7 +701,7 @@ def joint_move():
     guard = data.get("cal2_guard")
     if not isinstance(guard, dict):
         return _fail("Auto PP Cal 2 safety limits are required")
-    ok, response = robot.set_target_joints_guarded(joints, guard)
+    ok, response = robot.set_target_joints_guarded(joints, guard, motion_epoch=data.get("motion_epoch"))
     if not ok:
         error = response.get("error") if isinstance(response, dict) else None
         return _fail(error or "guarded joint move failed")

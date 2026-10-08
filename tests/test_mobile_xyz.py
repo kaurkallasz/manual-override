@@ -1,6 +1,7 @@
 """Cartesian intent stays in the authoritative virtual-arm session."""
 import math
 import random
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -26,6 +27,32 @@ class XYZTests(unittest.TestCase):
 
     def xyz(self, point):
         return self.command('xyz', xyz=point, control_revision=self.arm.control_revision)
+
+    def test_trajectory_matches_simulated_joint_travel_and_is_read_only(self):
+        self.unlock(3)
+        self.arm.targets = [a+d for a, d in zip(self.arm.joints, (20, -10, 6))]
+        before = list(self.arm.joints)
+        route = self.arm.snapshot()['motion_path']
+        self.assertEqual(route['points'][0], self.arm.pose()['tip'])
+        self.assertEqual(route['points'][-1], self.arm.pose(self.arm.targets)['tip'])
+        self.assertEqual(self.arm.joints, before)
+        expected_mid = self.arm.pose([a+max(-10, min(10, b-a)) for a, b in zip(before, self.arm.targets)])['tip']
+        self.assertEqual(route['points'][5], expected_mid)
+        self.arm.step(.1, self.engine)
+        self.assertEqual(self.arm.snapshot()['motion_path']['id'], route['id'])
+        self.arm.halt()
+        self.assertIsNone(self.arm.snapshot()['motion_path'])
+
+    def test_position_timestamp_belongs_to_snapshot_without_advancing_arm(self):
+        before = list(self.arm.joints)
+        start = time.time()
+        snapshot = self.arm.snapshot()
+        self.assertLessEqual(start, snapshot['position_at'])
+        self.assertLessEqual(snapshot['position_at'], time.time())
+        self.assertEqual(self.arm.joints, before)
+        self.assertTrue(snapshot['position_settled'])
+        self.arm.targets[0] += 1
+        self.assertFalse(self.arm.snapshot()['position_settled'])
 
     def test_unlock_and_preview_enforcement(self):
         with self.assertRaisesRegex(ValueError, 'locked'):

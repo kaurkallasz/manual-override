@@ -22,6 +22,7 @@ def hub_init(ctx):
     # Keep the established hosted file contract: deployed PHP relays may only
     # allow these six filenames. New helpers travel inside mobile.js.
     files['mobile.js'] = (HERE / 'operation-id.js').read_text() + '\n' + (HERE / 'journey.js').read_text() + '\n' + (HERE / 'joint-rig.js').read_text() + '\n' + (HERE / 'turret-overlay.js').read_text() + '\n' + (HERE / 'physical-arm.js').read_text() + '\n' + files['mobile.js']
+    files['mobile.js'] = (HERE / 'connection-log.js').read_text() + '\n' + files['mobile.js']
     _client = {'build': uuid.uuid4().hex, 'files': files}
 
 

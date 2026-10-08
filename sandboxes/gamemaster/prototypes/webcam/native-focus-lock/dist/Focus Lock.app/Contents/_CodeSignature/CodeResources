@@ -5,7 +5,17 @@
 	<key>files</key>
 	<dict/>
 	<key>files2</key>
-	<dict/>
+	<dict>
+		<key>MacOS/camera-devices.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			ct4OUjmPC8K0he9f2eiSQBx7Tww=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"72de0e52398f0bc2b485ef5fd9e892401c7b4f0c"</string>
+		</dict>
+	</dict>
 	<key>rules</key>
 	<dict>
 		<key>^Resources/</key>

@@ -237,7 +237,9 @@ class MobileArm:
             if action == 'cue_set':
                 self.cue.set_rows(data.get('rows'), self, engine)
             elif action == 'cue_play':
-                self.cue.play(self, engine, data.get('height', 80))
+                if 'rows' in data and self.cue.validate_rows(data['rows'], self, engine) != self.cue.rows:
+                    raise ValueError('Cue selection changed. Review the selected rows and press Play again.')
+                self.cue.play(self, engine, data.get('height', 80), data.get('view_rotation', 0))
             elif action == 'cue_waypoint':
                 self.cue.insert_waypoint(data.get('point'), self, engine)
             elif action == 'cue_cancel_waypoint':
@@ -246,17 +248,28 @@ class MobileArm:
                 self.cue.pause(self)
             else:
                 self.cue.stop(self)
-            if self.cue.status != 'running':
+            if self.cue.status != 'running' and action != 'cue_waypoint':
                 self.message = self.cue.error or ('Cue paused.' if self.cue.status == 'paused' else 'Cue ready. Press Play to begin.')
         elif action == 'xyz':
             if self.control_mode not in ('xyz', 'targeting', 'cue') or unlocked < {'xyz': 2, 'targeting': 3, 'cue': 4}.get(self.control_mode, 4):
                 raise ValueError('Select an unlocked Cartesian XYZ control first.')
             if type(data.get('control_revision')) is not int or data['control_revision'] != self.control_revision:
                 raise ValueError('Control mode changed. Wait for the current controls.')
-            if self.cue.busy:
-                raise ValueError('Stop the cue before manual movement.')
-            self.targets = self.solve_xyz(data.get('xyz'))
-            self.message = 'Moving to XYZ target.'
+            if self.control_mode == 'cue' and data.get('height_only') is not True:
+                raise ValueError('Cue allows manual height only. Select XYZ or Targeting for XY.')
+            if data.get('height_only') is True:
+                xyz = data.get('xyz')
+                height = xyz.get('z') if isinstance(xyz, dict) else None
+                if self.control_mode == 'cue':
+                    self.cue.override_height(height, self)
+                else:
+                    self.targets = self.solve_xyz({**self.pose()['tip'], 'z': height})
+                    self.message = 'Moving to selected height.'
+            else:
+                if self.cue.busy:
+                    raise ValueError('Stop the cue before manual movement.')
+                self.targets = self.solve_xyz(data.get('xyz'))
+                self.message = 'Moving to XYZ target.'
         elif action == 'joints':
             if self.control_mode != 'joint':
                 raise ValueError('Joint commands require Joint mode.')
@@ -288,6 +301,7 @@ class MobileArm:
             if tip['z'] > 80 or math.hypot(self.tags[candidate]['x'] - tip['x'], self.tags[candidate]['y'] - tip['y']) > 55:
                 raise ValueError('Lower the gripper over a '+self.label+' tag before suction.')
             self.held = candidate
+            engine.remove_atom(candidate, source='virtual', team=self.side)
             engine._event('mobile_pickup',side=self.side,atom_tag_id=candidate,source='virtual')
             self.message = f'Tag {candidate} held. Move to a socket and lower to release.'
         if mode in ('blow', 'off') and self.held is not None:
@@ -314,13 +328,27 @@ class MobileArm:
             self.held = None
         self.pump = mode
 
+    def motion_path(self):
+        """Display the same bounded joint travel used by step(), never a command."""
+        if not self.token or self.suspended or self.control_mode == 'joint':
+            return None
+        deltas = [b-a for a, b in zip(self.joints, self.targets)]
+        span = max(map(abs, deltas))
+        steps = max(1, math.ceil(span / 2))
+        points = [self.pose([a + max(-span*i/steps, min(span*i/steps, d))
+                             for a, d in zip(self.joints, deltas)])['tip']
+                  for i in range(steps+1)]
+        return {'id': str((self.control_revision, *self.targets)), 'points': points}
+
     def snapshot(self):
         self.expire()
         return {'contract': 'photon.mobile-arm', 'version': 1, 'source': 'virtual', 'side': self.side,
                 'connected': bool(self.token) and not self.suspended, 'suspended': self.suspended,
-                'controller_id': self.controller_id, 'joints': list(self.joints), 'targets': list(self.targets),
+                'controller_id': self.controller_id, 'position_at': time.time(),
+                'position_settled': all(abs(a-b) < 1e-6 for a, b in zip(self.joints, self.targets)),
+                'joints': list(self.joints), 'targets': list(self.targets),
                 'limits': self.LIMITS, 'control_mode': self.control_mode,
                 'control_revision': self.control_revision, 'xyz_limits': self.xyz_limits(),
                 'xyz_target': self.pose(self.targets)['tip'], 'pump': self.pump, 'held_tag': self.held, 'message': self.message,
-                'cue': self.cue.snapshot(), 'markers': self.markers(),
+                'cue': self.cue.snapshot(), 'markers': self.markers(), 'motion_path': self.motion_path(),
                 'tags': [{'id': tag, **point} for tag, point in self.tags.items()], **self.pose()}

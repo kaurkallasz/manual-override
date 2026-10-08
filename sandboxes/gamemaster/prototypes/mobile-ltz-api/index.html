@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Mobile LTZ API · Delivery diagnostics</title>
+  <link rel="stylesheet" href="monitor.css">
+  <script src="monitor.js" defer></script>
+</head>
+<body>
+<main>
+  <header>
+    <div><a href="../../">← Game Master</a><p class="eyebrow">PHOTON ENGINE / MOBILE LTZ API</p>
+    <h1>Player delivery</h1><p class="lede">Inspect the state being generated and the packets leaving the API.</p></div>
+    <div class="connection"><span id="connectionStatus" role="status">Connecting…</span><small id="updatedAt">Waiting for diagnostics</small></div>
+  </header>
+  <p id="error" role="alert" hidden></p>
+  <section id="teams" class="teams" aria-label="Delivery statistics by team"></section>
+  <p class="note">Summary rates average the last 10 seconds. Streams include gateways. Emitted bytes are handed to the HTTP server before proxy buffering or compression; they do not confirm receipt on a phone.</p>
+
+  <section class="panel timeline" aria-labelledby="timelineHeading">
+    <div class="panel-heading"><div><p class="eyebrow">LIVE HISTORY · 15 SECONDS</p><h2 id="timelineHeading">Delivery over time</h2></div>
+      <div class="timeline-legend"><span data-team="green">━━ Green</span><span data-team="purple">┄┄ Purple</span></div>
+    </div>
+    <p class="note">All graphs share the same timeline. Rates and mean build time cover each polling interval (about 1 second). Hover or drag to compare a moment.</p>
+    <div id="timeline" tabindex="0" aria-label="Delivery history. Use left and right arrows to inspect samples; Escape returns to live values."></div>
+    <div class="timeline-axis"><span>−15 s</span><span>−10 s</span><span>−5 s</span><span>Now</span></div>
+    <div class="timeline-caption"><span id="timelineTime">Collecting history…</span><span>Live graphs continue while the payload is frozen.</span></div>
+  </section>
+
+  <section class="panel inspector" aria-labelledby="inspectHeading">
+    <div class="panel-heading"><div><p class="eyebrow">PAYLOAD INSPECTOR</p><h2 id="inspectHeading">Generated and sent</h2></div>
+      <div class="toolbar"><label>Team <select id="team"><option value="green">Green</option><option value="purple">Purple</option></select></label>
+      <button id="freeze" type="button" aria-pressed="false">Freeze payload</button><button id="download" type="button" disabled>Save sample</button></div>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Payload source">
+      <button type="button" id="tab-generated" role="tab" aria-selected="true" aria-controls="payloadPanel" data-channel="generated">Generated state</button>
+      <button type="button" id="tab-sse" role="tab" aria-selected="false" aria-controls="payloadPanel" data-channel="sse" tabindex="-1">Emitted SSE packet</button>
+      <button type="button" id="tab-http" role="tab" aria-selected="false" aria-controls="payloadPanel" data-channel="http" tabindex="-1">HTTP response</button>
+    </div>
+    <p id="channelHelp" class="note"></p>
+    <div id="payloadPanel" role="tabpanel" aria-labelledby="tab-generated">
+      <div id="sampleMeta" class="sample-meta">No payload sampled yet. Open a player page to generate traffic.</div>
+      <div class="payload-grid">
+        <div class="fields"><h3>Top-level fields</h3><p class="note">Compact JSON sizes after redaction.</p><div class="table-scroll"><table><thead><tr><th>Field</th><th>Size</th><th>Items</th></tr></thead><tbody id="fields"></tbody></table></div></div>
+        <pre id="payload" tabindex="0" aria-label="Sample payload">Waiting for player traffic…</pre>
+      </div>
+    </div>
+    <p class="note">Payload previews are sampled at most once per second per team/channel, bounded to 256 KiB, and redact credentials. Counters track every observed generation, response and SSE frame. Opening this monitor does not generate player traffic.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="activityHeading">
+    <div class="panel-heading"><div><p class="eyebrow">RECENT ACTIVITY</p><h2 id="activityHeading">Requests and connections</h2></div>
+      <a href="api/diagnostics" class="secondary-link">Export player connection log</a></div>
+    <div class="table-scroll"><table><thead><tr><th>Time</th><th>Team</th><th>Request / event</th><th>Action</th><th>Status</th><th>Body</th><th>Time</th></tr></thead><tbody id="activity"></tbody></table></div>
+  </section>
+  <footer><span id="startedAt"></span><span>In-memory statistics reset when the module starts.</span></footer>
+</main>
+</body>
+</html>

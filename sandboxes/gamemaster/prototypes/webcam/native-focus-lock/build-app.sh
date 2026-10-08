@@ -10,6 +10,12 @@ xcrun clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 \
   -framework Foundation -framework AVFoundation -framework IOKit \
   "$ROOT/main.mm" -o "$MACOS/focus-lock"
 
+xcrun clang++ -std=c++17 -fobjc-arc -mmacosx-version-min=14.0 \
+  -dynamiclib -DHHH_CAMERA_LIBRARY \
+  -framework Foundation -framework AVFoundation -framework IOKit \
+  "$ROOT/main.mm" -o "$MACOS/camera-devices.dylib"
+codesign --force --sign - "$MACOS/camera-devices.dylib"
+
 cat >"$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

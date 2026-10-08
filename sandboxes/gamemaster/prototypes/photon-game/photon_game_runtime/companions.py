@@ -3,6 +3,7 @@ import math
 
 POLICY = {'version': 1, 'pod_size': 96, 'shared_health': True, 'damage_scale': 1.0}
 SHARED = ('atom_tag_id', 'owner', 'socket_id', 'aruco_id', 'tower_type', 'source',
+          'atom_buff_state', 'occupying_atom_id', 'atom_health_multiplier', 'atom_damage_multiplier', 'normal_max_hp',
           'upgrade_level', 'upgrade_multiplier', 'aim_angle', 'aim_spread', 'aim_revision',
           'hp', 'max_hp', 'base_max_hp', 'destroyed', 'destroyed_at', 'last_damage_at',
           'last_damage_amount', 'replenished_at', 'linked_turret_count', 'link_multiplier')

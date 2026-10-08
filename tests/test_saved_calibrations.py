@@ -19,7 +19,8 @@ class SavedCalibrationTests(unittest.TestCase):
         self.stops=[];self.connected=True;self.stopped=True
         field=load('playfield-areas');field.HERE=str(self.path);field.SETTINGS_PATH=str(self.path/'settings.json');field.AREAS_PATH=str(self.path/'areas.json')
         self.relay=SimpleNamespace(arms_snapshot=lambda:dict(contract='hhh.relay.arms',version=1,status='ready',observed_at=time.time(),arms={s:dict(connected=self.connected,device={'ip':'fixture'}) for s in ('green','purple')}),stop_side=self.stop)
-        self.camera=SimpleNamespace(corrected_tag_snapshot=lambda a,b:dict(contract='hhh.camera-correction',version=1,status='ready',calibration_revision='fixture'))
+        self.camera_revision='fixture'
+        self.camera=SimpleNamespace(corrected_tag_snapshot=lambda a,b:dict(contract='hhh.camera-correction',version=1,status='ready',calibration_revision=self.camera_revision))
         self.owner._hub_ctx=FakeContext({'dobot-mg400-relay':self.relay,'playfield-areas':field,'camera-calibration':self.camera})
         self.value={'side':'green','id':'rig:green:2','expected_revision':3}
     def stop(self,side):
@@ -86,13 +87,89 @@ class SavedCalibrationTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.owner.calibration_saved_apply(self.value)
         self.assertEqual(self.stops,[])
 
-    def test_known_camera_and_arm_identity_must_match(self):
+    def test_old_camera_session_applies_with_warning_and_keeps_all_controls(self):
+        self.camera_revision='current-camera'
+        for side in ('green','purple'):
+            saved=self.owner._lessons.state['saved_calibrations']['rig:'+side+':2']
+            original=copy.deepcopy(saved)
+            before=self.owner._calibration2_public()['arms']['purple' if side=='green' else 'green']
+            result=self.owner.calibration_saved_apply({'side':side,'id':saved['id']})
+            compatibility=result['camera_compatibility']
+            self.assertEqual(compatibility['status'],'approximate')
+            self.assertEqual(compatibility['source_camera_revision'],'fixture')
+            self.assertEqual(compatibility['current_camera_revision'],'current-camera')
+            self.assertIn('less precise',compatibility['warning'])
+            self.assertIn('All control levels remain available',compatibility['warning'])
+            self.assertEqual(self.owner._lessons.state['saved_calibrations'][saved['id']],original)
+            applied=self.owner._calibration2_public()['arms'][side]
+            self.assertEqual(applied['points'],original['draft']['points'])
+            self.assertEqual(applied['parallax_points'],original['draft']['parallax_points'])
+            self.assertEqual(applied['camera_revision'],'fixture')
+            self.assertEqual(applied['camera_binding']['revision'],'current-camera')
+            self.assertEqual(self.owner._calibration2_public()['arms']['purple' if side=='green' else 'green'],before)
+            self.owner._load_calibration2()
+            self.assertEqual(self.owner.calibration_safety_snapshot(side)['status'],'ready')
+            active=next(row for row in self.owner.calibration_history(side)['rows'] if row['active'])
+            self.assertEqual(active['camera_compatibility']['status'],'approximate')
+            relay=load('dobot-mg400-relay')
+            game=SimpleNamespace(motion_policy=lambda s:dict(contract='photon.game.motion',version=1,status='ready',scope='practice',tier=4))
+            relay._hub_ctx=FakeContext({'auto-pickup-game':self.owner,'photon-game':game})
+            for mode,action in [('joint','joint'),('cartesian','xyz'),('cartesian','image'),('cartesian','cue')]:
+                self.assertIsNone(relay._ltz_motion_error(side,{'mode':mode,'ltz_action':action}))
+                self.assertGreaterEqual(len(relay._server_cal2_guard(side)['polygon']),3)
+
+    def test_matching_source_camera_removes_warning_after_reapply(self):
+        self.camera_revision='current-camera'
+        self.owner.calibration_saved_apply(self.value)
+        self.camera_revision='fixture'
+        result=self.owner.calibration_saved_apply({'side':'green','id':'rig:green:2'})
+        self.assertEqual(result['camera_compatibility']['status'],'matched')
+        self.assertIsNone(result['camera_compatibility']['warning'])
+        self.assertEqual(self.owner.calibration_safety_snapshot('green')['status'],'ready')
+
+    def test_unknown_original_camera_is_usable_but_never_claimed_matched(self):
         row=self.owner._lessons.state['saved_calibrations']['rig:green:2']
-        row['camera_revision']='different'
-        with self.assertRaisesRegex(ValueError,'camera correction'):self.owner.calibration_saved_apply(self.value)
-        row['camera_revision']='fixture';row['draft']['rig_identity']={'ip':'other'}
+        row['camera_revision']=None
+        result=self.owner.calibration_saved_apply(self.value)
+        self.assertEqual(result['camera_compatibility']['status'],'approximate')
+        self.assertEqual(self.owner.calibration_safety_snapshot('green')['status'],'ready')
+
+    def test_camera_change_after_apply_requires_an_explicit_new_association(self):
+        self.owner.calibration_saved_apply(self.value)
+        self.camera_revision='newer-camera'
+        self.assertEqual(self.owner.calibration_safety_snapshot('green')['status'],'unavailable')
+        self.owner.calibration_saved_apply({'side':'green','id':'rig:green:2'})
+        self.assertEqual(self.owner.calibration_safety_snapshot('green')['status'],'ready')
+
+    def test_camera_unavailable_or_changed_during_stop_never_saves_an_unverified_binding(self):
+        before=Path(self.owner.CALIBRATION2_PATH).read_bytes()
+        valid=self.camera.corrected_tag_snapshot
+        self.camera.corrected_tag_snapshot=lambda *a:dict(contract='hhh.camera-correction',version=1,status='unavailable',error='camera offline')
+        with self.assertRaisesRegex(ValueError,'camera-correction v1 unavailable'):self.owner.calibration_saved_apply(self.value)
+        self.assertEqual(self.stops,[])
+        self.camera.corrected_tag_snapshot=valid
+        def stop(side):
+            self.camera_revision='changed-during-stop'
+            return self.stop(side)
+        self.relay.stop_side=stop
+        with self.assertRaisesRegex(ValueError,'changed while applying'):self.owner.calibration_saved_apply(self.value)
+        self.assertEqual(Path(self.owner.CALIBRATION2_PATH).read_bytes(),before)
+
+    def test_known_arm_identity_must_still_match(self):
+        row=self.owner._lessons.state['saved_calibrations']['rig:green:2']
+        row['camera_revision']='different';row['draft']['rig_identity']={'ip':'other'}
         with self.assertRaisesRegex(ValueError,'arm connection'):self.owner.calibration_saved_apply(self.value)
         self.assertEqual(self.stops,[])
+
+    def test_malformed_persisted_camera_binding_fails_closed(self):
+        self.owner.calibration_saved_apply(self.value)
+        saved=self.owner._calibration2_public()
+        saved['arms']['green']['camera_binding']={'revision':'fixture','applied_at':True}
+        Path(self.owner.CALIBRATION2_PATH).write_text(json.dumps(saved))
+        self.owner._load_calibration2()
+        safety=self.owner.calibration_safety_snapshot('green')
+        self.assertEqual(safety['status'],'unavailable')
+        self.assertIn('association is invalid',safety['error'])
 
     def test_malformed_public_contract_fails_closed(self):
         self.relay.arms_snapshot=lambda:dict(contract='hhh.relay.arms',version=True,status='ready')
@@ -113,11 +190,12 @@ class SavedCalibrationTests(unittest.TestCase):
         self.assertEqual(archive['rig:green:3']['transport_height'],60)
         self.assertEqual(archive['rig:purple:3']['transport_height'],60)
 
-    def measured_session(self):
-        self.owner._lessons.begin({'id':'measured:green','side':'green','practice':True},self.owner._calibration2_public())
-        session=self.owner._lessons.state['sessions']['measured:green']
-        session.update(draft=copy.deepcopy(self.owner._calibration2['arms']['green']),captures={str(m):time.time() for m in range(30,36)},
-                       stage='perspective',pickup_height=10,transport_height=60,camera_revision='fixture')
+    def measured_session(self,side='green',z=10):
+        self.owner._lessons.begin({'id':'measured:'+side,'side':side,'practice':True},self.owner._calibration2_public())
+        session=self.owner._lessons.state['sessions']['measured:'+side]
+        session.update(draft=copy.deepcopy(self.owner._calibration2['arms'][side]),captures={str(m):time.time() for m in range(30,36)},
+                       stage='perspective',camera_revision='fixture')
+        for point in session['draft']['points'].values():point['pose']['z']=z
         return session
 
     def test_measured_completion_validates_commits_and_is_idempotent_without_tutorial(self):
@@ -129,33 +207,92 @@ class SavedCalibrationTests(unittest.TestCase):
             self.assertEqual(session['arrivals'],[]);self.assertIsNone(session['pickup_evidence'])
             self.assertEqual(result['active_side'],'green','Measured completion alone does not release motion ownership')
             self.assertEqual(self.owner._calibration2['revision'],4)
+            self.assertEqual((session['pickup_height'],session['transport_height']),(10,50))
             self.owner.calibration_session_complete(value)
             self.assertEqual(self.owner._calibration2['revision'],4,'Lost acknowledgements never recommit')
             self.assertEqual(self.owner.calibration_history('green')['active_id'],self.owner.calibration_history('green')['latest_id'])
 
+    def test_new_measurements_replace_approximate_camera_binding(self):
+        self.camera_revision='current-camera'
+        self.owner.calibration_saved_apply(self.value)
+        session=self.measured_session()
+        self.assertIn('camera_binding',session['draft'])
+        self.connected=False
+        self.owner.calibration_session_complete({'id':session['id'],'side':'green'})
+        self.owner._load_calibration2()
+        arm=self.owner._calibration2_public()['arms']['green']
+        self.assertNotIn('camera_binding',arm)
+        self.assertEqual(arm['camera_revision'],'fixture')
+        self.assertEqual(self.owner.calibration_safety_snapshot('green')['status'],'unavailable')
+        self.camera_revision='fixture'
+        self.assertEqual(self.owner.calibration_safety_snapshot('green')['camera_compatibility']['status'],'matched')
+
     def test_incomplete_or_other_player_cannot_complete_measurements(self):
         original=copy.deepcopy(self.measured_session());value={'id':'measured:green','side':'green'}
         mutations=[lambda s:s['captures'].pop('30'),lambda s:s['draft']['parallax_points'].update({'31':None}),
-                   lambda s:s.update(transport_height=None),lambda s:s['draft'].update(pickup_height=None)]
+                   lambda s:s['draft']['parallax_points'].update({'31':{'height_mm':30}}),
+                   lambda s:s['draft']['points']['p1']['pose'].update(z=float('nan')),
+                   lambda s:[p['pose'].update(z=200) for p in s['draft']['points'].values()]]
         with patch.object(self.owner,'_fresh_calibration_measurement',return_value={'camera_revision':'fixture','rig_identity':None}):
             for mutate in mutations:
                 session=copy.deepcopy(original);mutate(session)
                 self.owner._lessons.state['sessions'][value['id']]=session
-                # No fallback to the previous shared height counts as a fresh measurement.
+                # Missing/invalid captures never borrow a saved rig's heights.
                 with self.assertRaises(ValueError):self.owner.calibration_session_complete(value)
                 self.assertNotEqual(self.owner._lessons.state['sessions'][value['id']]['stage'],'complete')
             with self.assertRaises(PermissionError):self.owner.calibration_session_complete({**value,'side':'purple'})
 
-    def test_completion_after_optional_practice_installs_changed_height(self):
+    def test_expired_disconnected_session_completes_without_renewing_motion(self):
+        session=self.measured_session();session.update(paused=True,access_until=0,epoch='before-restart')
+        self.connected=False
+        with patch.object(self.owner,'_fresh_calibration_measurement',side_effect=AssertionError('Completion must not measure or connect hardware')):
+            result=self.owner.calibration_session_complete({'id':session['id'],'side':'green'})
+        saved=result['sessions'][session['id']]
+        self.assertEqual(saved['stage'],'complete')
+        self.assertTrue(saved['paused']);self.assertEqual(saved['access_until'],0)
+        self.assertEqual(saved['epoch'],'before-restart')
+        self.assertEqual((saved['pickup_height'],saved['transport_height']),(10,50))
+        self.assertEqual(self.stops,[])
+
+    def test_failed_disable_keeps_completed_session_motion_gate(self):
+        session=self.measured_session()
+        self.owner.calibration_session_complete({'id':session['id'],'side':'green'})
+        self.owner._lessons.defer_stop('green',session['id'])
+        self.relay.disable_side=lambda side:dict(contract='hhh.relay.disabled',version=1,status='unavailable',error='disable failed')
+        self.owner._settle_deferred_stops()
+        self.assertEqual(self.owner._lessons.snapshot()['pending_stops'],{'green':session['id']})
+        self.assertEqual(self.stops,[],'A hold alone cannot clear a failed disable')
+        self.relay.disable_side=lambda side:dict(contract='hhh.relay.disabled',version=1,status='ready',inhibited=True,connected=True,disabled=True)
+        self.owner._settle_deferred_stops()
+        self.assertEqual(self.owner._lessons.snapshot()['pending_stops'],{})
+
+    def test_completion_rederives_heights_after_optional_practice_and_point_edit(self):
         self.measured_session();value={'id':'measured:green','side':'green'}
         with patch.object(self.owner,'_fresh_calibration_measurement',return_value={'camera_revision':'fixture','rig_identity':None}):
             self.owner.calibration_session_command('green',{'id':value['id'],'action':'commit'})
             self.owner.calibration_session_command('green',{'id':value['id'],'action':'commit'})
             self.assertEqual(self.owner._calibration2['revision'],4,'Repeated save reuses its revision')
-            self.owner._lessons.height('green',{'id':value['id'],'height':'transport_height'},[300,0,61,0])
+            session=self.owner._lessons.state['sessions'][value['id']]
+            session['draft']['points']['p1']['pose']['z']=16
             self.owner.calibration_session_complete(value)
             self.assertEqual(self.owner._calibration2['revision'],5)
-            self.assertEqual(self.owner._calibration2['shared_z']['transport_height'],61)
+            self.assertEqual(self.owner._calibration2['arms']['green']['transport_height'],51)
+            self.assertEqual(self.owner._calibration2['shared_z']['transport_height'],60,'Legacy fallback stays unchanged')
+
+    def test_each_arm_keeps_its_own_derived_transport_height_on_save_restore_and_restart(self):
+        with patch.object(self.owner,'_fresh_calibration_measurement',return_value={'camera_revision':'fixture','rig_identity':None}):
+            for side,z in [('green',10),('purple',25)]:
+                self.measured_session(side,z)
+                self.owner.calibration_session_complete({'id':'measured:'+side,'side':side})
+                self.owner._lessons.release(side,'measured:'+side)
+        self.owner._load_calibration2()
+        for side,expected in [('green',50),('purple',65)]:
+            self.assertEqual(self.owner._calibration2['arms'][side]['transport_height'],expected)
+            row=self.owner.calibration_saved_preview({'side':side})['row']
+            self.assertEqual(row['transport_height'],expected)
+        purple=copy.deepcopy(self.owner._calibration2['arms']['purple'])
+        self.owner.calibration_saved_apply({'side':'green','id':'latest'})
+        self.assertEqual(self.owner._calibration2['arms']['purple'],purple)
 
     def test_gm_history_route_requires_role_enabled_owner_and_exact_contract(self):
         renderer=load('laser-tag-y');renderer.hub_init(FakeContext({'auto-pickup-game':self.owner}))

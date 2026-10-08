@@ -3,7 +3,7 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const source=fs.readFileSync('shared/mobile_ltz/mobile.js','utf8'),handlers=new Map();
 let ready=true;
 const ctx={$:id=>({addEventListener:(event,fn)=>handlers.set(id,fn)}),
- manualAvailable:()=>ready,cartesian:()=>['xyz','targeting','cue'].includes(ctx.controlMode),updateXYZ(){},
+ manualAvailable:()=>ready,xyzAxisAvailable:()=>ready,cartesian:()=>['xyz','targeting','cue'].includes(ctx.controlMode),updateXYZ(){},
  xyzTarget:{x:100.25,y:200.5,z:60.25},xyzFine:false,xyzEdit:0,xyzError:'',pendingXYZ:false,pendingXYZTarget:null,
  controlMode:'xyz',switchBusy:false,document:{hidden:false},controlPointers:new Set(),mapPointers:new Map(),viewport:{direction:1},
  state:{mobile_arm:{tip:{x:50,y:60,z:55},xyz_limits:{x:[0,1280],y:[0,720],z:[-150,230]}}}};

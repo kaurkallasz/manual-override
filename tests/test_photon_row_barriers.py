@@ -54,6 +54,7 @@ class RowBarrierTests(unittest.TestCase):
                     e._damage_towers([dict(x=tower['x'], y=tower['y'], tower_dps=1e9)], .1)
                     self.assertEqual(e._row_mask, 15 & ~(1 << index))
                     self.assertEqual(e._row_states[index]['active_count'], 2)
+                    e.remove_atom(100, source='virtual')
                     e.place(100, socket, source='virtual')
                     self.assertEqual(e.snapshot()['row_barriers'][index]['powered'], False)
                     e.runtime_time += 3.1

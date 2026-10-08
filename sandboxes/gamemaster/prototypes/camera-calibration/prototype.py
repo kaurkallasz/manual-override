@@ -1,5 +1,6 @@
 """Gamemaster camera calibration using OpenCV's chessboard lens model."""
 
+import base64
 import json
 import hashlib
 import os
@@ -7,6 +8,7 @@ import threading
 import tempfile
 import time
 
+import live
 import cv2
 import numpy as np
 from flask import Blueprint, Response, jsonify, request, send_from_directory
@@ -31,6 +33,7 @@ MANIFEST = {
     ],
 }
 bp = Blueprint("camera_calibration", __name__)
+_live = live.LiveState()
 
 _webcam = None
 _hub_ctx = None
@@ -370,33 +373,50 @@ def _corrected_stream():
         time.sleep(1 / 12)
 
 
+def _preview_jpeg():
+    frame = _frame()
+    if frame is None:
+        frame = np.full((720, 1280, 3), 18, np.uint8)
+        cv2.putText(frame, "Open a camera in the Webcam tab", (45, 360),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (150, 160, 175), 2)
+    else:
+        with _lock:
+            calibration = _calibration
+            enabled = _enabled
+        if _usable_calibration(calibration) and enabled:
+            try:
+                frame = _undistort(frame, calibration)
+            except cv2.error:
+                calibration = None
+        _draw_grid(frame)
+        label = "CORRECTED" if _usable_calibration(calibration) and enabled else "RAW"
+        cv2.putText(frame, label, (18, 35), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8, (80, 255, 120) if label == "CORRECTED" else (70, 210, 255),
+                    2, cv2.LINE_AA)
+    ok, buf = cv2.imencode(".jpg", frame,
+                           [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+    return buf.tobytes() if ok else None
+
+
 def _preview():
     while True:
-        frame = _frame()
-        if frame is None:
-            frame = np.full((720, 1280, 3), 18, np.uint8)
-            cv2.putText(frame, "Open a camera in the Webcam tab", (45, 360),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (150, 160, 175), 2)
-        else:
-            with _lock:
-                calibration = _calibration
-                enabled = _enabled
-            if _usable_calibration(calibration) and enabled:
-                try:
-                    frame = _undistort(frame, calibration)
-                except cv2.error:
-                    calibration = None
-            _draw_grid(frame)
-            label = "CORRECTED" if _usable_calibration(calibration) and enabled else "RAW"
-            cv2.putText(frame, label, (18, 35), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8, (80, 255, 120) if label == "CORRECTED" else (70, 210, 255),
-                        2, cv2.LINE_AA)
-        ok, buf = cv2.imencode(".jpg", frame,
-                               [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
-        if ok:
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
-                   buf.tobytes() + b"\r\n")
+        jpeg = _preview_jpeg()
+        if jpeg:
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
         time.sleep(1 / PREVIEW_FPS)
+
+
+def _controller_snapshot():
+    jpeg = _preview_jpeg()
+    return {"preview": ("data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")) if jpeg else None,
+            "calibration": _status_dict(),
+            "controls": _webcam_read("camera_command", "hhh.webcam.controls", {"action": "focus_read"})}
+
+
+@bp.route("/api/events")
+def controller_events():
+    """Share one connection for calibration preview, status and optical controls."""
+    return _live.stream(_controller_snapshot, interval=1 / PREVIEW_FPS, shared=True)
 
 
 @bp.route("/")
@@ -522,11 +542,15 @@ def corrected_tags():
 
 @bp.route("/api/status")
 def status():
+    return jsonify(_status_dict())
+
+
+def _status_dict():
     frame = _frame()
     found = _cached_board_check(frame) if frame is not None else False
     with _lock:
         calibration = _calibration
-        return jsonify({
+        return {
             "camera_ready": frame is not None,
             "board_found": bool(found),
             "samples": len(_samples),
@@ -536,7 +560,7 @@ def status():
             "rms": calibration.get("rms") if calibration else None,
             "board": list(_board),
             "square_size": _square_size,
-        })
+        }
 
 
 @bp.route("/api/focus", methods=["GET", "POST"])

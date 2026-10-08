@@ -58,6 +58,17 @@ stay sharp for a camera while the glow stays pretty — no mode to toggle. (The
 bottom face is a 180° rotation of the top, which is a rotation, not a mirror, so
 it remains a valid detectable marker.)
 
+While ArUco textures load, the screen closes its own SSE connection to leave
+room for the image requests. This prevents a calibration iframe from occupying
+the sixth HTTP/1 connection and indefinitely displaying only number labels.
+The full-state stream reconnects after the image batch settles. Failed textures
+show an explicit loading error and retry every three seconds; code IDs, geometry,
+brightness and marker visibility remain owned by the existing display state.
+Run `node tests/calibration_marker_loading_browser.cjs` against the isolated
+`tests/mobile_ltz_fixture.py --port 8134` server to check both team layouts with
+five other streams open, image-failure recovery, resumed live updates and OpenCV
+detection of all six rendered codes.
+
 > OpenCV is an optional dependency. Without it the playfield still runs; the
 > `/api/marker` endpoint returns 503 and the markers just don't render.
 
@@ -159,10 +170,15 @@ Numeric fields are clamped server-side (e.g. `x,z ∈ [-12,12]`, `size ∈
 ## Calibration display reservation (2026-10-01)
 
 `display_snapshot()` / `display_command(value)` expose `hhh.playfield` v1.
-Commands begin, capture and restore a durable reservation by session ID and
+Commands begin, capture, progress and restore a durable reservation by session ID and
 Green/Purple side. Begin saves the previous areas/view before replacing them;
 only this owner writes its files. Capture glows the accepted marker green while
-the existing renderer preserves its quiet ArUco pixels. Restore writes the
+the existing renderer preserves its quiet ArUco pixels. Progress accepts explicit
+`visible` and `highlighted` marker-ID lists for the reserved field: highlighted
+IDs must also be visible, and unknown, duplicate or non-integer IDs reject before
+mutation. It changes only code visibility and green glow, preserving marker
+geometry and rotation. Unchanged progress performs no write; changed progress
+persists and publishes through the existing SSE stream. Restore writes the
 previous field before clearing the reservation. Public legacy mutations and
 HTTP edits reject while reserved. Non-finite numeric settings reject.
 The save worker and initial loads run in `hub_init`; `hub_stop` joins and flushes.

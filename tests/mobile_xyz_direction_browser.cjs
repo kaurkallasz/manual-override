@@ -49,7 +49,7 @@ const origin='http://127.0.0.1:8117';
       assert.equal(await page.evaluate(()=>session),token,'Movement preserves the connection');
       const count=moves.length;
       // Let the presentation-only actual indicator settle onto measured feedback.
-      await page.waitForFunction(axis=>Math.abs(xyzIndicators[axis].value-state.mobile_arm.tip[axis])<.05,axis);
+      await page.waitForFunction(axis=>{const m=$('xyzActualBullseye').transform.baseVal.consolidate()?.matrix;return m&&Math.abs(m[axis==='x'?'e':'f']-state.mobile_arm.tip[axis])<.05;},axis);
       const display=await page.locator('#xyz'+axis.toUpperCase()).evaluate((el,axis)=>{
        const marker=document.getElementById(el.id+'Actual').getBoundingClientRect(),r=el.getBoundingClientRect();
        const f=(Number(el.value)-Number(el.min))/(Number(el.max)-Number(el.min));
@@ -60,7 +60,7 @@ const origin='http://127.0.0.1:8117';
       assert(Math.abs(display.value-after.target[axis]*(rotation===180?-1:1))<.11,'Slider presents the current orientation');
       assert.equal(display.text,after.target[axis].toFixed(fine?1:0),'Readout retains map coordinates');
       assert(Math.abs(display.fill-display.fraction*100)<.02,'Fill follows the thumb');
-      assert(Math.abs(display.marker-display.thumb)<1,'Measured indicator follows the same direction as the thumb');
+      assert(Math.abs(display.marker-display.thumb)<1,'Measured indicator follows the same direction as the thumb: '+JSON.stringify({team,rotation,fine,axis,direction,display}));
       assert.equal(moves.length,count,'Rendering feedback cannot command movement');
      }
      const z=await page.evaluate(()=>xyzTarget.z);

@@ -889,6 +889,11 @@ class DefenseEngine(RowBarrierRuntime):
             self.force_field_impacts: list[dict[str, Any]] = []
             self.next_force_field_impact_id = 1
             self.physical_relation_tokens: dict[int, str] = {}
+            self.atom_presence: dict[int, str] = {}
+            self.atom_visits: dict[int, dict[str, Any]] = {}
+            self.occupancy_error: str | None = 'Waiting for Atom occupancy'
+            self._physical_sampled_at = 0.0
+            self._placement_sampled_at = 0.0
             self.physical_input_error: str | None = None
             self.ring_completed_at: float | None = None
             self.ring_completed_wall_at: float | None = None
@@ -908,6 +913,7 @@ class DefenseEngine(RowBarrierRuntime):
             self.core_stage = "locked"
             self.core_first_tag: int | None = None
             self.core_first_team: str | None = None
+            self.core_first_tag_wall_at: float | None = None
             self.core_detonation_started_at: float | None = None
             self.core_purge_target_ids: set[int] = set()
             self.core_purge_ignited_ids: set[int] = set()
@@ -989,6 +995,8 @@ class DefenseEngine(RowBarrierRuntime):
         with self.lock:
             mobile_arms = self.mobile_arms
             virtual_play = self.virtual_play
+            atom_presence = dict(self.atom_presence) if virtual_play else {}
+            atom_visits = {tag: dict(visit) for tag, visit in self.atom_visits.items()}
             runtime_time = self.runtime_time
             loadout = dict(self.loadout)
             placements = {
@@ -1027,6 +1035,9 @@ class DefenseEngine(RowBarrierRuntime):
             self.runtime_time = runtime_time
             self.loadout = loadout
             self.placements = placements
+            self.atom_presence = atom_presence
+            self.atom_visits = atom_visits
+            self.occupancy_error = None if virtual_play else 'Waiting for fresh Atom occupancy'
             for tower in placements.values():
                 side=tower.get('owner')
                 if side in self.telemetry['placements']:
@@ -1093,6 +1104,9 @@ class DefenseEngine(RowBarrierRuntime):
 
     def set_virtual_play(self, enabled: bool) -> None:
         with self.lock:
+            if bool(enabled) != self.virtual_play:
+                self.atom_presence.clear()
+                self.occupancy_error = None if enabled else 'Waiting for fresh Atom occupancy'
             if not enabled:
                 for arm in self.mobile_arms.values():
                     arm.halt('Physical mode selected.')
@@ -1163,6 +1177,8 @@ class DefenseEngine(RowBarrierRuntime):
             for tower in self.placements.values():
                 tower['atom_tag_id'] = by_role[tower['tower_type']]
             self.physical_relation_tokens.clear()
+            self.atom_presence.clear()
+            self.atom_visits.clear()
             self.settings.update(dict(zip(PIECE_KEYS, codes)))
 
     def set_loadout(self, atom_tag_id: int, tower_type: str) -> None:
@@ -1270,12 +1286,21 @@ class DefenseEngine(RowBarrierRuntime):
         return state
 
     def _sync_tower_link_bonuses(self) -> dict[str, dict[str, float | int]]:
-        """Apply current link-scaled max health without changing health percent."""
+        """Compose upgrade/link/Atom capacity without changing health percent."""
         link_state = self._tower_link_state()
         for socket_id, tower in self.placements.items():
             base_max_hp = self._tower_max_hp() * float(tower.get('upgrade_multiplier', 1))
             bonus = link_state[str(socket_id)]
-            new_max_hp = base_max_hp * float(bonus["link_multiplier"])
+            present_tag = next((tag for tag, sid in self.atom_presence.items()
+                                if sid == socket_id and self.atom_visits.get(tag, {}).get('socket_id') == sid
+                                and not self.atom_visits[tag]['departed']), None)
+            active = present_tag is not None and not tower.get('destroyed')
+            multiplier = 2.0 if active else 1.0
+            tower.update(atom_buff_state='active' if active else 'unavailable' if self.occupancy_error and not tower.get('destroyed') else 'inactive',
+                         occupying_atom_id=present_tag if active else None,
+                         atom_health_multiplier=multiplier, atom_damage_multiplier=multiplier,
+                         normal_max_hp=base_max_hp * float(bonus['link_multiplier']))
+            new_max_hp = tower['normal_max_hp'] * multiplier
             old_max_hp = max(1.0, float(tower.get("max_hp", new_max_hp)))
             old_hp = max(0.0, float(tower.get("hp", old_max_hp)))
             tower["base_max_hp"] = base_max_hp
@@ -1291,6 +1316,49 @@ class DefenseEngine(RowBarrierRuntime):
                 tower["max_hp"] = new_max_hp
                 tower["hp"] = 0.0 if tower.get("destroyed") else min(old_hp, new_max_hp)
         return link_state
+
+    def remove_atom(self, atom_tag_id: int, *, source: str, team: str | None = None) -> None:
+        """Virtual pickup/removal ends occupancy, never the installed defense."""
+        if source != 'virtual' or not self.virtual_play:
+            raise PermissionError('Atom removal requires Virtual play')
+        if atom_tag_id not in self.atom_owners:
+            raise ValueError('Unknown Atom')
+        if team and self.atom_owners[atom_tag_id] != team:
+            raise PermissionError('Atom belongs to the other team')
+        with self.lock:
+            self.atom_presence.pop(atom_tag_id, None)
+            if atom_tag_id in self.atom_visits:
+                self.atom_visits[atom_tag_id]['departed'] = True
+            self._sync_tower_link_bonuses()
+            self._sync_companions()
+        self._changed()
+
+    def _ingest_occupancy(self, value):
+        """Consume validated camera relationships independently of arm readiness."""
+        self.atom_presence.clear()
+        if not isinstance(value, dict) or value.get('status') != 'ready':
+            self.occupancy_error = str((value or {}).get('error') or 'Atom occupancy unavailable')
+            return
+        sampled_at = float(value['sampled_at'])
+        if sampled_at < self._physical_sampled_at:
+            self.occupancy_error = 'Out-of-order Atom occupancy'
+            return
+        self._physical_sampled_at = sampled_at
+        self.occupancy_error = None
+        for relation in value['relations']:
+            tag = relation['movable_id']
+            if tag not in self.atom_owners:
+                continue
+            visit = self.atom_visits.get(tag)
+            departure = relation['departed_at']
+            if visit and departure is not None and departure > visit['accepted_at']:
+                visit['departed'] = True
+            if relation['state'] == 'present':
+                socket_id = self.level.socket_by_marker.get(relation['marker_id'])
+                if socket_id is not None:
+                    self.atom_presence[tag] = socket_id
+            elif relation['state'] == 'unavailable':
+                self.occupancy_error = 'An Atom has unavailable or ambiguous camera evidence'
 
     def _reset_connected_fields(self, socket_id: str) -> None:
         for field in self.force_fields.values():
@@ -1457,6 +1525,7 @@ class DefenseEngine(RowBarrierRuntime):
             raise ValueError("invalid placement source")
         with self.lock:
             if socket_id is None:
+                self.remove_atom(atom_tag_id, source=source, team=team)
                 return
             if socket_id not in self.level.sockets:
                 raise ValueError("unknown socket")
@@ -1468,6 +1537,25 @@ class DefenseEngine(RowBarrierRuntime):
                     f"Atom {atom_tag_id} always activates {kind.replace('_', ' ')}"
                 )
             existing = self.placements.get(socket_id)
+            visit = self.atom_visits.get(atom_tag_id)
+            if visit and visit['socket_id'] == socket_id and not visit['departed']:
+                # A retry/reconnect is still the same visit, including if the
+                # turret has since been destroyed. Only real movement rearms healing.
+                return
+            self.atom_visits[atom_tag_id] = {
+                'socket_id': socket_id, 'departed': False,
+                'accepted_at': (self._placement_sampled_at or time.time()) if source == 'physical' else time.time(),
+            }
+            if source == 'virtual':
+                for tag, sid in self.atom_presence.items():
+                    if sid == socket_id and tag != atom_tag_id and tag in self.atom_visits:
+                        self.atom_visits[tag]['departed'] = True
+                self.atom_presence = {tag: sid for tag, sid in self.atom_presence.items()
+                                      if tag != atom_tag_id and sid != socket_id}
+                self.atom_presence[atom_tag_id] = socket_id
+                self.occupancy_error = None
+                arm = self.mobile_arms[owner]
+                arm.tags[atom_tag_id] = {key: self.level.sockets[socket_id][key] for key in ('x', 'y')}
             if existing is not None:
                 if existing.get("destroyed"):
                     self._replace_tower(
@@ -1477,6 +1565,8 @@ class DefenseEngine(RowBarrierRuntime):
                     self._replenish_tower(existing, atom_tag_id)
                 self._reconcile_connections(reason="tower_reactivated")
                 self._evaluate_ring_topology()
+                self._sync_tower_link_bonuses()
+                self._sync_companions()
                 self._changed()
                 return
             self.loadout[atom_tag_id] = kind
@@ -1499,6 +1589,8 @@ class DefenseEngine(RowBarrierRuntime):
                 )
             self._evaluate_ring_topology()
             self._event("tower_placed", atom_tag_id=atom_tag_id, socket_id=socket_id, tower_type=kind, source=source)
+            self._sync_tower_link_bonuses()
+            self._sync_companions()
         self._changed()
 
     def activate_core_tag(
@@ -1522,6 +1614,7 @@ class DefenseEngine(RowBarrierRuntime):
             if self.core_stage == "ring_ready":
                 self.core_first_tag = atom_tag_id
                 self.core_first_team = owner
+                self.core_first_tag_wall_at = time.time()
                 self.core_stage = "first_tag"
                 self._event(
                     "core_first_tag",
@@ -1548,21 +1641,35 @@ class DefenseEngine(RowBarrierRuntime):
                 )
             else:
                 raise ValueError("The ArUco 38 sequence is already complete")
+            if source == 'virtual':
+                self.remove_atom(atom_tag_id, source=source, team=team)
         self._changed()
+
+    def _buff_signature(self):
+        return (self.occupancy_error, self.physical_input_error, tuple(
+            (sid, t.get('hp'), t.get('max_hp'), t.get('atom_buff_state'), t.get('occupying_atom_id'))
+            for sid, t in self.placements.items()))
 
     def ingest_physical(self, placement: dict[str, Any]) -> None:
         """Apply Board-owned stable relationships through Game-owned rules."""
         with self.lock:
+            previous_buffs = self._buff_signature()
+            self._ingest_occupancy(placement.get('occupancy') if isinstance(placement, dict) else None)
             if not isinstance(placement, dict) or placement.get("status") != "ready":
                 self.physical_relation_tokens.clear()
                 self.physical_input_error = str(
                     placement.get("error") if isinstance(placement, dict) else None
                     or "Photon Board placement evidence unavailable"
                 )[:500]
+                self._sync_tower_link_bonuses()
+                self._sync_companions()
+                if previous_buffs != self._buff_signature():
+                    self._changed()
                 return
             self.physical_input_error = None
             relations = placement.get("relations") or []
             sampled_at = float(placement["sampled_at"])
+            self._placement_sampled_at = sampled_at
             for atom_tag_id, owner in self.atom_owners.items():
                 candidates = [
                     (float(relation["distance"]), "socket", int(relation["marker_id"]), relation)
@@ -1574,7 +1681,7 @@ class DefenseEngine(RowBarrierRuntime):
                 ]
                 if (
                     self.ring_completed_at is not None
-                    and self.core_stage in {"ring_ready", "first_tag"}
+                    and self.core_stage == "ring_ready"
                 ):
                     candidates.extend(
                         (float(relation["distance"]), "core", CORE_MARKER_ID, relation)
@@ -1605,13 +1712,15 @@ class DefenseEngine(RowBarrierRuntime):
                 if gate_at is None or sampled_at < gate_at + duration:
                     continue
                 relation_id = str(relation["relation_id"])
-                if self.physical_relation_tokens.get(atom_tag_id) == relation_id:
+                if (self.physical_relation_tokens.get(atom_tag_id) == relation_id
+                        and not self.atom_visits.get(atom_tag_id, {}).get('departed')):
                     continue
                 try:
                     if target_kind == "core":
                         self.activate_core_tag(
                             atom_tag_id, source="physical", team=owner
                         )
+                        self.core_first_tag_wall_at = sampled_at
                     else:
                         self.place(
                             atom_tag_id,
@@ -1622,6 +1731,32 @@ class DefenseEngine(RowBarrierRuntime):
                 except (PermissionError, ValueError):
                     pass
                 self.physical_relation_tokens[atom_tag_id] = relation_id
+            self._ingest_core_stack(placement.get("stacking"))
+            self._sync_tower_link_bonuses()
+            self._sync_companions()
+            if previous_buffs != self._buff_signature():
+                self._changed()
+
+    def _ingest_core_stack(self, stacking: dict[str, Any] | None) -> None:
+        if (self.phase != "running" or self.paused or self.core_stage != "first_tag"
+            or self.core_first_tag_wall_at is None
+            or not isinstance(stacking, dict) or stacking.get("status") != "ready"):
+            return
+        for relation in stacking.get("relations", []):
+            upper = relation["upper_id"]
+            owner = self.atom_owners.get(upper)
+            if (relation.get("stable") is not True
+                or relation["lower_id"] != self.core_first_tag
+                or owner is None or owner == self.core_first_team
+                or relation["observed_since"] <= self.core_first_tag_wall_at):
+                continue
+            self.activate_core_tag(upper, source="physical", team=owner)
+            self._event(
+                "core_stack_confirmed", lower_atom_tag_id=self.core_first_tag,
+                upper_atom_tag_id=upper, relation_id=relation["relation_id"],
+                source="physical",
+            )
+            break
 
     def _launch_wave(self, number: int) -> None:
         limit = min(int(self.settings["wave_count"]), len(self.wave_source))
@@ -4092,6 +4227,7 @@ class DefenseEngine(RowBarrierRuntime):
                 link_state[str(tower["socket_id"])]["link_multiplier"]
             )
             link_multiplier *= float(tower.get('upgrade_multiplier', 1))
+            link_multiplier *= float(tower.get('atom_damage_multiplier', 1))
             targeting = self._tower_targeting(tower)
             if kind == "flamethrower":
                 tower["facing_angle"] = targeting["sweep_angle"]
@@ -4259,6 +4395,8 @@ class DefenseEngine(RowBarrierRuntime):
                 "last_fire_chain", "aim_revision", "aim_instance", "last_damage_at",
                 "last_damage_amount", "activation_started_at",
                 "activation_complete_at", "replenished_at", "upgrade_level", "upgrade_multiplier",
+                "atom_buff_state", "occupying_atom_id", "atom_health_multiplier",
+                "atom_damage_multiplier", "normal_max_hp",
             )
         }
         if tower.get('is_companion'):

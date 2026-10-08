@@ -25,7 +25,12 @@ class PhotonContentTests(unittest.TestCase):
         cls.folder = tempfile.TemporaryDirectory()
         cls.game.LOG_PATH = str(Path(cls.folder.name) / "runs.jsonl")
         cls.game._settings = cls.game.SettingsStore(Path(cls.folder.name) / "settings.json")
-        cls.modules = {"photon-level": cls.level}
+        # The real journey worker needs its progress owner even in a content
+        # test; omitting it makes Start race the worker's unavailable error.
+        cls.progress=load('photon-progress')
+        cls.progress.DATA_DIR=Path(cls.folder.name)/'progress'
+        cls.progress.hub_init(None)
+        cls.modules = {"photon-level": cls.level,"photon-progress":cls.progress}
         cls.game.hub_init(FakeContext(cls.modules))
         # Y cannot even discover Level; its only accessible module is Game.
         cls.y.hub_init(FakeContext({"photon-game": cls.game}))
@@ -34,6 +39,7 @@ class PhotonContentTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.y.hub_stop()
         cls.game.hub_stop()
+        cls.progress.hub_stop()
         cls.folder.cleanup()
 
     def tearDown(self):

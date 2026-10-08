@@ -99,6 +99,26 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(self.row(result)["stage"], "placement_stable")
         self.assertEqual(self.row(result)["target_id"], 40)
 
+    def test_revealed_source_marker_does_not_confirm_destination_without_atom(self):
+        self.tags.append(tag(41, .3, .3))  # Original site under Atom 100.
+        self.sample()
+        self.tags = [item for item in self.tags if item['id'] not in (100, 41)]
+        self.arms['green']['pump_mode'] = 'suck'
+        self.sample()
+        self.tags.append(tag(41, .3, .3))  # Source is clear; Atom is still hidden.
+        self.arms['green']['pose'] = [350, 250, 80]
+        result = self.sample(advance=.4)
+        self.assertEqual(self.row(result)['confidence'], 'inferred')
+        self.arms['green']['pump_mode'] = 'off'
+        for _ in range(5):
+            result = self.sample()
+            self.assertNotEqual(self.row(result)['stage'], 'placement_stable')
+        self.tags.append(tag(100, .72, .5))  # Now observed at destination 40.
+        for _ in range(4):
+            result = self.sample()
+        self.assertEqual(self.row(result)['stage'], 'placement_stable')
+        self.assertEqual(self.row(result)['target_id'], 40)
+
     def test_hidden_without_suction_is_unknown_and_reappearance_cancels_carry(self):
         self.sample()
         hidden = self.tags.pop(0)
@@ -233,6 +253,20 @@ class PhysicalPlacementContractTests(unittest.TestCase):
         self.assertEqual([row["marker_id"] for row in green], [41, 40])
         self.assertTrue(all(not row["stable"] for row in green))
 
+    def test_activation_radius_reduced_twenty_percent_and_stationary_100_cannot_activate_47(self):
+        # Captured 100/47 positions were almost exactly on the old 0.05 edge.
+        self.tags = [tag(100, .6301, .4915), tag(47, .6801, .4928)]
+        for jitter in (0, -.0003, .0001, -.0002, 0):
+            self.tags[1]['nx'] = .6801 + jitter
+            value = self.sample(.6)
+            self.assertAlmostEqual(value['policy']['distance'], .05 * .8)
+            self.assertEqual(value['relations'], [], 'Boundary jitter must not activate 47')
+        self.tags[1]['nx'] = .6691  # 0.039 separation: inside the new radius.
+        self.assertFalse(self.sample()['relations'][0]['stable'])
+        self.assertTrue(self.sample(.6)['relations'][0]['stable'])
+        self.tags[1]['nx'] = .6711  # 0.041: outside, although inside the old radius.
+        self.assertEqual(self.sample(.6)['relations'], [])
+
     def test_stale_or_source_change_clears_authority(self):
         self.sample()
         failed = self.sample(.6, status="unavailable")
@@ -247,6 +281,21 @@ class PhysicalPlacementContractTests(unittest.TestCase):
 
 
 class ProjectionTests(unittest.TestCase):
+    def test_100_series_and_all_40_50_destinations_use_their_own_layers(self):
+        value = calibration()
+        for p in value['arms']['purple']['parallax_points'].values():
+            p['raised']['u'] = p['ground']['u'] - .04
+        tags = [tag(i, .5, .5) for i in [100, 105, 150, 199, *range(40, 60)]]
+        result = CalibrationProjection(value).project(tags, {})
+        for side, raised_x in [('green', 240), ('purple', 270)]:
+            for item in result['arms'][side]['tags']:
+                with self.subTest(side=side, marker=item['id']):
+                    physical = item['id'] >= 100
+                    self.assertEqual(item['status'], 'ready')
+                    self.assertAlmostEqual(item['robot_xy'][0], raised_x if physical else 250, places=5)
+                    self.assertAlmostEqual(item['robot_xy'][1], 250, places=5)
+                    self.assertEqual(item['drop_z'], 32.5 if physical else 1)
+
     def test_forward_reverse_and_height_basis(self):
         projector = CalibrationProjection(calibration())
         data = projector.project([tag(100,.32,.3), tag(40,.7,.5)], {"green": arm([150,150,0])})

@@ -324,8 +324,42 @@ bool respond(FocusController &controller, NSString *name,
 }
 }  // namespace
 
+// Run inside the capture process: AVFoundation can cache a different device
+// list in a long-lived hub than a newly launched helper sees after a hot-plug.
+extern "C" char *hhh_camera_devices() {
+  @autoreleasepool {
+      // Match OpenCV's AVFoundation index ordering, including virtual cameras.
+      // USB bus order is unrelated and must never be used to label these indices.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+      NSArray *devices = [[AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo]
+          arrayByAddingObjectsFromArray:[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed]];
+#pragma clang diagnostic pop
+      devices = [devices sortedArrayUsingComparator:^NSComparisonResult(AVCaptureDevice *a, AVCaptureDevice *b) {
+        return [a.uniqueID compare:b.uniqueID];
+      }];
+      NSMutableArray *items = [NSMutableArray array];
+      for (AVCaptureDevice *device in devices) {
+        [items addObject:@{@"index": @(items.count), @"name": device.localizedName,
+                          @"unique_id": device.uniqueID}];
+      }
+      NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"ok": @YES, @"devices": items}
+                                                   options:0 error:nil];
+      return ::strdup([[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding].UTF8String);
+  }
+}
+
+extern "C" void hhh_camera_devices_free(char *data) { std::free(data); }
+
+#ifndef HHH_CAMERA_LIBRARY
 int main(int argc, char **argv) {
   @autoreleasepool {
+    if (argc == 2 && !std::strcmp(argv[1], "list")) {
+      char *data = hhh_camera_devices();
+      std::puts(data);
+      hhh_camera_devices_free(data);
+      return 0;
+    }
     if (argc < 4) {
       printError("usage: focus-lock <status|serve|set-auto|set-focus> "
                  "<vendor> <product> [value]");
@@ -368,3 +402,4 @@ int main(int argc, char **argv) {
                    argc >= 5 ? argv[4] : nullptr) ? 0 : 1;
   }
 }
+#endif

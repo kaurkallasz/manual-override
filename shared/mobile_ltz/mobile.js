@@ -7,6 +7,12 @@ const preferencePrefix=team==='green'?'mobile-ltz:':'mobile-ltz:purple:';
 let publishedAssets={};
 const viewport=new MobileViewport(), mapPointers=new Map(), controlPointers=new Set();
 let state=null,view=null,session=null,sequence=0,lastFeed=0,feedReady=false,joints=[-80,-5,-5],pendingJoints=false,inflight=false,heartbeatAt=0,generation=0,gesture=null,wheelDrag=null,rendererLoading=null;
+const connectionLog=new MobileConnectionLog({url:api('diagnostics'),team,context:()=>({
+ ...(state?.virtual_play===false?physicalArm.diagnostics():{}),
+ run_id:state?.run_id,build:document.documentElement.dataset.mobileBuild,phase:state?.phase,journey_phase:state?.journey?.phase,
+ game_age_ms:lastFeed?performance.now()-lastFeed:null,feed_ready:feedReady,paused:state?.paused,virtual:state?.virtual_play,
+ had_session:!!session,control_mode:controlMode,source_gap_ms:state?.delivery?.source_gap_ms,build_ms:state?.delivery?.build_ms,
+ delivery_sequence:state?.delivery?.sequence})});
 const newIdentity=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
 const preference={get(key){try{return localStorage.getItem(preferencePrefix+key);}catch{return null;}},set(key,value){try{localStorage.setItem(preferencePrefix+key,value);}catch{}}};
 let clientIdentity=preference.get('client');
@@ -30,15 +36,23 @@ viewport.setRotation(preference.get('rotation')==='180'||(preference.get('rotati
 function syncRotationControl(){const rotated=viewport.rotation===180;$('rotateView').setAttribute('aria-pressed',String(rotated));$('rotateView').title=rotated?'Return to camera orientation':'Rotate the playfield 180°';}
 syncRotationControl();
 $('rotateView').onclick=()=>{if(controlPointers.size||mapPointers.size)return;viewport.setRotation(viewport.rotation===180?0:180);preference.set('rotation',String(viewport.rotation));syncRotationControl();syncViewport();updateXYZ();};
-const feedbackLines=[];let feedbackPinnedUntil=0;
-const feedback=(text,important=false)=>{
+const feedbackLines=[];let feedbackPinnedUntil=0,feedbackPinnedSource=null;
+function renderFeedback(){
+ $('feedback').replaceChildren(...feedbackLines.map((line,i)=>{const row=document.createElement('div');row.textContent=(line.resolved?'Resolved: ':'')+line.text;if(line.important)row.setAttribute('class','urgent');if(i)row.setAttribute('aria-hidden','true');return row;}));
+}
+function resolveFeedback(source){
+ for(const line of feedbackLines)if(line.source===source){line.important=false;line.resolved=true;}
+ if(feedbackPinnedSource===source){feedbackPinnedUntil=0;feedbackPinnedSource=null;}
+ renderFeedback();
+}
+const feedback=(text,important=false,source=null)=>{
  text=String(text||'').trim();if(!text)return;
- if(important)feedbackPinnedUntil=performance.now()+8000;
+ if(important){feedbackPinnedUntil=performance.now()+8000;feedbackPinnedSource=source;}
  else if(performance.now()<feedbackPinnedUntil)return;
- if(feedbackLines[0]?.text===text&&(!important||feedbackLines[0].important))return;
- const duplicate=feedbackLines.findIndex(line=>line.text===text);if(duplicate>=0)feedbackLines.splice(duplicate,1);
- feedbackLines.unshift({text,important});feedbackLines.length=Math.min(5,feedbackLines.length);
- $('feedback').replaceChildren(...feedbackLines.map((line,i)=>{const row=document.createElement('div');row.textContent=line.text;if(line.important)row.setAttribute('class','urgent');if(i)row.setAttribute('aria-hidden','true');return row;}));
+ if(feedbackLines[0]?.text===text&&!feedbackLines[0].resolved&&(!important||feedbackLines[0].important))return;
+ const duplicate=feedbackLines.findIndex(line=>line.text===text&&line.source===source);if(duplicate>=0)feedbackLines.splice(duplicate,1);
+ feedbackLines.unshift({text,important,source,resolved:false});feedbackLines.length=Math.min(5,feedbackLines.length);
+ renderFeedback();
 };
 function syncViewport(){viewport.resize($('battlefield').clientWidth,$('battlefield').clientHeight);$('world').style.width=viewport.w+'px';$('world').style.height=viewport.h+'px';$('world').style.transform=viewport.css();layoutXYZ();drawXYZ();drawCalibrationCrosshair();drawMarkerLabels();if(typeof turretOverlay!=='undefined')turretOverlay.draw();}
 const pumpModes=['suction','off','blow'];
@@ -50,14 +64,16 @@ const actualIndicators=[new MobileJointRig.IndicatorMotion(),new MobileJointRig.
 // XYZ shares the existing session and serialized command queue with Joint mode.
 let controlMode='joint',controlRevision=0,switchBusy=false,xyzTarget=null,pendingXYZ=false,xyzSending=false,xyzFine=false,xyzPointer=null,xyzError='',xyzEdit=0;
 let targetDrag=null,perspectiveDrag=null,cueTap=null,targetPreview=false,pendingXYZTarget=null;
+let cuePickupPreview=null;
 const cartesian=()=>['xyz','targeting','cue'].includes(controlMode);
 const xyzCenters={x:null,y:null,z:null};
-const xyzIndicators={x:new MobileJointRig.IndicatorMotion(),y:new MobileJointRig.IndicatorMotion(),z:new MobileJointRig.IndicatorMotion()};
+const xyzMotion=new MobileJointRig.PositionPlayback();
+let xyzMotionScope=null,xyzPathProgress=null,xyzFrameAt=0;
 // Presets belong to this phone; recalling one still uses the validated XYZ queue.
 let zPresets=[null,null,null],zPresetHold=null,zPresetClickUntil=0;
 try{const raw=preference.get('z-presets');const saved=raw&&raw.length<1000?JSON.parse(raw):null;if(saved?.version===1&&Array.isArray(saved.slots)&&saved.slots.length===3)zPresets=saved.slots.map(v=>Number.isFinite(v)?v:null);}catch{}
 const zPresetButtons=[1,2,3].map(i=>$('zPreset'+i));
-function canUseZPresets(){return manualAvailable()&&!switchBusy&&cartesian()&&!document.hidden;}
+function canUseZPresets(){return xyzAxisAvailable('z')&&!switchBusy&&cartesian()&&!document.hidden;}
 function cancelZPresetHold(){
  const held=zPresetHold;zPresetHold=null;
  if(!held)return;
@@ -176,7 +192,7 @@ function syncArmControls(arm,at=Infinity){
 function presentControlMode(arm){
  $('app').dataset.controlMode=controlMode;if(arm)syncCue(arm);
  const calibrationHeight=window.MobileJourney.calibrationSide(state)===team&&!['tutorial','complete'].includes(state.mobile_calibration?.stage);
- const heightPrecision=controlMode==='targeting'||calibrationHeight;
+ const heightPrecision=controlMode==='targeting'||controlMode==='cue'||calibrationHeight;
  const precision=$('xyzPrecision'),precisionParent=heightPrecision?$('zPresetButtons'):document.querySelector('.xyzControls');
  if(precision.parentElement!==precisionParent){
   if(heightPrecision)precisionParent.append(precision);
@@ -248,13 +264,65 @@ function drawCalibrationCrosshair(){
  svg.querySelector('g').setAttribute('transform',`translate(${target.camera.u*viewport.w} ${target.camera.v*viewport.h}) scale(${1/viewport.scale})`);
 }
 window.addEventListener('calibrationtargetchange',()=>{if(!window.MobileJourney.wantsPerspective())perspectiveDrag=null;layoutXYZ();drawCalibrationCrosshair();});
+function displayedArmTip(){
+ const arm=state?.mobile_arm,tip=arm?.tip;
+ const scope=JSON.stringify([state?.run_id,arm?.session,arm?.controller_id,arm?.control_revision,arm?.coordinate_space,controlMode,viewport.w,viewport.h]);
+ const now=performance.now(),fresh=feedReady&&now-lastFeed<1500;
+ if(scope!==xyzMotionScope||!fresh||!tip||document.hidden){
+  xyzMotionScope=scope;xyzPathProgress=null;
+  xyzMotion.reset();
+ }
+ // Physical feedback arrives directly from the existing 100 ms status poll.
+ // A short buffer smooths travel; a measured stop flushes it at the actual pose.
+ const stamp=Number.isFinite(arm?.position_at)?arm.position_at*1000:NaN;
+ return xyzMotion.update(tip,stamp,now,state?.virtual_play===false?150:250,arm?.position_settled===true);
+}
+function drawArmTrajectory(tip,fresh){
+ const el=$('xyzArmTrajectory'),route=state?.mobile_arm?.motion_path;
+ const valid=fresh&&route&&typeof route.id==='string'&&Array.isArray(route.points)&&route.points.length>=2&&route.points.length<=2048
+  &&route.points.every(p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y));
+ if(!valid){xyzPathProgress=null;el.setAttribute('hidden','');return;}
+ if(xyzPathProgress?.id!==route.id)xyzPathProgress={id:route.id,points:route.points.map(p=>({...p})),index:0,t:0};
+ const path=xyzPathProgress,points=path.points;
+ let best=null;
+ for(let i=path.index;i<points.length-1;i++){
+  const a=points[i],b=points[i+1],dx=b.x-a.x,dy=b.y-a.y,length=dx*dx+dy*dy;
+  const t=Math.max(i===path.index?path.t:0,Math.min(1,length?((tip.x-a.x)*dx+(tip.y-a.y)*dy)/length:1));
+  const p={x:a.x+dx*t,y:a.y+dy*t},distance=Math.hypot(tip.x-p.x,tip.y-p.y);
+  if(!best||distance<best.distance-1e-6)best={index:i,t,p,distance};
+ }
+ // Erase only where the displayed marker actually passes. Progress never
+ // moves backwards when telemetry jitters or the arm revisits a point.
+ if(best&&best.distance<=Math.max(2,6/viewport.scale)){path.index=best.index;path.t=best.t;}
+ const a=points[path.index],b=points[path.index+1],start={x:a.x+(b.x-a.x)*path.t,y:a.y+(b.y-a.y)*path.t};
+ const remaining=[start,...points.slice(path.index+1)];
+ const length=remaining.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p.x-remaining[i].x,p.y-remaining[i].y),0);
+ el.toggleAttribute('hidden',length<=2);if(length<=2)return;
+ el.setAttribute('d','M'+remaining.map(p=>`${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join('L'));
+}
 function drawXYZ(){
+ const arm=state?.mobile_arm,cue=arm?.cue,row=cue?.rows?.[cue.index];
+ const picking=controlMode==='cue'&&['running','paused','waiting'].includes(cue?.status)&&Number.isInteger(row?.piece);
+ const pickupKey=picking?JSON.stringify([state.run_id,arm.session,arm.control_revision,cue.index,row.piece,row.destination,viewport.w,viewport.h]):null;
+ if(!pickupKey||cuePickupPreview?.key!==pickupKey)cuePickupPreview=null;
+ // Keep the source through occlusion, then latch it hidden after pickup so it
+ // cannot reappear when the piece is released. This is presentation only.
+ if(picking&&!cuePickupPreview)cuePickupPreview={key:pickupKey,pickedUp:false,point:null};
+ if(cuePickupPreview&&(cue?.picked_up===true||arm?.held_tag===row?.piece))cuePickupPreview.pickedUp=true;
+ const piece=picking?arm.tags?.find(tag=>tag.id===row.piece):null;
+ if(cuePickupPreview&&!cuePickupPreview.point&&piece&&Number.isFinite(piece.x)&&Number.isFinite(piece.y))cuePickupPreview.point={id:piece.id,x:piece.x,y:piece.y};
+ const pickup=$('cuePickupBullseye'),showPickup=cuePickupPreview?.point&&!cuePickupPreview.pickedUp;
+ pickup.toggleAttribute('hidden',!showPickup);
+ if(showPickup){
+  const p=cuePickupPreview.point;
+  pickup.setAttribute('transform',`translate(${p.x} ${p.y}) scale(${1/viewport.scale})`);
+  pickup.setAttribute('aria-label',`Cyan pickup ${p.id} X ${p.x.toFixed(1)}, Y ${p.y.toFixed(1)}`);
+ }
  if(state?.mobile_arm?.coordinate_space==='robot-mm'){$('xyzBullseyes').setAttribute('hidden','');return;}
  if(!cartesian()||!xyzTarget)return;
- const arm=state?.mobile_arm,tip=arm?.tip,svg=$('xyzBullseyes');
+ const tip=displayedArmTip(),svg=$('xyzBullseyes');
  // Cue previews the row's destination, including while paused. Intermediate
  // pickup/lift goals still drive the arm and Z slider through xyzTarget.
- const cue=arm?.cue,row=cue?.rows?.[cue.index];
  const destination=controlMode==='cue'&&(['running','paused'].includes(cue?.status)||cue?.waypoint)
   ?arm.markers?.find(marker=>marker.id===row?.destination):null;
  const target=destination??xyzTarget;
@@ -262,6 +330,7 @@ function drawXYZ(){
  svg.toggleAttribute('hidden',!valid);
  if(!valid)return;
  const fresh=feedReady&&performance.now()-lastFeed<2500;
+ drawArmTrajectory(tip,fresh&&performance.now()-lastFeed<1500);
  // Two map units, independent of zoom. Z is intentionally a separate indicator.
  const aligned=fresh&&Math.hypot(target.x-tip.x,target.y-tip.y)<=2;
  svg.dataset.aligned=String(aligned);svg.dataset.stale=String(!fresh);
@@ -285,9 +354,10 @@ function drawXYZ(){
 }
 function updateXYZMarkers(dt){
  if(!cartesian()||!xyzTarget)return;
+ const shown=displayedArmTip();
  for(const axis of ['x','y','z']){
   const marker=$('xyz'+axis.toUpperCase()+'Actual'),confirmed=state?.mobile_arm?.tip?.[axis];
-  const measured=xyzIndicators[axis].step(confirmed,dt,available()&&!document.hidden),value=Number.isFinite(measured)?measured*xyzDirection(axis):NaN,[lo,hi]=xyzSliderBounds(axis);
+  const measured=shown?.[axis],value=Number.isFinite(measured)?measured*xyzDirection(axis):NaN,[lo,hi]=xyzSliderBounds(axis);
   marker.hidden=!Number.isFinite(value);if(marker.hidden)continue;
   marker.title=`Actual ${axis.toUpperCase()}: ${confirmed.toFixed(1)}`;
   marker.dataset.edge=value<lo?'low':value>hi?'high':'';
@@ -300,11 +370,11 @@ function updateXYZMarkers(dt){
 for(const axis of ['x','y','z']){
  const el=$('xyz'+axis.toUpperCase());
  el.addEventListener('pointerdown',e=>{
-  if(!manualAvailable()||switchBusy||!cartesian()||(axis!=='z'&&controlMode!=='xyz')||controlPointers.size||mapPointers.size||e.button!==0){e.preventDefault();return;}
+  if(!xyzAxisAvailable(axis)||switchBusy||!cartesian()||(axis!=='z'&&controlMode!=='xyz')||controlPointers.size||mapPointers.size||e.button!==0){e.preventDefault();return;}
   xyzPointer={id:e.pointerId,el};controlPointers.add(e.pointerId);el.setPointerCapture(e.pointerId);
  });
  el.addEventListener('input',()=>{
-  if(!manualAvailable()||switchBusy||!cartesian()||(axis!=='z'&&controlMode!=='xyz')||!xyzTarget||(controlPointers.size&&xyzPointer?.el!==el)){updateXYZ();return;}
+  if(!xyzAxisAvailable(axis)||switchBusy||!cartesian()||(axis!=='z'&&controlMode!=='xyz')||!xyzTarget||(controlPointers.size&&xyzPointer?.el!==el)){updateXYZ();return;}
   requestXYZAxis(axis,Number(el.value)*xyzDirection(axis));
  });
  for(const event of ['pointerup','lostpointercapture'])el.addEventListener(event,e=>{if(xyzPointer?.id===e.pointerId){controlPointers.delete(e.pointerId);xyzPointer=null;}});
@@ -321,7 +391,7 @@ const xyzStepButtons=[
  ['xyzZDecrease','z',-1],['xyzZIncrease','z',1]
 ];
 for(const [id,axis,step] of xyzStepButtons)$(id).addEventListener('click',()=>{
- if(!manualAvailable()||switchBusy||!cartesian()||(axis!=='z'&&controlMode!=='xyz')||document.hidden||controlPointers.size||mapPointers.size||!xyzTarget)return;
+ if(!xyzAxisAvailable(axis)||switchBusy||!cartesian()||(axis!=='z'&&controlMode!=='xyz')||document.hidden||controlPointers.size||mapPointers.size||!xyzTarget)return;
  const limits=state.mobile_arm?.xyz_limits?.[axis],current=xyzTarget[axis];
  if(!Array.isArray(limits)||limits.length!==2||!limits.every(Number.isFinite)||limits[0]>=limits[1]||!Number.isFinite(current))return;
  // Accumulate taps against the selected goal, not lagging robot feedback.
@@ -329,7 +399,7 @@ for(const [id,axis,step] of xyzStepButtons)$(id).addEventListener('click',()=>{
  const next=Math.max(limits[0],Math.min(limits[1],current+step*xyzDirection(axis)*(xyzFine?.1:1)));
  if(next!==current)requestXYZAxis(axis,next);
 });
-$('xyzPrecision').onclick=()=>{if(xyzPointer||targetDrag||perspectiveDrag||!manualAvailable())return;xyzFine=!xyzFine;for(const k of ['x','y','z'])xyzCenters[k]=null;$('xyzPrecision').setAttribute('aria-checked',String(xyzFine));updateXYZ();};
+$('xyzPrecision').onclick=()=>{if(xyzPointer||targetDrag||perspectiveDrag||!xyzAxisAvailable('z'))return;xyzFine=!xyzFine;for(const k of ['x','y','z'])xyzCenters[k]=null;$('xyzPrecision').setAttribute('aria-checked',String(xyzFine));updateXYZ();};
 async function chooseControl(mode){
  if(!available()||switchBusy)return;
  switchBusy=true;clearInput();renderControls();feedback('Switching controls…');
@@ -339,43 +409,186 @@ async function chooseControl(mode){
 }
 $('mobileControl').onchange=()=>chooseControl($('mobileControl').value);
 
-let cueDraft=[],cueDirty=false,cueBusy=false,cueSignature='',cueLastStatus='',markerSignature='',cueNotice='',cueLogNotice='';
+let cueDraft=[],cueDirty=false,cueBusy=false,cuePendingAction='',cueInputSequence=0,cueLastStatus='',markerSignature='',cueNotice='',cueLogNotice='';
 const cueWaypointRow=$('cueWaypointRow');
-function cueLocked(){return ['running','paused'].includes(state?.mobile_arm?.cue?.status);}
+function cueLocked(){return ['running','paused','waiting'].includes(state?.mobile_arm?.cue?.status);}
 function manualAvailable(){return available()&&(state.virtual_play||state.mobile_arm?.enabled)&&!cueLocked()&&!cueBusy;}
+function xyzAxisAvailable(axis){return axis==='z'&&controlMode==='cue'
+ ? available()&&(state.virtual_play||state.mobile_arm?.enabled)&&!cueBusy : manualAvailable();}
 function cueCandidates(){
- return {pieces:(state?.mobile_arm?.tags||[]).map(t=>t.id),markers:(state?.mobile_arm?.markers||[]).map(m=>m.id).sort((a,b)=>a-b)};
+ const arm=state?.mobile_arm;
+ const pieces=(arm?.cue?.sources||arm?.tags||[]).map(t=>t.id);
+ const markers=(arm?.cue?.destinations||arm?.markers||[]).map(m=>m.id);
+ if(state?.virtual_play===false){
+  // Selection is an ID, not a robot pose. A camera hold must not erase the
+  // current level's choices; execution still acquires calibrated evidence.
+  pieces.push(...(state.movable_piece_codes?.[team]||[]));
+  markers.push(...(state.level?.sockets||[]).map(s=>s.aruco_id));
+  if(state.level?.core)markers.push(38);
+  for(const [side,ids] of Object.entries(state.movable_piece_codes||{}))if(side!==team)markers.push(...ids);
+ }
+ return {pieces:[...new Set(pieces)].filter(Number.isInteger),markers:[...new Set(markers)].filter(id=>Number.isInteger(id)&&!pieces.includes(id)).sort((a,b)=>a-b)};
 }
 function cueDefaultRow(){const {pieces,markers}=cueCandidates();return {piece:pieces[0]??null,destination:markers[0]??null};}
-function renderCueRows(){
- const {pieces,markers}=cueCandidates(),list=$('cueRows');list.replaceChildren(cueWaypointRow);
+function cueDefaultRows(){return [cueDefaultRow(),{action:'clear_view'}];}
+function cueEditing(){return ['SELECT','INPUT'].includes(document.activeElement?.tagName)&&$('cueRows').contains(document.activeElement);}
+function cueRowLabel(row){const clear=cueClearOptions(row);return row.action==='clear_view'?`${clear.direction==='right'?'→':'←'} Clear view · ${clear.distance_cm} cm`:`${row.piece??'—'} → ${row.destination??'—'}`;}
+function cueClearOptions(row){return {direction:row.direction===undefined?'left':row.direction,distance_cm:row.distance_cm===undefined?5:row.distance_cm};}
+function cueClearValid(row){const c=cueClearOptions(row);return ['left','right'].includes(c.direction)&&Number.isFinite(c.distance_cm)&&c.distance_cm>=.1&&c.distance_cm<=50;}
+function cueRowPayload(row){return row.action==='clear_view'?{action:'clear_view',...cueClearOptions(row)}:{piece:row.piece,destination:row.destination};}
+function cueRowsEqual(a,b){
+ return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((row,i)=>row&&b[i]
+  &&(row.action==='clear_view'?b[i].action==='clear_view'&&cueClearValid(row)&&cueClearValid(b[i])&&cueClearOptions(row).direction===cueClearOptions(b[i]).direction&&cueClearOptions(row).distance_cm===cueClearOptions(b[i]).distance_cm:!row.action&&!b[i].action
+  &&Number.isInteger(row.piece)&&Number.isInteger(row.destination)&&row.piece===b[i].piece&&row.destination===b[i].destination));
+}
+function renderCueRows(refreshSelect=null){
+ const {pieces,markers}=cueCandidates(),list=$('cueRows'),items=[...list.querySelectorAll('.cueRow')];
+ if(cueWaypointRow.parentNode!==list)list.append(cueWaypointRow);
+ for(const item of items.slice(cueDraft.length))item.remove();
  cueDraft.forEach((row,index)=>{
-  const item=document.createElement('div');item.className='cueRow';item.dataset.index=index;
-  const summary=document.createElement('span');summary.className='cueSummary';summary.textContent=`${row.piece??'—'} → ${row.destination??'—'}`;item.append(summary);
-  for(const [key,values,label] of [['piece',pieces,'Movable piece'],['destination',markers,'Destination marker']]){
-   if(key==='destination'){const arrow=document.createElement('span');arrow.className='cueArrow';arrow.textContent='→';item.append(arrow);}
-   const select=document.createElement('select');select.dataset.field=key;select.setAttribute('aria-label',`${label}, row ${index+1}`);
-   const choices=values.includes(row[key])?values:[row[key],...values];
-   for(const id of choices){const option=document.createElement('option');option.value=id??'';option.textContent=id==null?'Choose':String(id)+(values.includes(id)?'':' · missing');option.disabled=!values.includes(id);select.append(option);}
-   select.value=row[key]??'';
-   select.onchange=()=>{row[key]=Number(select.value);cueDirty=true;summary.textContent=`${row.piece} → ${row.destination}`;};item.append(select);
+  let item=items[index];
+  const kind=row.action==='clear_view'?'clear_view':'placement';
+  if(!item){item=document.createElement('div');item.className='cueRow';item.dataset.index=index;list.append(item);}
+  if(item.dataset.kind!==kind){
+   item.replaceChildren();item.dataset.kind=kind;
+   const summary=document.createElement('span');summary.className='cueSummary';item.append(summary);
+   if(kind==='clear_view'){
+    const title=document.createElement('span');title.className='cueClearTitle';title.textContent='Clear view';item.append(title);
+    for(const direction of ['left','right']){
+     const arrow=document.createElement('button');arrow.className='cueClearDirection';arrow.dataset.direction=direction;arrow.textContent=direction==='left'?'←':'→';
+     arrow.setAttribute('aria-label',`Clear view ${direction}, row ${index+1}`);
+     arrow.onclick=()=>{if(cueBusy||cueLocked())return;cueDraft[index].direction=direction;cueDirty=true;cueNotice='';renderCueRows();updateCueControls();};item.append(arrow);
+    }
+    const label=document.createElement('label');label.className='cueClearDistance';
+    const input=document.createElement('input');input.type='number';input.min='.1';input.max='50';input.step='.1';input.inputMode='decimal';
+    input.setAttribute('aria-label',`Clear view distance in centimetres, row ${index+1}`);
+    input.oninput=()=>{if(cueBusy||cueLocked())return;cueDraft[index].distance_cm=input.value.trim()===''?NaN:Number(input.value);cueDirty=true;cueNotice='';summary.textContent=cueRowLabel(cueDraft[index]);updateCueControls();};
+    input.onblur=()=>syncCue(state.mobile_arm);
+    const unit=document.createElement('span');unit.textContent='cm';label.append(input,unit);item.append(label);
+   }
+   for(const [key,label] of kind==='clear_view'?[]:[['piece','Movable piece'],['destination','Destination marker']]){
+    if(key==='destination'){const arrow=document.createElement('span');arrow.className='cueArrow';arrow.textContent='→';item.append(arrow);}
+    const select=document.createElement('select');select.dataset.field=key;select.setAttribute('aria-label',`${label}, row ${index+1}`);
+    select.onchange=()=>{const current=cueDraft[index];if(!current)return;current[key]=Number(select.value);cueDirty=true;cueNotice='';summary.textContent=`${current.piece} → ${current.destination}`;updateCueControls();};
+    // Mobile native pickers can close without blurring the select. Refresh on
+    // the next opening, while leaving an already-open picker stable on SSE.
+    select.onpointerdown=()=>renderCueRows(select);
+    select.onfocus=()=>renderCueRows(select);
+    select.onkeydown=event=>{if(['Enter',' ','F4'].includes(event.key)||event.altKey&&['ArrowDown','ArrowUp'].includes(event.key))renderCueRows(select);};
+    select.onblur=()=>syncCue(state.mobile_arm);item.append(select);
+   }
+   const remove=document.createElement('button');remove.className='cueRemove';remove.textContent='−';remove.setAttribute('aria-label',`Remove row ${index+1}`);
+   remove.onclick=()=>{const count=cueDraft[index]?.action!=='clear_view'&&cueDraft[index+1]?.action==='clear_view'?2:1;cueDraft.splice(index,count);cueDirty=true;renderCueRows();updateCueControls();};item.append(remove);
+   if(kind==='placement'){
+    const clear=document.createElement('button');clear.className='cueClearAdd';clear.textContent='+ Clear view';clear.title='Add a row to move 5 cm left after placement';clear.setAttribute('aria-label',`Add clear view after row ${index+1}`);
+    clear.onclick=()=>{if(cueBusy||cueLocked()||cueDraft.length>=32||cueDraft[index+1]?.action==='clear_view')return;cueDraft.splice(index+1,0,{action:'clear_view'});cueDirty=true;cueNotice='';renderCueRows();updateCueControls();};item.append(clear);
+   }
   }
-  const remove=document.createElement('button');remove.textContent='−';remove.setAttribute('aria-label',`Remove row ${index+1}`);
-  remove.onclick=()=>{cueDraft.splice(index,1);cueDirty=true;renderCueRows();updateCueControls();};item.append(remove);list.append(item);
+  const summary=item.querySelector('.cueSummary'),text=cueRowLabel(row);
+  if(summary.textContent!==text)summary.textContent=text;
+  if(kind==='clear_view'){
+   const options=cueClearOptions(row),input=item.querySelector('input');
+   if(document.activeElement!==input)input.value=Number.isFinite(options.distance_cm)?options.distance_cm:'';
+   for(const arrow of item.querySelectorAll('.cueClearDirection'))arrow.setAttribute('aria-pressed',String(arrow.dataset.direction===options.direction));
+   return;
+  }
+  const clear=item.querySelector('.cueClearAdd');clear.hidden=cueDraft[index+1]?.action==='clear_view';clear.disabled=cueBusy||cueLocked()||cueDraft.length>=32;
+  for(const [key,values] of [['piece',pieces],['destination',markers]]){
+   const select=item.querySelector(`select[data-field="${key}"]`);
+   // A native picker may stay open across many camera updates. Only an explicit
+   // opening refreshes its focused options, never a background state update.
+   if(document.activeElement===select&&select!==refreshSelect)continue;
+   const choices=values.includes(row[key])?values:[row[key],...values];
+   const candidates=state?.mobile_arm?.cue?.[key==='piece'?'sources':'destinations']||[];
+   const options=choices.map(id=>{const unreachable=candidates.find(t=>t.id===id)?.reachable===false;return {value:id??'',text:id==null?'Choose':String(id),disabled:!values.includes(id)||key==='destination'&&unreachable};});
+   const signature=JSON.stringify(options);
+   if(select.dataset.options!==signature){
+    select.replaceChildren(...options.map(value=>{const option=document.createElement('option');option.value=value.value;option.textContent=value.text;option.disabled=value.disabled;return option;}));
+    select.dataset.options=signature;
+   }
+   if(select.value!==String(row[key]??''))select.value=row[key]??'';
+  }
  });
 }
+function cueReadiness(){
+ const arm=state?.mobile_arm,cue=arm?.cue||{},game=!feedReady?'waiting':state?.paused?'paused':({setup:'ready to start',running:'running',won:'won',overrun:'ended'}[state?.phase]||'waiting');
+ let blocker='',armState='ready';
+ if(!feedReady)blocker='Waiting for fresh game state.';
+ else if(state?.paused)blocker='Game paused. Resume the game before running the cue.';
+ else if(!transitionAllowsControls())blocker='Waiting for the current game setup step to finish.';
+ else if(!['setup','running'].includes(state?.phase)&&state?.journey?.active_side!==team)blocker='Game ended. Reset the game before running the cue.';
+ if(!session){armState='disconnected';blocker ||= `Press Connect to connect the ${teamLabel} arm.`;}
+ else if(switchBusy||awaitingControlMode||arm?.control_pending){armState='switching';blocker ||= 'Waiting for the control method to finish switching.';}
+ else if(!arm){armState='unavailable';blocker ||= 'Arm feedback unavailable. Press Connect to synchronize the arm.';}
+ else if(!state.virtual_play&&!arm.enabled){armState='disabled';blocker ||= 'Enable the arm before running the cue.';}
+ else if(!state.virtual_play&&!arm.motion_ready){armState='blocked';blocker ||= arm.motion_error||state.mobile_safety?.error||'Fresh arm feedback and calibration are required.';}
+ if(!available())blocker ||= 'Controls unavailable. Check the game and arm connection.';
+ const cueState=cueBusy?(cuePendingAction==='cue_play'?'starting':'sending command'):cue.error||cue.status==='error'?'failed':({running:'running',waiting:'waiting for tag',paused:'paused',completed:'complete',stopped:'stopped'}[cue.status]||'idle');
+ return {game,arm:armState,cue:cueState,blocker};
+}
+function cueEndpointBlocker(){
+ if(cueLocked()||!cueDraft.length)return '';
+ const mapping=state?.mobile_cue_targets;
+ if(state?.virtual_play===false&&mapping&&mapping.status!=='ready')return `Waiting for camera mapping. ${mapping.error||'Keep the board markers visible.'} You can edit targets while waiting.`;
+ const row=cueDraft[0],cue=state?.mobile_arm?.cue;
+ for(const [key,list,label] of [['piece','sources','piece'],['destination','destinations','destination']]){
+  const target=cue?.[list]?.find(t=>t.id===row[key]);
+  if(target?.reachable===false)return `Row 1: ${label} #${row[key]} cannot be reached. ${target.reason||'Outside the calibrated area.'} ${key==='piece'?'Reposition the piece inside the clear area.':'Choose a reachable destination.'}`;
+ }
+ return '';
+}
+function cueDraftBlocker(){
+ if(!cueLocked()&&cueDraft.some(r=>r.action==='clear_view'&&!cueClearValid(r)))return 'Clear view: choose left or right and a distance from 0.1 to 50 cm.';
+ return cueEndpointBlocker()||(!cueDraft.length?'Add a cue row.':!cueLocked()&&cueDraft.some((r,i)=>r.action==='clear_view'?i===0||cueDraft[i-1].action:!Number.isInteger(r.piece)||!Number.isInteger(r.destination))?'Choose a piece and destination for every row; Clear view must follow a placement.':'');
+}
+function cueProgressMessage(){
+ return cueBusy?({cue_play:'Starting cue…',cue_pause:'Pausing cue…',cue_stop:'Stopping arm…',cue_waypoint:'Sending arm move…'}[cuePendingAction]||'Sending cue command…'):'';
+}
+function cueCommandBlocker(action){
+ if(cueBusy)return cueProgressMessage()+' Wait for this command to finish.';
+ if(action==='cue_pause'||action==='cue_stop')return session?'':`Press Connect to connect the ${teamLabel} arm.`;
+ return cueReadiness().blocker||(action==='cue_play'?cueDraftBlocker():'');
+}
+function recordCueInput(event,action,detail=''){
+ // Distinct input numbers keep rapid repeated taps out of diagnostic deduping.
+ const rows=cueDraft.map(cueRowLabel).join(', ');
+ connectionLog.record('player',event,`Input ${++cueInputSequence}: ${action} ${rows}${detail?' · '+detail:''}`,{action,status:state?.mobile_arm?.cue?.status});
+}
+function cueText(id,text){if($(id).textContent!==text)$(id).textContent=text;}
 function updateCueControls(){
- const cue=state?.mobile_arm?.cue||{},running=cue.status==='running',disabled=!available()||switchBusy||cueBusy;
- for(const el of $('cueRows').querySelectorAll('.cueRow select,.cueRow button'))el.disabled=disabled||running;
- $('cueAdd').disabled=disabled||running||cueDraft.length>=32;
- $('cuePlay').disabled=disabled||!cueDraft.length;
- $('cueStop').disabled=disabled;
- $('cuePlay').textContent=running?'Ⅱ':'▶';$('cuePlay').setAttribute('aria-label',running?'Pause cue':cue.status==='paused'?'Resume cue':'Play cue');
+ const cue=state?.mobile_arm?.cue||{},running=['running','waiting'].includes(cue.status),disabled=!available()||switchBusy||cueBusy;
+ for(const el of $('cueRows').querySelectorAll('.cueRow select,.cueRow input,.cueRow button')){const locked=disabled||cueLocked()||el.className==='cueClearAdd'&&cueDraft.length>=32;if(el.disabled!==locked)el.disabled=locked;}
+ $('cueAdd').disabled=disabled||cueLocked()||cueDraft.length>30;
+ const readiness=cueReadiness(),error=cueDirty?'':cue.error||(cue.status==='error'?cue.stage||'Cue failed before it could finish.':'');
+ cueText('cueGameState','Game '+readiness.game);
+ cueText('cueArmState','Arm '+readiness.arm);
+ cueText('cueRunState','Cue '+readiness.cue);
+ const blocked=readiness.blocker||cueDraftBlocker(),progress=cueProgressMessage();
+ const play=$('cuePlay'),playDisabled=!!cueCommandBlocker(running?'cue_pause':'cue_play');
+ // Keep the button and its text node stable between pointer-down and click.
+ // Real readiness changes still disable immediately and are checked on click.
+ if(play.disabled!==playDisabled)play.disabled=playDisabled;
+ $('cueReadiness').dataset.blocked=String(!!blocked);
+ const playLabel=progress|| (running?'Pause cue':cue.status==='paused'?'Resume cue':'Play cue'),playTitle=progress||(running?'Pause cue':blocked||playLabel);
+ if(play.title!==playTitle)play.title=playTitle;
+ if(play.getAttribute('aria-label')!==playLabel)play.setAttribute('aria-label',playLabel);
+ cueText('cuePlay',cueBusy?'…':running?'Ⅱ':'▶');
+ const stop=$('cueStop'),stopDisabled=!session||cueBusy,stopLabel=cueLocked()?'Stop cue':'Stop arm';
+ if(stop.disabled!==stopDisabled)stop.disabled=stopDisabled;
+ if(stop.getAttribute('aria-label')!==stopLabel)stop.setAttribute('aria-label',stopLabel);
+ const stopTitle=stopLabel+' · halt arm movement'+(state?.virtual_play?'':' and turn the pump off');
+ if(stop.title!==stopTitle)stop.title=stopTitle;
+ cueText('cueStopLabel',stopLabel);
  for(const [i,el] of [...$('cueRows').querySelectorAll('.cueRow')].entries()){
-  el.dataset.active=String(!cueDirty&&i===cue.index&&['running','paused','error'].includes(cue.status));
+  el.dataset.active=String(!cueDirty&&i===cue.index&&['running','paused','waiting','error'].includes(cue.status));
   el.dataset.done=String(!cueDirty&&(cue.status==='completed'||i<cue.index));
  }
  const waypoint=cue.waypoint;
+ const waiting=cue.status==='paused'?null:cue.waiting;
+ $('cuePanel').dataset.recovering=String(!!waiting);
+ $('cuePanel').dataset.failed=String(!!(cueNotice||!progress&&error));
+ const hint=cueNotice||progress||error||blocked||waiting?.message||(cue.status==='paused'?'Cue paused. Resume to continue, or Stop to edit rows. Repositioning the arm is optional.':cueLocked()?'Cue in progress. The arm moves automatically; tapping another reachable point is optional.':'Choose piece → marker and press ▶ to run a cue. The arm moves automatically.');
+ if($('cueHint').textContent!==hint)$('cueHint').textContent=hint;
  cueWaypointRow.hidden=!waypoint;$('cueWaypointCancel').disabled=disabled;
  if(waypoint){
   $('cueWaypointLabel').textContent=`Blue · ${Math.round(waypoint.x)}, ${Math.round(waypoint.y)}`;
@@ -388,46 +601,100 @@ function updateCueControls(){
   const active=waypoint?cueWaypointRow:$('cueRows').querySelector('[data-active=true]');
   if(active){const list=$('cueRows');if(active.offsetTop<list.scrollTop||active.offsetTop+active.offsetHeight>list.scrollTop+list.clientHeight)list.scrollTop=active.offsetTop;}
  }
- const notice=controlMode==='cue'?(cueNotice||cue.error||(cue.status==='running'?`Row ${cue.index+1} · ${cue.stage}`:cue.status==='paused'?`Paused · row ${cue.index+1}`:cue.status==='completed'?'Cue complete':cue.status==='stopped'?'Stopped · Play starts from row 1.':'Tap the map to insert a blue waypoint.')):'';
- if(notice&&notice!==cueLogNotice)feedback(notice,!!(cueNotice||cue.error));
+ const notice=controlMode==='cue'?(cueNotice||progress||error||blocked||waiting?.message||(cue.status==='running'?`Row ${cue.index+1} · ${cue.stage}`:cue.status==='paused'?`Paused · row ${cue.index+1}`:cue.status==='completed'?'Cue complete':cue.status==='stopped'?'Stopped · Play starts from row 1.':'Ready. Press ▶ to run the cue; no preliminary arm move is required.')):'';
+ if(notice&&notice!==cueLogNotice)feedback(notice,!!(cueNotice||!progress&&(error||blocked)));
  cueLogNotice=notice;
 }
 function syncCue(arm){
  $('cuePanel').hidden=controlMode!=='cue';
- const signature=JSON.stringify([arm.tags?.map(t=>t.id),arm.markers?.map(m=>m.id)]);
- let rebuild=signature!==cueSignature;cueSignature=signature;
- if(!cueDirty&&!cueBusy&&arm.cue?.rows?.length&&JSON.stringify(cueDraft)!==JSON.stringify(arm.cue.rows)){cueDraft=arm.cue.rows.map(r=>({...r}));rebuild=true;}
- if(!cueDraft.length&&!cueDirty&&controlMode==='cue'){cueDraft=[cueDefaultRow()];rebuild=true;}
- if(rebuild)renderCueRows();updateCueControls();drawMarkerLabels();
+ if(!cueDirty&&!cueBusy&&!cueEditing()){
+  if(arm?.cue?.rows?.length&&!cueRowsEqual(cueDraft,arm.cue.rows))cueDraft=arm.cue.rows.map(r=>({...r}));
+  if(!cueDraft.length&&controlMode==='cue')cueDraft=cueDefaultRows();
+  if(!cueLocked())for(const row of cueDraft){if(row.action==='clear_view')continue;const defaults=cueDefaultRow();for(const key of ['piece','destination'])if(row[key]==null&&defaults[key]!=null)row[key]=defaults[key];}
+ }
+ renderCueRows();updateCueControls();drawMarkerLabels();
 }
 async function cueAction(action,fields={}){
- if(!available()||cueBusy||switchBusy)return;
- const height=Math.max(80,xyzTarget?.z??80);cueNotice='';
- cueBusy=true;cancelXYZ();updateCueControls();renderControls();
+ const holding=action==='cue_pause'||action==='cue_stop';
+ recordCueInput('cue_command_activated',action);
+ const blocker=cueCommandBlocker(action);
+ if(blocker){
+  if(!cueBusy)cueNotice=blocker;
+  connectionLog.record('player','cue_command_blocked',blocker,{action});feedback(blocker,true);updateCueControls();return;
+ }
+ cueNotice='';cueBusy=true;cuePendingAction=action;
  try{
-  if((action==='cue_play'||action==='cue_waypoint'&&!cueLocked())&&(cueDirty||JSON.stringify(cueDraft)!==JSON.stringify(state.mobile_arm.cue?.rows))){
-   const result=await command('cue_set',{rows:cueDraft.map(r=>({...r})),control_revision:controlRevision});
-   if(!result)return;cueDirty=false;
+  const requestedRows=cueDraft.map(cueRowPayload);
+  cancelXYZ();updateCueControls();renderControls();
+  let height;
+  if(!holding){
+   const limits=state.mobile_arm?.xyz_limits?.z;
+   if(!Array.isArray(limits)||limits.length!==2||!limits.every(Number.isFinite)||limits[0]>=limits[1])throw Error('Robot height limits unavailable.');
+   height=Math.max(limits[0],Math.min(limits[1],Math.max(80,xyzTarget?.z??80)));
   }
-  await command(action,{control_revision:controlRevision,height,...fields});
- }catch(e){cueNotice=e.message;cueLogNotice=e.message;feedback(e.message,true);}
- finally{cueBusy=false;renderControls();updateCueControls();}
+  connectionLog.record('player','cue_command_requested',action==='cue_play'?'Play cue: '+requestedRows.map(cueRowLabel).join(', '):'',{action});
+  if(action==='cue_play'&&(cueDirty||!cueRowsEqual(cueDraft,state.mobile_arm.cue?.rows))){
+   const result=await command('cue_set',{rows:requestedRows,control_revision:controlRevision});
+   if(!result)throw Error('Cue setup cancelled. Check the connection and press Play again.');
+   if(!cueRowsEqual(requestedRows,result.arm?.cue?.rows))throw Error('Cue selection was not confirmed. Review the rows and press Play again.');
+   cueDirty=false;
+  }
+  if(!await command(action,{control_revision:controlRevision,height,...fields,...(action==='cue_play'?{rows:requestedRows,view_rotation:viewport.rotation}:{})}))throw Error('Cue command cancelled. Check the connection and try again.');
+ }catch(e){cueNotice=e.message;cueLogNotice=e.message;connectionLog.record('player','cue_command_failed',e.message,{action});feedback(e.message,true);}
+ finally{cueBusy=false;cuePendingAction='';renderControls();updateCueControls();}
 }
-$('cueAdd').onclick=()=>{if(cueDraft.length<32){cueDraft.push(cueDefaultRow());cueDirty=true;renderCueRows();updateCueControls();$('cueRows').scrollTop=$('cueRows').scrollHeight;}};
-$('cuePlay').onclick=()=>cueAction(state?.mobile_arm?.cue?.status==='running'?'cue_pause':'cue_play');
+$('cueAdd').onclick=()=>{if(!cueBusy&&!cueLocked()&&cueDraft.length<=30){cueDraft.push(...cueDefaultRows());cueDirty=true;cueNotice='';renderCueRows();updateCueControls();$('cueRows').scrollTop=$('cueRows').scrollHeight;}};
+$('cuePlay').onpointerdown=e=>{if(e.button===0)recordCueInput('cue_play_pressed',['running','waiting'].includes(state?.mobile_arm?.cue?.status)?'cue_pause':'cue_play',$('cuePlay').disabled?'disabled':'enabled');};
+$('cuePlay').onpointercancel=()=>recordCueInput('cue_play_cancelled','cue_play','Pointer cancelled before click');
+$('cuePlay').onclick=()=>cueAction(['running','waiting'].includes(state?.mobile_arm?.cue?.status)?'cue_pause':'cue_play');
 $('cueStop').onclick=()=>cueAction('cue_stop');
 $('cueWaypointCancel').onclick=()=>cueAction('cue_cancel_waypoint');
 $('cueMinimize').onclick=()=>{const small=$('cuePanel').dataset.minimized!=='true';$('cuePanel').dataset.minimized=String(small);$('cueMinimize').textContent=small?'‹':'›';$('cueMinimize').setAttribute('aria-expanded',String(!small));$('cueMinimize').setAttribute('aria-label',small?'Expand cue':'Minimize cue');};
+function cameraMarkerLabels(){
+ // Camera presentation must not wait for the robot bridge, calibration fit or
+ // connection. These labels never supply pickup evidence or enable movement.
+ const receiptAge=performance.now()-lastFeed;
+ if(!feedReady||!Number.isFinite(receiptAge)||receiptAge<0)return [];
+ const fresh=(data,contract)=>{
+  if(data?.contract!==contract||data.version!==1||data.status!=='ready'||data.source!=='camera'
+    ||data.coordinate_space!=='corrected-camera-normalized'||!Number.isFinite(data.server_time)
+    ||!Number.isFinite(data.frame_at)||!Array.isArray(data.tags))return false;
+  const age=(data.server_time-data.frame_at)*1000;
+  return age>=-250&&Math.max(0,age)+receiptAge<=1500;
+ };
+ const data=state?.mobile_cue_targets,markers=new Map();
+ const owned=new Set(state?.movable_piece_codes?.[team]||[]);
+ if(fresh(data,'photon.board.cue-targets'))for(const t of data.tags){
+  if(!Number.isInteger(t?.id)||!Number.isFinite(t.last_seen)
+    ||!['nx','ny'].every(k=>Number.isFinite(t[k])&&t[k]>=0&&t[k]<=1))continue;
+  const age=(data.server_time-t.last_seen)*1000;
+  if(age>=-250&&(t.fixed===true||t.visible===true&&Math.max(0,age)+receiptAge<=500))markers.set(t.id,t);
+ }
+ // A temporary acquisition hold must not black out unrelated visible tags.
+ // Use the owner's fresh, corrected detections independently of map readiness.
+ // Retain fixed memory only from a ready cue map; never cache held-map poses.
+ const detected=state?.mobile_camera?.tracking;
+ if(fresh(detected,'photon.board.camera-markers')&&Number.isFinite(detected.max_age_s)&&detected.max_age_s>0&&detected.max_age_s<=1.5){
+  for(const t of detected.tags){
+   if(!Number.isInteger(t?.id)||t.id<0||!Number.isFinite(t.last_seen)||!Array.isArray(t.camera)||t.camera.length!==2
+     ||!t.camera.every(v=>Number.isFinite(v)&&v>=0&&v<=1))continue;
+   const age=(detected.server_time-t.last_seen)*1000,limit=t.id>=100?Math.min(500,detected.max_age_s*1000):detected.max_age_s*1000;
+   if(age>=-250&&Math.max(0,age)+receiptAge<=limit&&!markers.has(t.id))markers.set(t.id,{id:t.id,nx:t.camera[0],ny:t.camera[1]});
+  }
+ }
+ return [...markers.values()].sort((a,b)=>a.id-b.id).map(t=>({id:t.id,x:t.nx*viewport.w,y:t.ny*viewport.h,
+  kind:owned.has(t.id)?'piece':'socket',size:owned.has(t.id)?42:(state.aruco_code_footprint_px??0)}));
+}
 function drawMarkerLabels(){
  const calibrating=state?.journey?.phase==='calibration';
- const arm=state?.mobile_arm;if(!arm&&!calibrating){$('markerLabels').replaceChildren();markerSignature='';return;}
- const sockets=new Map((state.level?.sockets||[]).map(s=>[Number(s.aruco_id),s]));
+ const arm=state?.mobile_arm;
+ const sockets=new Map((state?.level?.sockets||[]).map(s=>[Number(s.aruco_id),s]));
  // Labels follow the rendered codes, whose centers can differ from arm placement targets.
- const markers=calibrating?(state.mobile_camera?.status==='ready'?state.mobile_camera.tags||[]:[]).map(t=>({id:t.id,x:t.u*viewport.w,y:t.v*viewport.h,kind:'calibration',size:24})):[...(arm.markers||[]).map(m=>{
+ const markers=calibrating?(state.mobile_camera?.status==='ready'?state.mobile_camera.tags||[]:[]).map(t=>({id:t.id,x:t.u*viewport.w,y:t.v*viewport.h,kind:'calibration',size:24})):!state?.virtual_play?cameraMarkerLabels():[...(arm?.markers||[]).map(m=>{
   const visual=state.virtual_play?(m.kind==='core'?state.level?.core:sockets.get(m.id)):null;
   return {...m,x:visual?.marker_x??visual?.x??m.x,y:visual?.marker_y??visual?.y??m.y,
    size:visual?.marker_size??(m.kind==='core'?(state.core_aruco_code_footprint_px??116):(state.aruco_code_footprint_px??0))};
- }),...(arm.tags||[]).map(t=>({...t,kind:'piece',size:42}))];
+ }),...(arm?.tags||[]).map(t=>({...t,kind:'piece',size:42}))];
  const signature=JSON.stringify(markers.map(m=>[m.id,m.kind]));
  if(signature!==markerSignature){markerSignature=signature;$('markerLabels').replaceChildren(...markers.map(m=>{const el=document.createElement('span');el.className='markerNumber';el.dataset.kind=m.kind;el.textContent='#'+m.id;return el;}));}
  for(const [i,m] of markers.entries()){
@@ -509,7 +776,8 @@ function updateActualMarkers(dt){
  }
 }
 function advanceJointSliders(time){
- const dt=(time-sliderFrameAt)/1000;sliderFrameAt=time;updateActualMarkers(dt);updateXYZMarkers(dt);
+ const dt=(time-sliderFrameAt)/1000;sliderFrameAt=time;updateActualMarkers(dt);
+ if(time-xyzFrameAt>=1000/30-1){const elapsed=(time-xyzFrameAt)/1000;xyzFrameAt=time;updateXYZMarkers(elapsed);}
  if(jointControls.moving){
   const confirmed=state?.mobile_arm?.joints;
   if(!available()||document.hidden||!Array.isArray(confirmed)||confirmed.length!==3||!confirmed.every(Number.isFinite)){cancelJointSliders();}
@@ -519,34 +787,37 @@ function advanceJointSliders(time){
 }
 requestAnimationFrame(advanceJointSliders);
 for(let i=0;i<=32;i++){const angle=(-90+i*180/32)*Math.PI/180;const tick=document.createElementNS('http://www.w3.org/2000/svg','line'),major=i%4===0;tick.setAttribute('x1',120+Math.sin(angle)*112);tick.setAttribute('y1',136-Math.cos(angle)*112);tick.setAttribute('x2',120+Math.sin(angle)*(major?105:108));tick.setAttribute('y2',136-Math.cos(angle)*(major?105:108));tick.style.opacity=major?'.65':'.3';$('ticks').append(tick);}
-function available(){return !awaitingControlMode&&!state?.mobile_arm?.control_pending&&!!session&&feedReady&&MobileGameState.hasLevel(state?.level)&&(state.virtual_play||!!physicalArm.arm())&&!state.paused&&transitionAllowsControls()&&(['setup','running'].includes(state.phase)||state.journey?.active_side===team);}
+function available(){return !awaitingControlMode&&!state?.mobile_arm?.control_pending&&!!session&&feedReady&&MobileGameState.hasLevel(state?.level)&&(state.virtual_play||physicalArm.arm()?.motion_ready===true)&&!state.paused&&transitionAllowsControls()&&(['setup','running'].includes(state.phase)||state.journey?.active_side===team);}
 function renderControls(){
  const physical=!!state&&!state.virtual_play;
  $('levelsOpen').disabled=false;updateCueControls();updateZPresets();
  const enabled=manualAvailable()&&!switchBusy;
- for(const id of ['xyzX','xyzY','xyzZ','xyzPrecision'])$(id).disabled=!enabled||!cartesian()||(controlMode!=='xyz'&&['xyzX','xyzY'].includes(id));
+ for(const id of ['xyzX','xyzY','xyzZ','xyzPrecision'])$(id).disabled=!xyzAxisAvailable(['xyzZ','xyzPrecision'].includes(id)?'z':id==='xyzX'?'x':'y')||switchBusy||!cartesian()||(controlMode!=='xyz'&&['xyzX','xyzY'].includes(id));
  renderTargetMove();
  $('mobileControl').disabled=!available()||switchBusy||state.virtual_test_control==null;
  for(const [name,tier] of [['xyz',2],['targeting',3],['cue',4]])$('mobileControl').querySelector('[value='+name+']').disabled=mobileUnlock()<tier;
  for(const id of ['j2','j3','jointPrecision'])$(id).disabled=!enabled;
  for(const id of ['pumpSuck','pumpBlow'])$(id).disabled=!enabled||pendingPump;
  for(const [id] of jointStepButtons)$(id).disabled=!enabled||controlMode!=='joint';
- for(const [id,axis] of xyzStepButtons)$(id).disabled=!enabled||!cartesian()||(axis!=='z'&&controlMode!=='xyz');
+ for(const [id,axis] of xyzStepButtons)$(id).disabled=!xyzAxisAvailable(axis)||switchBusy||!cartesian()||(axis!=='z'&&controlMode!=='xyz');
  $('wheel').setAttribute('aria-disabled',!enabled);
  const calibrationConnect=physical&&state.mobile_calibration_connect===true;
  $('connect').disabled=!!session||joining||!feedReady||!MobileGameState.hasLevel(state?.level)||state?.paused||(!calibrationConnect&&(!transitionAllowsControls()||!['setup','running'].includes(state?.phase)))||(physical&&!physicalArm.fresh());
  $('enableArm').hidden=!physical||!!state?.mobile_arm?.enabled;
  $('enableArm').disabled=!available();
+ $('stop').title=calibrationHoldsSuction()?'Disconnect arm control; keep suction on for calibration':'Stop arm control';
  $('connection').textContent=!feedReady?'Reconnecting…':session?(physical&&!state.mobile_arm?.enabled?'Connected · disabled':'Connected'):state?.paused?'Paused':['won','overrun'].includes(state?.phase)&&state.journey?.active_side!==team?'Game ended':physical?teamLabel+' · disconnected':!joinWanted?'Stopped':canJoin()?'Joining…':'Game ended';
  $('connection').style.color=session?'#91efbc':'';
 }
 
 async function executeCommand(action,extra={}){
   const mine=generation,payload={action,...extra};
+  if(action==='connect')connectionLog.record('player','connect_requested');
   if(session){payload.session=session;payload.sequence=++sequence;}
   let result;
   try{result=await request('command',payload);}
   catch(error){
+   connectionLog.record('player','command_failed',error.message,{action,code:error.code});
    if(mine===generation&&error.code==='control_changed'&&session&&error.arm?.connected&&error.arm.session===session){
     clearInput();state.mobile_arm=error.arm;syncArmControls(error.arm);renderControls();feedback(error.message);return null;
    }
@@ -557,7 +828,7 @@ async function executeCommand(action,extra={}){
     return null;
   }
   if(Number.isFinite(result.server_time))commandStateAt=result.server_time;
-  if(action==='connect'){session=result.arm.session;controllerId=result.arm.controller_id;sequence=0;heartbeatAt=performance.now();}
+  if(action==='connect'){session=result.arm.session;controllerId=result.arm.controller_id;sequence=0;heartbeatAt=performance.now();connectionLog.record('player','connected');}
   if(result.arm){if(state)state.mobile_arm=result.arm;syncArmControls(result.arm,result.server_time);if(!xyzError)feedback(result.arm.message);if(!controlPointers.size&&!pendingJoints&&!inflight){joints=result.arm.targets.map((v,i)=>i?jointControls.commanded(i,v):(baseGoal??v));updateJoints();}}
   renderControls();return result;
 }
@@ -571,17 +842,24 @@ function recoverMotionLimit(error){
  const arm=error.arm;state.mobile_arm=arm;joints=[...arm.joints];xyzTarget={...arm.tip};
  updateJoints();updateXYZ();renderControls();feedback(error.message,true);return true;
 }
-function clearInput(){cancelXYZ();baseGoal=null;cancelJointSliders();confirmedPump='off';showPump(confirmedPump);pendingJoints=false;controlPointers.clear();wheelDrag=null;mapPointers.clear();gesture=null;}
+function calibrationHoldsSuction(){
+ return confirmedPump==='suction'&&!!state&&!state.virtual_play&&state.journey?.phase==='calibration'
+  &&(state.journey.calibration_side??state.journey.active_side)===team
+  &&state.mobile_calibration_connect===true&&state.mobile_calibration?.stage!=='complete';
+}
+function clearInput(){cancelXYZ();baseGoal=null;cancelJointSliders();if(!calibrationHoldsSuction())confirmedPump='off';showPump(confirmedPump);pendingJoints=false;controlPointers.clear();wheelDrag=null;mapPointers.clear();gesture=null;}
 function suspend(reason='Reconnecting to virtual controls…'){
   const token=session;
+  if(token)connectionLog.record('player','suspend',reason);
   generation++;session=null;controllerId=null;joinRequest=null;clearInput();
   renderControls();feedback(reason,true);
-  if(token)request('command',{action:'suspend',session:token}).catch(()=>{});
+  if(token)request('command',{action:'suspend',session:token,reason}).catch(()=>{});
 }
-async function stop(reason='Stopped. Press Connect to resume.'){
+async function stop(reason=calibrationHoldsSuction()?'Stopped. Suction kept on for calibration. Press Connect to resume.':'Stopped. Press Connect to resume.'){
+  connectionLog.record('player','stop',reason);
   joinWanted=false;preference.set('stopped','yes');
   const token=session;generation++;session=null;controllerId=null;joinRequest=null;clearInput();renderControls();feedback(reason,true);
-  try{await request('command',{action:'stop',...(token?{session:token}:{})});}catch{}
+  try{await request('command',{action:'stop',reason,...(token?{session:token}:{})});}catch{}
 }
 function keepJoined(now){
   if(!state?.virtual_play)return;
@@ -716,10 +994,11 @@ function profile(value){
 }
 
 // Reuse the mobile presentation; LTX owns calibration, planning and relay control.
-const physicalArm=new MobilePhysicalArm({frame:$('physicalRobotFrame'),overlay:$('armReach'),viewport,team,changed:refreshPhysicalArm});
+const physicalArm=new MobilePhysicalArm({frame:$('physicalRobotFrame'),overlay:$('armReach'),viewport,team,changed:refreshPhysicalArm,diagnostic:(...args)=>connectionLog.record(...args)});
 function physicalConnectionNotice(){
  if(state?.paused)return 'Game paused. Resume the game before connecting.';
  if(window.MobileJourney.calibrationSide(state)===team&&!state.mobile_calibration_ready)return state.mobile_calibration_error||state.journey?.motion_error||state.journey?.error||'Preparing your calibration. Waiting for fresh camera and enabled arm feedback.';
+ if(state?.mobile_safety?.status!=='ready')return state?.mobile_safety?.error||'Validated Cal 2 safety limits unavailable.';
  if(!['setup','running'].includes(state?.phase)&&state?.journey?.active_side!==team)return 'Game ended. Gamemaster must Reset before reconnecting.';
  if(!transitionAllowsControls())return 'Waiting for the other player or shared game transition.';
  return physicalArm.arm()?'Press Connect to control '+teamLabel+'’s real arm.':physicalArm.error;
@@ -748,11 +1027,22 @@ const turretOverlay=new MobileTurretOverlay({
 let sceneNotice='';
 function syncSceneNotice(){
  if(!state)return;
+ const alignment=state.mobile_camera?.alignment,status=$('cameraStatus');
+ status.hidden=!!state.virtual_play||!alignment;
+ const aligned=feedReady&&alignment?.status==='ready';
+ const rejected=alignment?.size_rejected_ids?.length||0;
+ status.textContent=alignment?`${alignment.detected_count??0} detected · ${alignment.matched_count??0} level markers${rejected?` · ${rejected} size rejected`:''} · ${aligned?'alignment ready':'alignment unavailable'}`:'';
+ status.dataset.ready=String(aligned);
+ status.title=aligned?'Fresh camera detections matching this level.':state.mobile_camera?.error||'Waiting for camera alignment.';
  const sceneVisible=state.virtual_play?!!view?.levelReady:turretOverlay.cameraReady();
  const notice=!feedReady?(state.error||'Waiting for Gamemaster…'):sceneVisible?'':state.virtual_play?'Waiting for the live level…':(state.mobile_camera?.error||(turretOverlay.imageAt?'Camera paused · showing last frame.':'Waiting for corrected live video…'));
  // Notices belong only in the left log. Frame callbacks log each transition once.
  const important=!feedReady?!!state.error:!state.virtual_play&&!!(state.mobile_camera?.error||turretOverlay.imageAt);
- if(notice&&notice!==sceneNotice)feedback(notice,important);
+ if(notice!==sceneNotice){
+  if(sceneNotice)resolveFeedback('scene');
+  if(notice)feedback(notice,important,'scene');
+  else if(sceneNotice)feedback(state.virtual_play?'Live level ready.':'Camera alignment ready.');
+ }
  sceneNotice=notice;
 }
 function applyState(value){if(state&&state.virtual_play!==value.virtual_play&&session)suspend('Play mode changed. Press Connect to resume.');if(!value.virtual_play)value={...value,mobile_arm:physicalArm.arm()};if(value.virtual_play&&state?.mobile_arm&&value.server_time<commandStateAt)value={...value,mobile_arm:state.mobile_arm};state=value;syncControlAssignment();document.body.classList.toggle('calibrating',value.journey?.phase==='calibration');window.MobileJourney?.update(value,request,async (target,preview=false)=>{if(!target)throw Error('Guided target unavailable');xyzTarget={x:target.camera[0]*viewport.w,y:target.camera[1]*viewport.h,z:target.pose[2]};targetPreview=preview;updateXYZ();if(preview)return;targetPreview=false;await request('command',{action:'xyz',session,sequence:++sequence,control_revision:state.mobile_arm?.control_revision,xyz:{...xyzTarget}});});lastFeed=performance.now();feedReady=value.status==='ready';view?.setFeedConnected(feedReady);viewport.configure(value);syncViewport();view?.applyState(value);syncSceneNotice();$('wave').textContent=value.wave||'—';$('core').textContent=value.core_max_hp?Math.round(value.core_hp/value.core_max_hp*100)+'%':'—';$('score').textContent=value.kills??0;$('mode').textContent=value.virtual_play?(value.phase==='setup'?'Ready · waiting for Start':'Simulation · practice'):'Physical mode';if(value.paused)$('mode').textContent='Paused';if(value.phase==='won')$('mode').textContent='Victory';if(value.phase==='overrun')$('mode').textContent='Core lost';const arm=value.mobile_arm;syncArmControls(arm,value.server_time);if(session&&(value.paused||(!['setup','running'].includes(value.phase)&&value.journey?.active_side!==team&&!value.mobile_calibration_connect)||(value.server_time>=commandStateAt&&(!arm?.connected||arm.controller_id!==controllerId))))suspend(value.virtual_play?'Rejoining virtual controls…':physicalConnectionNotice());if(arm){if(!controlPointers.size&&!pendingJoints&&!inflight){joints=arm.targets.map((v,i)=>i?jointControls.commanded(i,v):(baseGoal??v));updateJoints();}$('height').textContent=arm.tip.z<=80?'At pickup height':'Lower to pick / place';if(!pendingPump&&value.server_time>=pumpStateAt){confirmedPump=pumpModes.includes(arm.pump)?arm.pump:'off';showPump(confirmedPump);}if(session&&!pendingPump)feedback(xyzError||arm.message);}drawArm(arm);physicalArm.activate(!value.virtual_play);if(!value.virtual_play)refreshPhysicalArm();turretOverlay.sync();profile(value.mobile_progress);if(!session&&feedReady&&joinWanted)feedback(value.paused?'Game paused. Controls will resume automatically.':canJoin()?'Joining the virtual game automatically…':value.virtual_play?'Waiting for the next virtual game.':physicalConnectionNotice());renderControls();}
@@ -772,13 +1062,24 @@ function queuePresentation(value){
   pendingPresentation=value;
   if(!presentationFrame)presentationFrame=requestAnimationFrame(()=>{presentationFrame=0;const latest=pendingPresentation;pendingPresentation=null;applyState(latest);});
 }
-const gameState=new MobileGameState({apply:queuePresentation,load:async()=>{const value=await request('state');if(!local)liveFeed.offer(value.live_stream);return value;},error:error=>feedback(error.message,true)});
+const gameState=new MobileGameState({apply:queuePresentation,load:async()=>{const value=await request('state');if(!local)liveFeed.offer(value.live_stream);return value;},error:error=>{connectionLog.record('player','game_state_error',error.message);feedback(error.message,true);}});
 let booting=false;
-const liveFeed=new MobileNetwork.LiveFeed({url:api('events'),receive:(value,partial)=>gameState.receive(value,partial),recover:()=>gameState.recover(),onError:text=>feedback(text,true)});
+const liveFeed=new MobileNetwork.LiveFeed({url:api('events'),receive:(value,partial)=>gameState.receive(value,partial),recover:()=>gameState.recover(),onError:text=>{connectionLog.record('player','game_stream_error',text);feedback(text,true);}});
 function openEvents(){liveFeed.start();}
 async function boot(){
   if(booting)return;booting=true;
-  try{const initial=await request('state');if(!local){liveFeed.offer(initial.live_stream);try{publishedAssets=await MobileNetwork.readJson(await fetch('assets.json',{cache:'no-cache'}),'Artwork index');}catch{publishedAssets={};}}await ensureRenderer();gameState.receive(initial);openEvents();}
+  try{
+   const initial=await request('state');
+   // Load controls alongside presentation; camera labels and live updates are
+   // usable even while the artwork renderer is still loading or retrying.
+   physicalArm.activate(!initial.virtual_play);
+   if(!local)liveFeed.offer(initial.live_stream);
+   gameState.receive(initial);openEvents();
+   if(!local){try{publishedAssets=await MobileNetwork.readJson(await fetch('assets.json',{cache:'no-cache'}),'Artwork index');}catch{publishedAssets={};}}
+   await ensureRenderer();
+   // SSE may have advanced the game during loading. Paint the latest state.
+   if(state){view.setFeedConnected(feedReady);view.applyState(state);turretOverlay.sync();syncSceneNotice();}
+  }
   catch(e){feedback(e.message,true);setTimeout(()=>{if(!$('login').open&&!document.hidden)boot();},4000);}
   finally{booting=false;}
 }
@@ -789,17 +1090,19 @@ $('expand').onclick=async()=>{if(session)suspend('Restoring controls after the v
 function resized(){cueTap=null;perspectiveDrag=null;if(controlPointers.size||targetDrag)suspend('Restoring controls after resizing…');syncViewport();}new ResizeObserver(resized).observe(battlefield);window.visualViewport?.addEventListener('resize',resized);document.addEventListener('fullscreenchange',()=>{syncViewport();$('expand').innerHTML=document.fullscreenElement?'⤡ <span>Return</span>':'⤢ <span>Expand</span>';});
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){liveFeed.stop();feedReady=false;$('fps').textContent='—';if(session)suspend('Paused while away. Controls will resume automatically.');}
-  else if(view&&!$('login').open){gameState.recover();openEvents();}
+  else if(state&&!$('login').open){gameState.recover();openEvents();}
 });
 window.addEventListener('blur',()=>{cueTap=null;perspectiveDrag=null;if((controlPointers.size||targetDrag||jointControls.moving)&&session)suspend('Controls paused after focus changed.');});
 window.addEventListener('pagehide',()=>{
+  connectionLog.record('player','page_hidden','Page closed, navigated away or entered the back/forward cache.');
   if(session){const token=session;generation++;session=null;clearInput();if(token.startsWith('physical:'))physicalArm.stop();else navigator.sendBeacon(api('command'),new Blob([JSON.stringify({action:'suspend',session:token})],{type:'application/json'}));}
   liveFeed.stop();turretOverlay.stopVideo();view?.destroy();
+  connectionLog.persist();connectionLog.flush();
 });
 setInterval(async()=>{
  if(gameState.needsLevel())gameState.recover();
  if(feedReady&&performance.now()-lastFeed>2500){feedReady=false;view?.setFeedConnected(false);if(session)suspend('Reconnecting to the live game automatically…');renderControls();}
- if(view&&!document.hidden&&!$('login').open)liveFeed.tick(!feedReady);
+ if(state&&!document.hidden&&!$('login').open)liveFeed.tick(!feedReady);
  turretOverlay.video();turretOverlay.draw();physicalArm.tick();if(state&&!state.virtual_play)refreshPhysicalArm();
  keepJoined(performance.now());if(!available()||inflight||switchBusy)return;
  const now=performance.now();if(!pendingJoints&&!pendingXYZ&&now-heartbeatAt<500)return;
@@ -815,5 +1118,6 @@ setInterval(async()=>{
   }else if(session)suspend('Reconnecting automatically. '+e.message);
  }finally{inflight=false;xyzSending=false;renderTargetMove();}
 },80);
-window.addEventListener('pageshow',e=>{if(e.persisted){view=null;rendererLoading=null;session=null;boot();}});
+window.addEventListener('pageshow',e=>{if(e.persisted){connectionLog.record('player','page_restored');view=null;rendererLoading=null;session=null;boot();}});
+connectionLog.record('player','page_loaded');
 updateJoints();syncViewport();boot();

@@ -93,10 +93,12 @@ class CompanionTests(unittest.TestCase):
         e._damage_towers([{'id':1, 'x':c['x'], 'y':c['y'], 'tower_dps':50}], .2)
         self.assertTrue(t['destroyed'])
         self.assertTrue(e.snapshot()['companions'][0]['destroyed'])
+        e.remove_atom(100, source='virtual')
         e.place(100, 'socket_01', source='virtual')
         self.assertIsNot(e.placements['socket_01']['companion'], c)
         self.assertFalse(e.snapshot()['companions'][0]['destroyed'])
         t=e.placements['socket_01'];t['hp']=1
+        e.remove_atom(100, source='virtual')
         e.place(100, 'socket_01', source='virtual')
         self.assertEqual(e.snapshot()['companions'][0]['hp'], t['max_hp'])
 

@@ -1,5 +1,73 @@
 # Photon Game
 
+## Atom tower buff
+
+An accepted Atom on a turret's fixed marker grants **2× maximum health and
+2× weapon damage** while Board confirms its presence. Normal health/damage
+already includes weapon-level, link and weapon-specific modifiers. The Atom
+multiplier is applied once; it does not change rate, reach, effect duration,
+force-field damage, core damage, link count or score per kill.
+
+Removal or unavailable occupancy removes both bonuses. Health changes preserve
+percentage: 150/200 becomes 75/100. A confirmed new placement/return refills the
+final doubled maximum once through the existing replenishment path, including
+its field repair and cooldown behavior. Staying on the marker never heals or
+replaces a destroyed turret. A separate accepted-visit record prevents camera
+gaps, pump changes, relation-ID changes and source recovery from granting heals.
+Reacquisition without observed departure restores capacity at the remaining
+percentage. Occupancy continues to reconcile while the simulation is paused.
+
+Game validates Board's separately versioned `photon.board.occupancy` v1 through
+its public `occupancy_snapshot()` function, independently of unavailable arm
+placement evidence. Installation/replenishment/replacement still require the
+ordinary placement gate. Board owns coordinates and dwell; Game owns ownership,
+socket selection, accepted visits and all health/damage calculations.
+
+Every public primary/companion record includes `atom_buff_state` (`active`,
+`inactive`, `unavailable`), nullable `occupying_atom_id`,
+`atom_health_multiplier`, `atom_damage_multiplier`, and `normal_max_hp` beside
+effective `hp`/`max_hp`. Companions share the parent pool and each weapon receives
+the outgoing multiplier once. Direct, Tesla-chain, Mortar-splash and Flamethrower
+burn damage use the same state. Mortar rounds capture damage at launch; applied
+burns retain their committed damage under the existing burn-combination rule.
+
+Virtual `place` with null `socket_id` lifts an Atom without removing its installed
+turrets. Mobile suction uses this same removal operation; release uses normal
+placement. Moving an Atom to another socket transfers the bonus, while previous
+turrets continue fighting. Repeated virtual placement on the same occupied socket
+is idempotent. Core placement removes that Atom's virtual turret occupancy.
+Start preserves virtual occupancy for setup placements and reacquires physical
+evidence; reset clears visits and mode changes suspend the previous source's buff.
+
+Validation: `tests/test_atom_tower_buff.py`, `tests/atom_buff_renderer.cjs`, and
+`tests/atom_buff_browser.cjs`. See `docs/ATOM_TOWER_BUFF_IMPLEMENTATION.md` for
+measured browser results and the remaining physical check.
+
+## Physical core completion
+
+After the force-field ring completes, the first valid physical Atom placement
+on marker 38 arms that Atom's identity. The first placement retains the existing
+Board fixed-marker and owning-arm requirements. From then on the second step
+follows the first Atom, not marker 38: a stable Board camera cover of that Atom
+by a configured opposing-team Atom starts the core detonation and enemy purge,
+then victory. The second team's robot may be disconnected; neither arm's
+connection, enable state or pump state is needed for this camera-only finish.
+The first Atom can remain visible indefinitely while waiting, and its observed
+position follows it if moved. Losing marker 38's 120-second cache is irrelevant
+after the first activation.
+
+Game validates Board's additive `photon.board.stacking` v1 descriptor within the
+existing placement sample. Only a cover observed after the first activation,
+of that exact Atom, by the opposing team can complete the sequence. Same-team,
+unconfigured or unrelated Atoms, two visible adjacent Atoms, old/replayed cover
+evidence, and invalid/stale samples cannot win. A second fixed-marker relation
+to 38 alone no longer completes the physical sequence. Reset clears the armed
+Atom and activation time. Existing virtual core commands and ordinary physical
+tower-placement requirements are unchanged. Successful physical covers record
+`core_stack_confirmed` with both Atom IDs and the Board relation ID.
+
+Regression command: `.venv/bin/python -m unittest discover -s tests -p 'test_photon_core_stack.py'`.
+
 ## L4 companion weapons
 
 At an eligible Level anchor, an effective L4 weapon creates one same-type
@@ -369,6 +437,21 @@ The virtual MobileArm uses equal links sized for all map corners and Z=0–400,
 and ±180° virtual joint ranges. Initial piece positions are preserved. Existing
 IK and 12°/s joint stepping still own actual movement; this does not configure
 physical robots or imply collision-free/straight-line Cartesian travel.
+
+MobileArm snapshots timestamp their measured pose with `position_at` (Unix
+seconds), allowing the player to interpolate on the source timeline independently
+of delivery jitter. This display timestamp does not advance simulation or grant
+movement authority. `position_settled` is true only when actual joints have reached
+their current targets, allowing presentation to remove its remaining playback
+delay at a measured stop without predicting arrival.
+
+MobileArm snapshots include optional `motion_path: {id, points}` for presentation,
+with finite map-space `{x,y,z}` points. The virtual owner samples its remaining
+bounded joint travel at intervals of at most 2 degrees, preserving the actual
+curved tip trajectory. The ID stays stable during travel to the same joint target;
+joint mode, suspended sessions and missing ownership omit the path. Reading this
+field never advances the arm or changes its target. The player draws only the
+remaining route as a dashed red line, trimming it against the smoothed red marker.
 
 Cue commands add `cue_waypoint` with finite map `point: {x,y}` and
 `cue_cancel_waypoint`, under the same tier/session/revision gates. Cue snapshots

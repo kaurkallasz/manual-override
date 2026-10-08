@@ -100,12 +100,22 @@ CPU and bandwidth — 1080p is usually the better default for detection.
   latest JPEG; `/api/stream` serves it as `multipart/x-mixed-replace`. Selecting a
   different camera swaps the capture underneath the same stream, so the `<img>`
   never needs reloading.
-- **Camera list is probed.** `/api/cameras` tries indices `0..PROBE_MAX-1` and
-  reports the ones that open (the active camera is reported from live state rather
-  than reopened). Missing indices may print harmless OpenCV warnings to stderr.
-- **Smooth on a slow poll.** The page streams video continuously but polls
-  `/api/status` once a second for the stats line — same cheap-poll pattern as the
-  other prototypes.
+- **Camera list follows the capture backend.** On macOS, the bundled native
+  inventory library lists AVFoundation devices inside the capture process in
+  [OpenCV's unique-ID order](https://github.com/opencv/opencv/blob/4.9.0/modules/videoio/src/cap_avfoundation_mac.mm#L352-L375).
+  USB bus order is not camera index order. Inventory does not open cameras or
+  probe nonexistent indices. Rebuild it with `native-focus-lock/build-app.sh`.
+  Other platforms (or installations without the library) probe
+  `0..PROBE_MAX-1` using generic labels and require a readable frame. The active
+  camera is reported from fresh capture state rather than reopened.
+- **One controller connection.** `/api/events?preview=1` pushes the existing JPEG
+  as a data URL together with status/tags at up to 10 FPS. The controller does
+  not open a competing MJPEG request. It releases its stream while hidden or
+  unloaded and during finite camera requests, then reconnects automatically.
+  This reduces connection contention when several hub tabs share an HTTP/1.1
+  origin. Camera capture and tracking continue independently; preview resolution
+  is unchanged. `/api/events` without the option stays a small status/tag stream
+  at about 3 updates/second; the clean view still uses `/api/stream`.
 
 ### Where ArUco goes later
 
@@ -119,8 +129,10 @@ frame, draw the overlay before it's encoded, and stash marker positions for a ne
 |--------|----------------|---------------------------------------------------|
 | `GET`  | `/api/cameras` | probe + list cameras (`{cameras, remembered}`)    |
 | `GET`  | `/api/status`  | `{open, index, width, height, fps, error, ...}`   |
+| `GET`  | `/api/events` | SSE status/tags; `?preview=1` includes JPEG frames |
 | `POST` | `/api/select`  | open a camera — body `{ "index": 0 }`             |
 | `POST` | `/api/stop`    | release the camera                                |
+| `POST` | `/api/reconnect` | reopen the saved device identity at its current index |
 | `GET`  | `/api/stream`  | live MJPEG video (`multipart/x-mixed-replace`)    |
 
 ## Config
@@ -162,6 +174,21 @@ foreshortening, printed table tags, legacy elongated false matches, duplicate an
 cross-dictionary ambiguity, motion continuity, and the public immediate output:
 `.venv/bin/python -m unittest discover -s tests -p 'test_webcam*py'`.
 # Public camera contracts
+
+The saved camera selection includes its native unique ID and name when inventory
+is available. Startup and Reconnect resolve that identity; if it is missing they
+report unavailable instead of opening another device that inherited its index.
+Legacy index-only settings migrate on the next successful selection. Stop stays
+stopped when a viewer reconnects. If macOS's capture process still cannot see a
+reconnected webcam, restart the hub to refresh AVFoundation's device inventory.
+
+`open` means a frame was received within 1.5 seconds with no capture error.
+Failed reads immediately clear frame/tag history; blocked reads become stale.
+Unavailable status has zero live dimensions/FPS, no visible tags, and a no-signal
+preview. A remembered camera name/settings are selection preferences, not proof
+of a connection. The page labels the selected device unavailable and clears live
+resolution readouts. Fresh frames recover normal status; source replacement and
+read failures invalidate the cue mapping epoch.
 
 Enabled consumers discover Webcam through the hub context; they do not access
 its capture manager or tracker. All the following contracts have integer

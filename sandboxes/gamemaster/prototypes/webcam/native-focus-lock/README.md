@@ -14,6 +14,12 @@ chmod +x build-app.sh
 The hub keeps Focus Lock running while the webcam is selected. This prevents
 other applications from silently re-enabling autofocus.
 
+The build also creates `camera-devices.dylib`. Webcam loads it on demand to list
+AVFoundation names and unique IDs inside the same process as OpenCV, in OpenCV's
+sorted index order. It does not open cameras or modify optical controls. The
+`focus-lock list` command provides the same inventory for diagnostics; a fresh
+helper process can see a newly connected camera before a long-lived hub does.
+
 ## macOS compatibility
 
 AVFoundation identifies the selected camera while IOKit resolves its matching

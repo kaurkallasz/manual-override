@@ -16,8 +16,10 @@ NEAR_Z_MM = 60.0
 UNIQUE_MARGIN_MM = 20.0
 PLACEMENT_MM = 18.0
 PLACEMENT_DWELL_S = 0.55
-GAME_PLACEMENT_DISTANCE = 0.05
+GAME_PLACEMENT_DISTANCE = 0.04
+STACK_COVER_DISTANCE = 0.05
 GAME_MARKER_MEMORY_S = 120.0
+STACK_OCCLUSION_MEMORY_S = 5.0
 MAX_PLACEMENT_RELATIONS = 512
 DEFAULT_SETTINGS = {"near_xy_mm": NEAR_XY_MM, "near_z_mm": NEAR_Z_MM,
                     "unique_margin_mm": UNIQUE_MARGIN_MM, "stale_s": STALE_S}
@@ -54,9 +56,9 @@ def distance(pose, xy, z, limits=None):
 class PhysicalPlacementTracker:
     """Publish stable camera relationships without knowing Level or game rules.
 
-    The policy constants intentionally match the physical evidence policy that
-    Photon Game used before Phase 8. Board owns only the observation that a
-    movable tag remained near a fixed marker while an arm was available. Game
+    Board owns only the observation that a movable tag remained within the
+    fixed-marker activation radius while an arm was available. Atom-on-Atom
+    cover evidence has its own radius and does not require an available arm. Game
     still decides tag ownership, marker meaning, and whether an action is legal.
     """
 
@@ -67,9 +69,14 @@ class PhysicalPlacementTracker:
         self.marker_cache = {}
         self.orders = {}
         self.generations = {}
+        self.movable_cache = {}
+        self.covers = {}
+        self.stack_generation = 0
 
     def reset_evidence(self, *, clear_markers=False):
         self.orders.clear()
+        self.movable_cache.clear()
+        self.covers.clear()
         if clear_markers:
             self.marker_cache.clear()
 
@@ -191,11 +198,85 @@ class PhysicalPlacementTracker:
             "source": source, "source_epoch": self.source_epoch,
             "sampled_at": now, "coordinate_space": "corrected-camera-normalized",
             "relations": relations,
+            "stacking": self._stacking(runtime, now),
             "policy": {
                 "distance": GAME_PLACEMENT_DISTANCE,
                 "stable_s": PLACEMENT_DWELL_S,
                 "marker_memory_s": GAME_MARKER_MEMORY_S,
             },
+        }
+
+    def _stacking(self, runtime, now):
+        """Camera-only cover evidence; no team, game or robot assumptions."""
+        frame_at = float(runtime["frame_at"])
+        # Immediate detections matter here: a covered lower tag may still be
+        # present in Webcam's tracked-tag grace period.
+        visible_ids = set(runtime.get("visible_ids", []))
+        visible = {
+            int(tag["id"]): tag for tag in runtime.get("detections", [])
+            if 100 <= int(tag["id"]) <= 999 and tag["id"] in visible_ids
+        }
+        for tag_id, tag in visible.items():
+            self.movable_cache[tag_id] = {
+                "nx": float(tag["nx"]), "ny": float(tag["ny"]),
+                "seen_at": frame_at,
+            }
+        self.movable_cache = {
+            tag_id: target for tag_id, target in self.movable_cache.items()
+            if now - target["seen_at"] <= STACK_OCCLUSION_MEMORY_S
+            or tag_id in self.covers
+        }
+        candidates = {}
+        for upper_id, upper in visible.items():
+            nearby = []
+            for lower_id, lower in self.movable_cache.items():
+                if lower_id in visible:
+                    continue
+                separation = math.hypot(
+                    float(upper["nx"]) - lower["nx"],
+                    float(upper["ny"]) - lower["ny"],
+                )
+                previous = self.covers.get(lower_id)
+                if (separation <= STACK_COVER_DISTANCE and
+                    (now - lower["seen_at"] <= STACK_OCCLUSION_MEMORY_S or
+                     previous and previous["upper_id"] == upper_id)):
+                    nearby.append((lower_id, separation))
+            # An ambiguous cover must never select an arbitrary lower tag.
+            if len(nearby) == 1:
+                lower_id, separation = nearby[0]
+                candidates.setdefault(lower_id, []).append((upper_id, separation))
+        next_covers = {}
+        relations = []
+        for lower_id, matches in candidates.items():
+            if len(matches) != 1:
+                continue
+            upper_id, separation = matches[0]
+            lower = self.movable_cache[lower_id]
+            cover = self.covers.get(lower_id)
+            if cover is None or cover["upper_id"] != upper_id:
+                self.stack_generation += 1
+                cover = {
+                    "upper_id": upper_id, "since": now, "frames": 0,
+                    "frame_at": None, "generation": self.stack_generation,
+                }
+            if cover["frame_at"] is None or frame_at > cover["frame_at"]:
+                cover["frames"] += 1
+                cover["frame_at"] = frame_at
+            next_covers[lower_id] = cover
+            stable_at = cover["since"] + PLACEMENT_DWELL_S
+            relations.append({
+                "relation_id": f"{self.source_epoch}:cover:{lower_id}:{upper_id}:{cover['generation']}",
+                "lower_id": lower_id, "upper_id": upper_id,
+                "distance": round(separation, 6),
+                "lower_seen_at": lower["seen_at"],
+                "observed_since": cover["since"], "stable_at": stable_at,
+                "stable": now >= stable_at and cover["frames"] >= 3,
+            })
+        self.covers = next_covers
+        return {
+            "contract": "photon.board.stacking", "version": 1,
+            "status": "ready", "sampled_at": now,
+            "source_epoch": self.source_epoch, "relations": relations,
         }
 
 

@@ -37,10 +37,12 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
   await checkLabels();
   await page.evaluate(()=>{viewport.fit();syncViewport();});
   const row=i=>page.locator('.cueRow').nth(i);
+  // This suite exercises a placement-only program; clearance has its own suite.
+  await page.getByRole('button',{name:'Remove row 2',exact:true}).click();
   await row(0).locator('[data-field=destination]').selectOption('44');
-  await page.locator('#cueAdd').click();await row(1).locator('[data-field=piece]').selectOption('101');await row(1).locator('[data-field=destination]').selectOption('55');
-  await page.locator('#cueAdd').click();assert.equal(await page.locator('.cueRow').count(),3);
-  await row(2).getByRole('button').click();assert.equal(await page.locator('.cueRow').count(),2);
+  await page.locator('#cueAdd').click();await page.getByRole('button',{name:'Remove row 3',exact:true}).click();await row(1).locator('[data-field=piece]').selectOption('101');await row(1).locator('[data-field=destination]').selectOption('55');
+  await page.locator('#cueAdd').click();await page.getByRole('button',{name:'Remove row 4',exact:true}).click();assert.equal(await page.locator('.cueRow').count(),3);
+  await row(2).getByRole('button',{name:'Remove row 3'}).click();assert.equal(await page.locator('.cueRow').count(),2);
   const checkBullseyes=async destination=>{
    await page.waitForFunction(id=>{
     const arm=state.mobile_arm,marker=arm.markers.find(m=>m.id===id);
@@ -62,7 +64,7 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
   await page.waitForFunction(()=>state.mobile_arm.held_tag===100&&state.mobile_arm.cue.stage==='Move');
   await page.locator('#cuePlay').click();await page.waitForFunction(()=>state.mobile_arm.cue.status==='paused');
   await checkBullseyes(44);
-  assert.equal(await page.locator('#xyzZ').isDisabled(),true);assert.equal(await page.locator('#pumpBlow').isDisabled(),true);
+  assert.equal(await page.locator('#xyzZ').isDisabled(),false,'Height intervention remains available while paused');assert.equal(await page.locator('#pumpBlow').isDisabled(),true);
   const held=await page.evaluate(()=>JSON.stringify(state.mobile_arm.joints));await page.waitForTimeout(500);
   assert.equal(await page.evaluate(()=>JSON.stringify(state.mobile_arm.joints)),held);
   await page.locator('#cueMinimize').click();
@@ -86,7 +88,9 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
    await page.setViewportSize({width,height});await page.waitForTimeout(160);
    assert.equal(Math.round((await page.locator('#cuePanel').boundingBox()).width),142,'cue editor has half the original 284px width');
    await checkLabels();
-   const selectors=['.identity','.telemetry','#expand','.connectionControls','#xyzHeightControl','#zPresetButtons','#pumpButtons','#xyzPrecision','#cuePanel'];
+   // Fine tune now lives inside the preset group; compare the actual controls
+   // instead of treating intentional parent/child containment as overlap.
+   const selectors=['.identity','.telemetry','#expand','.connectionControls','#xyzHeightControl','#zPreset1','#zPreset2','#zPreset3','#pumpButtons','#xyzPrecision','#cuePanel'];
    const boxes=[];for(const selector of selectors)boxes.push([selector,await page.locator(selector).boundingBox()]);
    await page.screenshot({path:`/tmp/mobile-cue-${width}x${height}.png`});
    for(let i=0;i<boxes.length;i++){
@@ -96,6 +100,34 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
    assert.ok(await page.locator('#cueRows').evaluate(el=>el.clientHeight>=28),'rows retain a scrollable viewport');
    assert.ok(await page.locator('#cueRows').evaluate(el=>el.scrollWidth<=el.clientWidth),'row buttons fit without horizontal clipping');
   }
+  // Inject only presentation state in the robot-free fixture. Check the real
+  // recovery controls under repeated simulated SSE updates on both teams.
+  for(const side of ['green','purple']){
+   if(side==='purple')await page.goto(root+'/s/purple/p/mobile-ltz/');
+   await page.waitForFunction(()=>state?.mobile_arm&&controlMode==='cue');
+   await page.evaluate(()=>{
+    window.originalCueControls=updateCueControls;
+    updateCueControls=()=>{
+     state.mobile_arm.cue={...state.mobile_arm.cue,status:'waiting',index:0,waiting:{phase:'mapping',tag_id:100,operation_id:'test',message:'Waiting for piece #100. Tap a safe point to reveal the tag. Check the Atom battery if its tag stays dark.'}};
+     window.originalCueControls();
+    };updateCueControls();
+   });
+   for(const [width,height] of [[844,390],[390,844],[568,320],[320,568]]){
+    await page.setViewportSize({width,height});await page.waitForTimeout(200);
+    assert.equal(await page.locator('#cuePanel').getAttribute('data-recovering'),'true');
+    assert.match(await page.locator('#cueHint').textContent(),/battery/);
+    const panel=await page.locator('#cuePanel').boundingBox();
+    for(const selector of ['#cueRows','#cuePlay','#cueStop','#cueHint']){
+     const b=await page.locator(selector).boundingBox();
+     assert(b&&panel&&b.y>=panel.y&&b.y+b.height<=panel.y+panel.height+.5,`${side} ${width}x${height}: ${selector} stays in cue panel: ${JSON.stringify({b,panel})}`);
+    }
+    await page.screenshot({path:`/tmp/cue-recovery-${side}-${width}x${height}.png`});
+   }
+   await page.evaluate(()=>{updateCueControls=window.originalCueControls;});
+   if(side==='purple')await page.locator('#stop').click();
+  }
+  await page.goto(root+'/s/green/p/mobile-ltz/');
+  await page.waitForFunction(()=>state?.mobile_arm&&controlMode==='cue');
   await page.locator('#cueStop').click();await page.waitForFunction(()=>state.mobile_arm.cue.status==='stopped');
   assert.equal(await page.locator('.cueRow').count(),2);
   await page.locator('#stop').click();
@@ -104,7 +136,7 @@ const root=process.env.MOBILE_XYZ_TEST_URL||'http://127.0.0.1:8127';
   await operator.goto(root+'/s/gamemaster/p/photon-game/');
   await operator.waitForFunction(()=>!document.getElementById('save').disabled);
   for(const [id,value] of [['green_piece_1','104'],['green_piece_2','105'],['purple_piece_1','106'],['purple_piece_2','107']])await operator.locator('#'+id).fill(value);
-  await operator.locator('#save').click();await operator.waitForFunction(()=>document.getElementById('status').textContent.includes('Saved revision'));
+  await operator.locator('#save').click();await operator.waitForFunction(()=>document.getElementById('status').textContent.includes('Draft revision'));
   await page.locator('#connect').click();
   await page.waitForFunction(()=>$('connection').textContent==='Connected'&&state.mobile_arm.tags[0].id===104);
   assert.ok(await page.locator('[data-field=piece]').first().locator('option[value="104"]').count());

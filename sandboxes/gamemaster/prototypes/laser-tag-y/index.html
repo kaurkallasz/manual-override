@@ -48,8 +48,9 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
   <label class="history-choice">Calibration<select data-history-select><option value="latest">Latest complete calibration · default</option></select></label>
   <div class="actions"><button data-history-preview type="button" aria-pressed="false" disabled>Preview on camera</button><button data-history-apply type="button" disabled>Apply calibration</button><button data-history-refresh type="button">Refresh saved</button></div>
   <div data-history-status role="status" aria-live="polite">Loading saved calibrations…</div>
+  <div data-history-warning role="status" aria-live="polite" hidden></div>
   <div data-history-camera role="status" hidden></div>
-  <p class="history-note">Preview overlays saved positions on the current camera. Apply restores this arm’s calibration and the shared transport height, stopping connected arms first. A new completed calibration becomes the default.</p>
+  <p class="history-note">Apply uses the saved arm measurements and heights with the current camera calibration, stopping connected arms first. Different calibration sessions may reduce precision; all control levels remain available. A new completed calibration becomes the default.</p>
 </section>
 <section class="stage-shell">
   <div id="stage" class="stage">
@@ -83,7 +84,7 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
 </section>
 <main class="dashboard">
   <section class="panel"><h2>Run</h2><div class="metrics"><div class="metric"><b id="coreMetric">100%</b><span>Core integrity</span></div><div class="metric"><b id="waveMetric">0</b><span>Wave</span></div><div class="metric"><b id="enemyMetric">0</b><span>Active orcs</span></div><div class="metric"><b id="towerMetric">0 / 0</b><span>Turrets + companions</span></div><div class="metric"><b id="killMetric">0</b><span>Kills</span></div><div class="metric"><b id="breachMetric">0</b><span>Breaches</span></div></div></section>
-  <div class="control-panels"><section class="panel"><h2 id="atomControlsTitle">Aruco MNGMNT</h2><p id="atomControlsHelp" class="sub"></p><div id="arucoSummary" class="aruco-summary" role="status">Waiting for marker detections…</div><div id="atomTags" class="tag-grid"></div><div id="socketTags" class="tag-grid" style="margin-top:9px"></div><div id="arucoCacheControls" style="margin-top:12px"><button id="resetArucoCache" type="button">Reset all cached locations</button><p id="arucoCacheStatus" class="sub" role="status"></p><p id="arucoCacheResetStatus" class="sub" role="status"></p></div><div id="coreTags" class="tag-grid" style="margin-top:9px" hidden></div><div id="aimControls" class="aim" hidden><h3 id="aimTitle">Selected defense</h3><div id="aimHealthText" class="sub"></div><div class="health-line"><span id="aimHealthBar"></span></div><label class="aim-row"><span>Direction</span><input id="aimDirection" type="range" min="0" max="359" step="1"><span id="aimDirectionValue" class="aim-value">0°</span></label><label class="aim-row"><span id="aimReachLabel">Wide / narrow</span><input id="aimReach" type="range" min="0" max="100" step="1"><span id="aimReachValue" class="aim-value">50%</span></label><p class="sub">Drag the circular handle on the dotted guide to aim. Moving it closer or farther changes width or reach.</p></div></section>
+  <div class="control-panels"><section class="panel"><h2 id="atomControlsTitle">Aruco MNGMNT</h2><p id="atomControlsHelp" class="sub"></p><div id="arucoSummary" class="aruco-summary" role="status">Waiting for marker detections…</div><div id="atomTags" class="tag-grid"></div><button id="removeAtom" type="button" hidden>Lift selected Atom</button><div id="socketTags" class="tag-grid" style="margin-top:9px"></div><div id="arucoCacheControls" style="margin-top:12px"><button id="resetArucoCache" type="button">Reset all cached locations</button><p id="arucoCacheStatus" class="sub" role="status"></p><p id="arucoCacheResetStatus" class="sub" role="status"></p></div><div id="coreTags" class="tag-grid" style="margin-top:9px" hidden></div><div id="aimControls" class="aim" hidden><h3 id="aimTitle">Selected defense</h3><div id="aimHealthText" class="sub"></div><div class="health-line"><span id="aimHealthBar"></span></div><label class="aim-row"><span>Direction</span><input id="aimDirection" type="range" min="0" max="359" step="1"><span id="aimDirectionValue" class="aim-value">0°</span></label><label class="aim-row"><span id="aimReachLabel">Wide / narrow</span><input id="aimReach" type="range" min="0" max="100" step="1"><span id="aimReachValue" class="aim-value">50%</span></label><p class="sub">Drag the circular handle on the dotted guide to aim. Moving it closer or farther changes width or reach.</p></div></section>
   <details id="testUnlocks" class="panel test-unlocks" open><summary>Unlocks</summary><p id="testUnlockAvailability" class="sub" role="status"></p><p class="sub">Choose turret availability and upgrade levels for both teams. Upgrades update existing defenses immediately. Locks prevent new placements; use Reset to clear placed turrets. L4 adds a same-weapon companion across the code, except in the middle line. Both share health and aim. Available in virtual and physical practice. Disable test unlocks before starting a scored game. Saved player progress is unaffected.</p><label class="switch"><input id="testOverride" type="checkbox"> Use test unlocks</label><fieldset id="testUpgradeFields" class="test-upgrade-grid" disabled><legend class="sub">Turrets and defense upgrades</legend></fieldset><label class="test-control-label" for="testMobileControl">Mobile control unlock<select id="testMobileControl"><option value="1">Joint · default</option><option value="2">Cartesian XYZ</option><option value="3">Targeting</option><option value="4">Cue autonomy</option></select></label><p class="sub">Unlocks through the selected control tier for Green and Purple mobile practice. Physical play uses the calibrated robot controller. Targeting uses tap-preview and Move; Cue autonomy runs queued pickup and placement.</p><div class="actions"><button id="applyTestUnlocks" type="button">Apply test unlocks</button><button id="maxTestUnlocks" type="button">Unlock all L4</button><button id="baseTestUnlocks" type="button">All base levels</button></div><div id="testUnlockStatus" role="status">Using saved-player upgrades, or base levels without a player.</div></details></div>
   <section class="panel"><h2>Presentation log</h2><pre id="log">Y is display-only. Commands are validated by Photon Game.</pre></section>
 </main>
@@ -98,16 +99,17 @@ button,.button,input{font:inherit}button,.button{min-height:40px;padding:8px 13p
   </div>
 </dialog>
 <script src="data-flow.js?v=5"></script>
-<script src="tower-defence-view.js?v=14"></script>
+<script src="tower-defence-view.js?v=18"></script>
 <script src="calibration-history.js?v=1"></script>
 <script>
 const $=id=>document.getElementById(id),ROOT=location.pathname.split('/p/')[0],SELF=`${ROOT}/p/laser-tag-y`;
-const ui={aruco:{ready:false,tags:[],error:"Waiting for marker detections…"},state:null,view:null,selectedAtom:null,selectedTower:null,aimTimer:null,aimDraft:null,aimPointer:null,suppressCanvasClick:false,busy:false,events:null};
+const ui={aruco:{ready:false,tags:[],error:"Waiting for marker detections…"},state:null,view:null,selectedAtom:null,selectedTower:null,aimTimer:null,aimDraft:null,aimPointer:null,suppressCanvasClick:false,busy:false,events:null,booted:false};
 const dataFlow=YDataFlow.create({dialog:$('dataFlow'),openButton:$('dataFlowOpen'),closeButton:$('dataFlowClose'),motionButton:$('dataFlowMotion'),graph:$('dataFlowGraph'),health:$('dataFlowHealth'),received:$('dataFlowReceived'),details:$('dataFlowDetails'),self:SELF,sandboxRoot:ROOT});
 $('dataFlowOrigins').onclick=()=>dataFlow.focus('authored');$('dataFlowGame').onclick=()=>dataFlow.focus('game');$('dataFlowArms').onclick=()=>dataFlow.focus('pickup');
 $('settingsLink').href=`${SELF}/settings`;$('screenLink').href=`${SELF}/screen`;
 function log(message){$('log').textContent+=`\n[${new Date().toLocaleTimeString()}] ${message}`;$('log').scrollTop=$('log').scrollHeight}
 let calibrationBusy=false,calibrationError='';
+let pendingRequests=0,pageActive=true;
 function renderCalibrationControls(){
  const j=ui.state?.journey||{},active=j.phase==='calibration',side=j.active_side||j.queue?.[j.turn];
  for(const id of ['cancelCalibration','calibrateGreen','calibratePurple','calibrateBoth','resumeCalibration'])$(id).disabled=calibrationBusy;
@@ -118,24 +120,60 @@ function renderCalibrationControls(){
  const display=j.calibration_display,targetsReady=display?.contract==='hhh.playfield.display'&&display.version===1&&display.status==='ready';
  const title=active?`${side==='purple'?'Purple':'Green'} calibration selected.`:'Game screen selected.';
  const detail=active?(targetsReady?'Targets ready for the external screen. Game Master shows the camera.':display?.error||j.error||'Loading calibration targets…'):j.deferred_calibration?'Player calibration is paused; resume it before scored play.':'Choose Green, Purple or both to test calibration.';
- $('calibrationStatus').textContent=calibrationError||[title,detail,j.motion_error].filter(Boolean).join(' ');
+ $('calibrationStatus').textContent=calibrationBusy?'Changing screen…':calibrationError||[title,detail,j.motion_error].filter(Boolean).join(' ');
 }
 async function calibrationCommand(data){
  if(calibrationBusy)return;
  calibrationBusy=true;calibrationError='';renderCalibrationControls();
- try{await command(data);}catch(error){calibrationError=error.message;log(error.message);}
- finally{calibrationBusy=false;renderCalibrationControls();}
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);
+ try{
+  // Camera + SSE can fill the origin's HTTP/1 connection pool alongside the
+  // player and projection tabs. Release our slots before sending the command.
+  operatorCamera.suspend();disconnectGameEvents();
+  await command(data,{signal:controller.signal});
+ }catch(error){
+  calibrationError=controller.signal.aborted?'Screen change timed out. Waiting for live state; try again if needed.':error.message;
+  log(calibrationError);
+ }finally{
+  clearTimeout(timeout);calibrationBusy=false;renderCalibrationControls();
+  connectGameEvents();operatorCamera.resume();
+ }
 }
 $('cancelCalibration').onclick=()=>calibrationCommand({action:'show_game'});
 $('resumeCalibration').onclick=()=>calibrationCommand({action:'calibration_resume'});
 for(const [id,side]of [['calibrateGreen','green'],['calibratePurple','purple'],['calibrateBoth','both']])$(id).onclick=()=>calibrationCommand({action:'calibration_test',side});
-async function json(url,options={}){const response=await fetch(url,options),text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch(_){}if(!response.ok)throw Error(data.error||text||`HTTP ${response.status}`);return data}
-async function command(data){const result=await json(`${SELF}/api/command`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(result.output?.contract==='photon.game')applyState(result.output);else applyState(await json(`${SELF}/api/state`));return result.output}
+// Every finite request needs a free HTTP/1 connection, including Start,
+// unlocks and saved-calibration reads. Hold it through parsing and any follow-up
+// snapshot, and never resend a timed-out command automatically.
+async function withGameRequest(action,{signal}={}){
+ pendingRequests++;disconnectGameEvents();
+ const controller=signal?null:new AbortController(),activeSignal=signal||controller.signal;
+ const timer=controller?setTimeout(()=>controller.abort(),15000):null;
+ try{return await action(activeSignal)}
+ catch(error){if(controller?.signal.aborted)throw Error('Request timed out. Check the live game state before trying again.');throw error}
+ finally{if(timer!==null)clearTimeout(timer);pendingRequests--;connectGameEvents()}
+}
+async function json(url,options={}){
+ return withGameRequest(async signal=>{
+  const response=await fetch(url,{...options,signal}),text=await response.text();let data={};
+  try{data=text?JSON.parse(text):{}}catch(_){if(response.ok)throw Error('Invalid response from Photon Game')}
+  if(!response.ok)throw Error(data.error||text||`HTTP ${response.status}`);return data;
+ },options);
+}
+async function command(data,{signal}={}){
+ return withGameRequest(async signal=>{
+  const result=await json(`${SELF}/api/command`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal});
+  if(result.output?.contract==='photon.game')applyState(result.output);else applyState(await json(`${SELF}/api/state`,{signal}));
+  return result.output;
+ },{signal});
+}
 function boardReady(state){return state?.inputs?.board?.status==='ready'}
 // Display-only pixel branch. Game remains the sole source of gameplay truth.
-function createOperatorCamera({stage,image,message,retry,fps,url,onStatus=()=>{},isPreview=()=>false,previewReady=()=>true}){
-  let state=null,requested=false,failed=false,connected=true,received=0;
-  function stop(){requested=false;image.hidden=true;image.removeAttribute('src')}
+function createOperatorCamera({stage,image,message,retry,fps,onStatus=()=>{},onRetry=()=>{},isPreview=()=>false,previewReady=()=>true}){
+  let state=null,requested=false,failed=false,connected=true,received=0,suspended=false;
+  let frameAt=0,frameReceived=0,requestedAt=0,frameError='';
+  const fresh=()=>frameAt>0&&Date.now()/1000-frameAt>=-.25&&Date.now()/1000-frameAt<=2&&performance.now()-frameReceived<=2500;
+  function stop(){requested=false;frameAt=0;frameError='';image.hidden=true;image.removeAttribute('src')}
   function notice(text,tone='muted'){message.textContent=text;onStatus({text,tone})}
   function render(){
     const source=state?.inputs?.board?.upstream?.source;
@@ -146,21 +184,38 @@ function createOperatorCamera({stage,image,message,retry,fps,url,onStatus=()=>{}
     stage.classList.toggle('rendered',rendered);fps.hidden=!rendered;
     message.hidden=rendered;retry.hidden=true;
     if(rendered){stop();failed=false;onStatus({text:'Not used · rendered view',tone:'muted'});return}
+    if(suspended){stop();failed=false;notice('Camera paused · changing screen…');return}
     if(!connected||!state||performance.now()-received>3000){stop();failed=false;notice('Camera paused · waiting for fresh Photon Game input','warn');return}
     if(isPreview()&&!previewReady()){stop();failed=false;notice('Preview paused · waiting for fresh camera evidence','warn');return}
     // Calibration replaces game markers, so gameplay registration may be
-    // unavailable. The existing preview endpoint validates the real camera.
+    // unavailable. Board’s preview contract validates the real camera.
     if(state.status!=='ready'||!calibrating&&(state.inputs?.board?.status!=='ready'||source!=='camera')){
       stop();failed=false;notice(`Camera unavailable · ${state.inputs?.board?.error||state.error||'waiting for physical Photon Board evidence'}`,'warn');return;
     }
     if(failed){image.hidden=true;retry.hidden=false;notice('Camera feed unavailable · Retry camera to reconnect','warn');return}
-    if(!requested){requested=true;image.hidden=true;notice('Connecting to Photon Board camera…');image.src=url}
+    if(!requested){requested=true;requestedAt=performance.now();image.hidden=true;notice('Connecting to Photon Board camera…')}
+    if(frameAt&&!fresh()){frameAt=0;image.hidden=true;image.removeAttribute('src');frameError='Camera frame expired · waiting for fresh video'}
+    if(frameError)notice(frameError,'warn');
+    else if(!frameAt&&performance.now()-requestedAt>3000){retry.hidden=false;notice('Camera frames delayed · waiting for fresh video. Retry camera to reconnect.','warn')}
   }
-  image.onload=()=>{if(!requested)return;failed=false;image.hidden=false;notice('Live camera · Photon Board','good')};
+  image.onload=()=>{if(!requested||failed||!fresh())return;image.hidden=false;notice('Live camera · Photon Board','good')};
   image.onerror=()=>{if(!requested)return;failed=true;render()};
-  retry.onclick=()=>{stop();failed=false;render()};
+  retry.onclick=()=>{stop();failed=false;render();onRetry()};
   return {
+    frame(value){
+      render();if(!requested)return;
+      if(value?.contract!=='laser-tag-y.camera'||value.version!==1||value.status!=='ready'
+        ||!Number.isFinite(value.frame_at)||Date.now()/1000-value.frame_at<-.25||Date.now()/1000-value.frame_at>2
+        ||!Number.isInteger(value.width)||value.width<=0||!Number.isInteger(value.height)||value.height<=0
+        ||typeof value.image!=='string'||!value.image.startsWith('data:image/jpeg;base64,')){
+        frameAt=0;image.hidden=true;image.removeAttribute('src');
+        frameError=value?.error||'Fresh corrected camera frame unavailable';render();return;
+      }
+      failed=false;frameError='';frameAt=value.frame_at;frameReceived=performance.now();image.src=value.image;
+    },
     update(value){state=value;connected=true;received=performance.now();render()},
+    suspend(){suspended=true;render()},
+    resume(){suspended=false;render()},
     disconnect(){connected=false;render()},
     check:render,
     destroy(){stop();image.onload=image.onerror=retry.onclick=null},
@@ -192,17 +247,33 @@ function createArucoMonitor({overlay,onChange,now=()=>Date.now()/1000,readCache=
   }
   function paint(){
     const time=now(),fresh=(stamp,limit)=>Number.isFinite(stamp)&&time-stamp>=-.25&&time-stamp<=limit;
-    const ready=enabled&&data?.status==='ready'&&data.source==='camera'
-      &&data.coordinate_space==='corrected-camera-normalized'&&Number.isFinite(data.width)&&data.width>0
-      &&Number.isFinite(data.height)&&data.height>0&&Array.isArray(data.tags)
-      &&fresh(received,1.5)&&fresh(data.sampled_at,1.5)&&fresh(data.frame_at,Math.min(3,Number(data.limits?.stale_s)||1.5));
-    let tags=ready?data.tags.filter(tag=>Number.isSafeInteger(tag?.id)&&tag.id>=0&&point(tag.camera)&&fresh(tag.last_seen,tag.kind==='movable'?15:5)).map(tag=>({
+    const current=data?.camera_markers;
+    const ready=enabled&&current?.contract==='photon.board.camera-markers'&&current.version===1
+      &&current.status==='ready'&&current.source==='camera'&&current.coordinate_space==='corrected-camera-normalized'
+      &&Number.isFinite(current.width)&&current.width>0&&Number.isFinite(current.height)&&current.height>0
+      &&Number.isFinite(current.max_age_s)&&current.max_age_s>0&&current.max_age_s<=1.5
+      &&Array.isArray(current.tags)&&new Set(current.tags.map(t=>t?.id)).size===current.tags.length&&current.tags.every(t=>Number.isSafeInteger(t?.id)&&t.id>=0&&point(t.camera)&&fresh(t.last_seen,current.max_age_s))
+      &&fresh(received,1.5)&&fresh(current.frame_at,current.max_age_s);
+    let tags=ready?(Array.isArray(data.tags)?data.tags:[]).filter(tag=>Number.isSafeInteger(tag?.id)&&tag.id>=0&&point(tag.camera)&&fresh(tag.last_seen,tag.kind==='movable'?15:5)).map(tag=>({
       id:tag.id,camera:tag.camera,corners:Array.isArray(tag.corners)&&tag.corners.length===4&&tag.corners.every(point)?tag.corners:null,
-      visible:tag.visible===true&&fresh(tag.last_seen,Math.min(3,Number(data.limits?.stale_s)||1.5)),
+      visible:false,
       age:Math.max(0,time-tag.last_seen),last_seen:tag.last_seen,
     })):[];
     if(ready){
-      if(cacheWidth!==data.width||cacheHeight!==data.height){cache.clear();cacheWidth=data.width;cacheHeight=data.height;dirty=true}
+      const filter=current.size_filter,rejected=new Set((filter?.rejected||[]).map(tag=>tag.id));
+      const compatibleSize=tag=>{
+        if(rejected.has(tag.id))return false;
+        if(filter?.status!=='ready')return true;
+        if(!Array.isArray(tag.corners)||tag.corners.length!==4||!tag.corners.every(point))return false;
+        const size=tag.corners.reduce((sum,p,i)=>{const q=tag.corners[(i+1)%4];return sum+Math.hypot((q[0]-p[0])*current.width,(q[1]-p[1])*current.height)},0)/4;
+        return size*filter.max_ratio+1e-9>=filter.maximum_px&&size<=filter.minimum_px*filter.max_ratio+1e-9;
+      };
+      // Purge incompatible old outlines too: a rejected detection is not a cached location.
+      for(const [id,tag] of cache)if(!compatibleSize(tag)){cache.delete(id);dirty=true}
+      tags=tags.filter(compatibleSize);
+      const live=new Map(current.tags.map(tag=>[tag.id,{...tag,corners:Array.isArray(tag.corners)&&tag.corners.length===4&&tag.corners.every(point)?tag.corners:null,visible:true,age:Math.max(0,time-tag.last_seen)}]));
+      tags=[...tags.filter(tag=>!live.has(tag.id)),...live.values()];
+      if(cacheWidth!==current.width||cacheHeight!==current.height){cache.clear();cacheWidth=current.width;cacheHeight=current.height;dirty=true}
       tags=tags.filter(tag=>!tableId(tag.id)||tag.last_seen>resetAfter);
       for(const tag of tags){
         if(!tableId(tag.id)||!tag.visible)continue;
@@ -214,11 +285,11 @@ function createArucoMonitor({overlay,onChange,now=()=>Date.now()/1000,readCache=
       for(const stored of cache.values())if(!visible.has(stored.id))tags.push({...stored,visible:false,cached:true,age:Math.max(0,time-stored.last_seen)});
       tags.sort((a,b)=>a.id-b.id);save();
     }
-    const value={ready,tags,cachedCount:cache.size,cacheError,width:data?.width,height:data?.height,error:ready?'':error||'Marker evidence stale or unavailable'};
+    const value={ready,tags,cachedCount:cache.size,cacheError,width:current?.width,height:current?.height,error:ready?'':current?.error||error||'Marker evidence stale or unavailable'};
     // The same fitted full-frame rectangle and parent zoom are used by the video.
     overlay.toggleAttribute('hidden',!ready);overlay.replaceChildren();
     if(ready){
-      const w=data.width,h=data.height,size=Math.max(w,h)/100;
+      const w=current.width,h=current.height,size=Math.max(w,h)/100;
       overlay.setAttribute('viewBox',`0 0 ${w} ${h}`);
       const add=(name,attrs,text)=>{const node=document.createElementNS('http://www.w3.org/2000/svg',name);for(const[key,val]of Object.entries(attrs))node.setAttribute(key,String(val));if(text!=null)node.textContent=text;overlay.append(node)};
       for(const tag of tags){
@@ -257,7 +328,7 @@ const arucoMonitor=createArucoMonitor({isCalibration:()=>ui.state?.journey?.phas
 $('resetArucoCache').onclick=()=>{const saved=arucoMonitor.resetCache();$('arucoCacheResetStatus').textContent=saved?'All cached table locations cleared. Visible codes are learned again from new camera frames.':'This visit’s cache was cleared, but browser storage could not be cleared. See the storage error above.'};
 function syncAruco(){arucoMonitor.setEnabled(!ui.state?.virtual_play&&ui.state?.status==='ready'&&ui.state?.inputs?.board?.status==='ready'&&ui.state?.inputs?.board?.upstream?.source==='camera'&&!$('boardCamera').hidden)}
 let savedCalibrations=null;
-const operatorCamera=createOperatorCamera({stage:$('stage'),image:$('boardCamera'),message:$('cameraState'),retry:$('cameraRetry'),fps:$('fpsMonitor'),url:`${ROOT}/p/photon-board/api/preview`,isPreview:()=>savedCalibrations?.isPreview(),previewReady:()=>savedCalibrations?.cameraFresh(),onStatus:value=>{dataFlow.camera(value);syncAruco();savedCalibrations?.render()}});
+const operatorCamera=createOperatorCamera({stage:$('stage'),image:$('boardCamera'),message:$('cameraState'),retry:$('cameraRetry'),fps:$('fpsMonitor'),onRetry:()=>{disconnectGameEvents();connectGameEvents()},isPreview:()=>savedCalibrations?.isPreview(),previewReady:()=>savedCalibrations?.cameraFresh(),onStatus:value=>{dataFlow.camera(value);syncAruco();savedCalibrations?.render()}});
 savedCalibrations=CalibrationHistory.create({root:$('calibrationHistory'),overlay:$('savedCalibrationOverlay'),image:$('boardCamera'),read:side=>json(`${SELF}/api/calibrations?side=${side}`),apply:command,onPreview:()=>operatorCamera.check()});
 savedCalibrations.load();
 const cameraWatchdog=setInterval(()=>{operatorCamera.check();syncAruco();arucoMonitor.check();savedCalibrations.render()},500);
@@ -325,9 +396,11 @@ function renderControls(){
   const locked=id=>testLevels?.[trackForType[gameFacts.loadout.find(role=>role.atom_tag_id===id)?.tower_type]]===0;
   if(ui.selectedAtom!=null&&locked(ui.selectedAtom))ui.selectedAtom=null;
   if(ui.selectedAtom!=null&&!gameFacts.atom_ids.includes(ui.selectedAtom))ui.selectedAtom=null;
-  const signature=JSON.stringify([virtual,state.status,ui.aruco.ready,ui.aruco.tags.map(t=>[t.id,t.visible,t.cached,Math.floor(t.age)]),gameFacts.core_marker_id,ui.selectedAtom,gameFacts.loadout,testLevels,sockets.map(s=>[s.socket_id||s.id,s.aruco_id]),towers.map(t=>[t.socket_id,t.atom_tag_id,t.destroyed])]);
+  const signature=JSON.stringify([virtual,state.status,ui.aruco.ready,ui.aruco.tags.map(t=>[t.id,t.visible,t.cached,Math.floor(t.age)]),gameFacts.core_marker_id,ui.selectedAtom,gameFacts.loadout,testLevels,sockets.map(s=>[s.socket_id||s.id,s.aruco_id]),towers.map(t=>[t.socket_id,t.atom_tag_id,t.destroyed,t.occupying_atom_id,t.atom_buff_state])]);
   if(signature===controlsSignature){updateAim();return}
   controlsSignature=signature;
+  write($('removeAtom'),'hidden',!virtual);
+  write($('removeAtom'),'disabled',!usable||ui.selectedAtom==null);
   $('stage').classList.toggle('virtual',virtual);
   write($('virtualPlay'),'checked',virtual);
   write($('modeBadge'),'textContent',virtual?'Virtual play':'Physical board');
@@ -354,14 +427,14 @@ function renderControls(){
   updateAim();
 }
 function aimReachText(tower,spread){const distance=TowerDefenceView.geometry.towerAimDistance(tower.targeting,spread),percent=`${Math.round(spread*100)}%`;return Number.isFinite(distance)?`${Math.round(distance)}px · ${percent}`:percent}
-function updateAim(){const state=ui.state||{},tower=(state.towers||[]).find(item=>String(item.placement_id||item.socket_id)===String(ui.selectedTower));write($('aimControls'),'hidden',!tower);if(!tower)return;const id=String(tower.placement_id||tower.socket_id),draft=ui.aimDraft?.id===id?ui.aimDraft:null,health=Math.max(0,Math.round(100*Number(tower.hp)/Math.max(1,Number(tower.max_hp)))),tesla=tower.tower_type==='tesla_coil',angle=draft?.angle??Number(tower.targeting?.angle_degrees||0),spread=draft?.spread??Number(tower.targeting?.spread||0);write($('aimTitle'),'textContent',`#${tower.aruco_id} · Atom ${tower.atom_tag_id} · ${String(tower.tower_type).replaceAll('_',' ')}`);write($('aimHealthText'),'textContent',`Health ${Math.round(Number(tower.hp))} / ${Math.round(Number(tower.max_hp))} (${health}%)`);write($('aimHealthBar').style,'width',`${health}%`);write($('aimDirection'),'disabled',Boolean(tower.destroyed)||tesla);write($('aimReach'),'disabled',Boolean(tower.destroyed));write($('aimDirection'),'value',String(Math.round(angle)));write($('aimReach'),'value',String(Math.round(spread*100)));write($('aimDirectionValue'),'textContent',tesla?'Omnidirectional':`${Math.round(angle)}°`);write($('aimReachValue'),'textContent',aimReachText(tower,spread));$('aimReachLabel').textContent=tesla?'Reach / power':tower.tower_type==='mortar'?'Target distance':'Wide / narrow'}
-let startError='';
+function updateAim(){const state=ui.state||{},tower=(state.towers||[]).find(item=>String(item.placement_id||item.socket_id)===String(ui.selectedTower));write($('aimControls'),'hidden',!tower);if(!tower)return;const id=String(tower.placement_id||tower.socket_id),draft=ui.aimDraft?.id===id?ui.aimDraft:null,health=Math.max(0,Math.round(100*Number(tower.hp)/Math.max(1,Number(tower.max_hp)))),tesla=tower.tower_type==='tesla_coil',angle=draft?.angle??Number(tower.targeting?.angle_degrees||0),spread=draft?.spread??Number(tower.targeting?.spread||0);write($('aimTitle'),'textContent',`#${tower.aruco_id} · Atom ${tower.atom_tag_id} · ${String(tower.tower_type).replaceAll('_',' ')}`);write($('aimHealthText'),'textContent',`Health ${Math.round(Number(tower.hp))} / ${Math.round(Number(tower.max_hp))} (${health}%)${tower.atom_buff_state==='active'?' · Health ×2 · Damage ×2':''}`);write($('aimHealthBar').style,'width',`${health}%`);write($('aimDirection'),'disabled',Boolean(tower.destroyed)||tesla);write($('aimReach'),'disabled',Boolean(tower.destroyed));write($('aimDirection'),'value',String(Math.round(angle)));write($('aimReach'),'value',String(Math.round(spread*100)));write($('aimDirectionValue'),'textContent',tesla?'Omnidirectional':`${Math.round(angle)}°`);write($('aimReachValue'),'textContent',aimReachText(tower,spread));$('aimReachLabel').textContent=tesla?'Reach / power':tower.tower_type==='mortar'?'Target distance':'Wide / narrow'}
+let startError='',startBusy=false;
 function practiceOverride(state){return state?.virtual_play||state?.virtual_test_control!=null||state?.virtual_test_loadout!=null;}
 function startBlocked(state){if(state?.status!=='ready')return state?.error||'Waiting for Photon Game';if(state.phase!=='setup')return state.phase==='running'?'Game running':'Reset before the next game';if(state.journey?.phase==='calibration')return state.journey.error||'Finish or cancel calibration before Start';if(state.journey?.phase==='upgrades')return 'Waiting for the shared 30-second upgrade break';if(!state.virtual_play&&state.journey?.motion_blocked)return state.journey.motion_error||'Waiting for arm stop confirmation';if(!state.virtual_play&&!boardReady(state))return state.inputs?.board?.error||'Waiting for fresh camera and board input';return '';}
-function paintHud(){renderCalibrationControls();if(practiceOverride(ui.state))$('scoredPlay').checked=false;const progress=ui.state?.progress||{};const people=progress.participants||[];write($('progressStatus'),'textContent',progress.error||`${progress.reward_enabled?'Scored game':'Practice'} · ${people.map(p=>p.name+' ('+p.side+')').join(' + ')||'Select players in their LTZ Score tabs'}${progress.result?' · '+progress.result.outcome+' · '+progress.result.kills+' kills saved':''}`);write($('scoredPlay'),'disabled',ui.state?.phase==='running'||practiceOverride(ui.state));write($('virtualPlay'),'disabled',ui.state?.phase==='running');clearTimeout(hudTimer);hudTimer=null;lastHudAt=performance.now();const state=ui.state;const gameFacts=facts(state),ready=state.status==='ready',physicalReady=boardReady(state),core=Math.max(0,Math.round(100*Number(state.core_hp||0)/Math.max(1,Number(state.core_max_hp||1)))),sequence=state.core_sequence||{},ringCount=Number(sequence.ring_candidate_count||0),ringDone=Boolean(sequence.ring_completed),immunity=Math.max(0,Number(sequence.field_immunity_remaining_s)||0),ringTarget=rangeLabel(gameFacts.ring_min_turrets,gameFacts.ring_max_turrets);write($('phaseBadge'),'textContent',phaseText(state));write($('phaseBadge'),'className',`badge ${state.phase==='overrun'||!ready?'bad':state.phase==='won'?'good':''}`);write($('boardBadge'),'textContent',physicalReady?'Board ready':'Board unavailable');write($('boardBadge'),'className',`badge ${physicalReady?'good':state.virtual_play?'warn':'bad'}`);write($('boardBadge'),'title',state.inputs?.board?.error||'');write($('ringBadge'),'textContent',ringDone?(immunity>0?`Ring immune ${Math.ceil(immunity)}s`:'Ring complete'):`Ring ${ringCount} / ${ringTarget}`);write($('ringBadge'),'className',`badge ${ringDone?'good':gameFacts.ring_min_turrets!=null&&ringCount>=gameFacts.ring_min_turrets?'warn':''}`);write($('waveBadge'),'textContent',`Wave ${state.wave||0} / ${state.wave_count||0}`);write($('enemyBadge'),'textContent',`${state.active_enemies||0} orcs`);write($('coreBadge'),'textContent',`Core ${core}%`);write($('coreBadge'),'className',`badge ${core>50?'good':core>20?'warn':'bad'}`);write($('coreMetric'),'textContent',`${core}%`);write($('waveMetric'),'textContent',`${state.wave||0} / ${state.wave_count||0}`);write($('enemyMetric'),'textContent',String(state.active_enemies||0));write($('towerMetric'),'textContent',`${(state.towers||[]).filter(tower=>!tower.destroyed).length} + ${(state.companions||[]).filter(tower=>!tower.destroyed).length}`);write($('killMetric'),'textContent',String(state.kills||0));write($('breachMetric'),'textContent',String(state.breaches||0));write($('mission'),'textContent',updateMission(state));write($('status'),'textContent',ready?(state.presentation?.status==='ready'?(state.virtual_play?'Rendering Photon Game’s authoritative output.':'Physical view uses Photon Board’s camera; gameplay is supplied by Photon Game.'):`Artwork unavailable; using Canvas fallbacks: ${state.presentation?.error||'no content descriptor'}`):`Unavailable: ${state.error||'Photon Game is not ready'}`);const blocked=startBlocked(state);write($('start'),'disabled',!!blocked);write($('startStatus'),'textContent',startError||blocked||($('scoredPlay').checked?'Scored game · both players must press Ready':'Practice · no score or unlocks awarded'));write($('start'),'title',blocked);write($('pause'),'disabled',state.phase!=='running');write($('pause'),'textContent',state.paused?'Resume':'Pause');}
+function paintHud(){renderCalibrationControls();if(practiceOverride(ui.state))$('scoredPlay').checked=false;const progress=ui.state?.progress||{};const people=progress.participants||[];write($('progressStatus'),'textContent',progress.error||`${progress.reward_enabled?'Scored game':'Practice'} · ${people.map(p=>p.name+' ('+p.side+')').join(' + ')||'Select players in their LTZ Score tabs'}${progress.result?' · '+progress.result.outcome+' · '+progress.result.kills+' kills saved':''}`);write($('scoredPlay'),'disabled',ui.state?.phase==='running'||practiceOverride(ui.state));write($('virtualPlay'),'disabled',ui.state?.phase==='running');clearTimeout(hudTimer);hudTimer=null;lastHudAt=performance.now();const state=ui.state;const gameFacts=facts(state),ready=state.status==='ready',physicalReady=boardReady(state),core=Math.max(0,Math.round(100*Number(state.core_hp||0)/Math.max(1,Number(state.core_max_hp||1)))),sequence=state.core_sequence||{},ringCount=Number(sequence.ring_candidate_count||0),ringDone=Boolean(sequence.ring_completed),immunity=Math.max(0,Number(sequence.field_immunity_remaining_s)||0),ringTarget=rangeLabel(gameFacts.ring_min_turrets,gameFacts.ring_max_turrets);write($('phaseBadge'),'textContent',phaseText(state));write($('phaseBadge'),'className',`badge ${state.phase==='overrun'||!ready?'bad':state.phase==='won'?'good':''}`);write($('boardBadge'),'textContent',physicalReady?'Board ready':'Board unavailable');write($('boardBadge'),'className',`badge ${physicalReady?'good':state.virtual_play?'warn':'bad'}`);write($('boardBadge'),'title',state.inputs?.board?.error||'');write($('ringBadge'),'textContent',ringDone?(immunity>0?`Ring immune ${Math.ceil(immunity)}s`:'Ring complete'):`Ring ${ringCount} / ${ringTarget}`);write($('ringBadge'),'className',`badge ${ringDone?'good':gameFacts.ring_min_turrets!=null&&ringCount>=gameFacts.ring_min_turrets?'warn':''}`);write($('waveBadge'),'textContent',`Wave ${state.wave||0} / ${state.wave_count||0}`);write($('enemyBadge'),'textContent',`${state.active_enemies||0} orcs`);write($('coreBadge'),'textContent',`Core ${core}%`);write($('coreBadge'),'className',`badge ${core>50?'good':core>20?'warn':'bad'}`);write($('coreMetric'),'textContent',`${core}%`);write($('waveMetric'),'textContent',`${state.wave||0} / ${state.wave_count||0}`);write($('enemyMetric'),'textContent',String(state.active_enemies||0));write($('towerMetric'),'textContent',`${(state.towers||[]).filter(tower=>!tower.destroyed).length} + ${(state.companions||[]).filter(tower=>!tower.destroyed).length}`);write($('killMetric'),'textContent',String(state.kills||0));write($('breachMetric'),'textContent',String(state.breaches||0));write($('mission'),'textContent',updateMission(state));write($('status'),'textContent',ready?(state.presentation?.status==='ready'?(state.virtual_play?'Rendering Photon Game’s authoritative output.':'Physical view uses Photon Board’s camera; gameplay is supplied by Photon Game.'):`Artwork unavailable; using Canvas fallbacks: ${state.presentation?.error||'no content descriptor'}`):`Unavailable: ${state.error||'Photon Game is not ready'}`);const blocked=startBlocked(state);write($('start'),'disabled',startBusy||!!blocked);write($('start'),'textContent',startBusy?'Starting…':'Start');write($('startStatus'),'textContent',startBusy?'Sending Start to Photon Game…':startError||blocked||($('scoredPlay').checked?'Scored game · both players must press Ready':'Practice · no score or unlocks awarded'));write($('start'),'title',blocked);write($('pause'),'disabled',state.phase!=='running');write($('pause'),'textContent',state.paused?'Resume':'Pause');}
 function applyState(state,source='command response'){if(Number.isFinite(state.server_time)&&Number.isFinite(ui.state?.server_time)&&state.server_time<ui.state.server_time)return;if(state.phase!==ui.state?.phase)startError='';dataFlow.snapshot(state,source);ui.state=state;savedCalibrations.update(state);operatorCamera.update(state);syncAruco();ui.view?.applyState(state);renderControls();if(source!=='SSE'||state.status!=='ready'||performance.now()-lastHudAt>=100)paintHud();else if(hudTimer==null)hudTimer=setTimeout(paintHud,100-(performance.now()-lastHudAt))}
 function selectTower(tower){clearTimeout(ui.aimTimer);ui.aimTimer=null;if(ui.selectedTower)ui.view?.clearTowerAimPreview(ui.selectedTower);ui.selectedTower=tower?String(tower.placement_id||tower.socket_id):null;ui.aimDraft=null;ui.view?.selectTower(ui.selectedTower);updateAim()}
-async function place(socketId){if(ui.busy||ui.selectedAtom==null||!ui.state?.virtual_play)return;ui.busy=true;try{const atom=ui.selectedAtom,output=await command({action:'place',atom_tag_id:atom,socket_id:String(socketId)}),tower=(output.towers||[]).find(item=>String(item.socket_id)===String(socketId));selectTower(tower);log(`Photon Game accepted Atom ${atom} on socket ${socketId}.`)}catch(error){log(`Placement rejected: ${error.message}`)}finally{ui.busy=false}}
+async function place(socketId){if(ui.busy||ui.selectedAtom==null||!ui.state?.virtual_play)return;ui.busy=true;try{const atom=ui.selectedAtom,output=await command({action:'place',atom_tag_id:atom,socket_id:socketId==null?null:String(socketId)}),tower=(output.towers||[]).find(item=>String(item.socket_id)===String(socketId));selectTower(tower);log(socketId==null?`Lifted Atom ${atom}. Installed turrets remain active.`:`Photon Game accepted Atom ${atom} on socket ${socketId}.`)}catch(error){log(`Placement rejected: ${error.message}`)}finally{ui.busy=false}}
 async function activateCore(){if(ui.busy||ui.selectedAtom==null||!ui.state?.virtual_play)return;ui.busy=true;try{const atom=ui.selectedAtom;await command({action:'activate_core',atom_tag_id:atom});log(`Photon Game accepted Atom ${atom} on the core.`)}catch(error){log(`Core activation rejected: ${error.message}`)}finally{ui.busy=false}}
 function canvasPoint(event){const box=$('gameCanvas').getBoundingClientRect();return{x:(event.clientX-box.left)*1696/box.width,y:(event.clientY-box.top)*960/box.height}}
 function canvasClick(event){if(ui.suppressCanvasClick){ui.suppressCanvasClick=false;return}if(!ui.state?.virtual_play)return;const point=canvasPoint(event),core=ui.view.coreAtPoint(point.x,point.y),socket=ui.view.markerAtPoint(point.x,point.y);if(ui.selectedAtom!=null&&core){activateCore();return}if(ui.selectedAtom!=null&&socket){place(socket.socket_id);return}const tower=ui.view.towerAtPoint(point.x,point.y);if(tower)selectTower(tower)}
@@ -371,9 +444,41 @@ async function saveAim(){clearTimeout(ui.aimTimer);ui.aimTimer=null;if(!ui.aimDr
 function beginAimPointer(event){if(!ui.state?.virtual_play||!ui.selectedTower)return;const point=canvasPoint(event),handle=ui.view.aimHandle(ui.selectedTower),box=$('gameCanvas').getBoundingClientRect(),hitRadius=Math.max(Number(handle?.radius||0)+10,24*1696/box.width);if(!handle||Math.hypot(point.x-handle.x,point.y-handle.y)>hitRadius)return;event.preventDefault();clearTimeout(ui.aimTimer);ui.aimTimer=null;ui.aimPointer={pointerId:event.pointerId,id:String(ui.selectedTower)};ui.suppressCanvasClick=true;$('stage').classList.add('aim-dragging');$('gameCanvas').setPointerCapture(event.pointerId)}
 function moveAimPointer(event){if(!ui.aimPointer||event.pointerId!==ui.aimPointer.pointerId)return;event.preventDefault();const point=canvasPoint(event),aim=ui.view.aimFromPoint(ui.aimPointer.id,point.x,point.y);if(aim)setAimDraft(aim.angle,aim.spread,false)}
 function finishAimPointer(event,cancel=false){if(!ui.aimPointer||event.pointerId!==ui.aimPointer.pointerId)return;event.preventDefault();if(!cancel)moveAimPointer(event);const drag=ui.aimPointer,canvas=$('gameCanvas');if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);ui.aimPointer=null;$('stage').classList.remove('aim-dragging');setTimeout(()=>{ui.suppressCanvasClick=false},0);if(cancel){ui.aimDraft=null;ui.view.clearTowerAimPreview(drag.id);updateAim()}else saveAim()}
+$('removeAtom').addEventListener('click',()=>place(null));
 $('atomTags').addEventListener('click',event=>{const button=event.target.closest('[data-atom]');if(!button)return;const atom=Number(button.dataset.atom);ui.selectedAtom=ui.selectedAtom===atom?null:atom;selectTower(null);renderControls()});$('socketTags').addEventListener('click',event=>{const button=event.target.closest('[data-socket]');if(button)place(button.dataset.socket)});$('gameCanvas').addEventListener('click',canvasClick);$('gameCanvas').addEventListener('pointerdown',beginAimPointer);$('gameCanvas').addEventListener('pointermove',moveAimPointer);$('gameCanvas').addEventListener('pointerup',event=>finishAimPointer(event));$('gameCanvas').addEventListener('pointercancel',event=>finishAimPointer(event,true));$('aimDirection').addEventListener('input',previewAim);$('aimReach').addEventListener('input',previewAim);$('aimDirection').addEventListener('change',saveAim);$('aimReach').addEventListener('change',saveAim);
-$('virtualPlay').addEventListener('change',async()=>{const requested=$('virtualPlay').checked;try{await command({action:'set_virtual',virtual_play:requested});ui.selectedAtom=null;selectTower(null);log(`${requested?'Virtual':'Physical'} presentation selected.`)}catch(error){$('virtualPlay').checked=!requested;log(`Mode change rejected: ${error.message}`)}});$('start').addEventListener('click',()=>{startError='';return command({action:'start',virtual_play:$('virtualPlay').checked,reward_enabled:!$('virtualPlay').checked&&$('scoredPlay').checked}).then(()=>log('Defense started.')).catch(error=>{log(`Start rejected: ${error.message}`);startError=`Start rejected: ${error.message}`;$('startStatus').textContent=startError;});});$('pause').addEventListener('click',()=>command({action:ui.state?.paused?'resume':'pause'}).catch(error=>log(`Pause rejected: ${error.message}`)));$('reset').addEventListener('click',()=>command({action:'reset',virtual_play:$('virtualPlay').checked}).then(()=>{ui.selectedAtom=null;selectTower(null);log('Defense reset.')}).catch(error=>log(`Reset rejected: ${error.message}`)));
-async function boot(){ui.view=TowerDefenceView.create({sandboxRoot:ROOT,onAssetError:log,onAssetStatus:value=>dataFlow.assets(value),onFps:fps=>{$('fpsMonitor').textContent=`${fps==null?'—':fps} FPS`},mapCanvas:$('mapCanvas'),gameCanvas:$('gameCanvas')});try{const initial=await json(`${SELF}/api/state`);if(initial.journey?.phase==='calibration')await command({action:'show_game'});else applyState(initial,'snapshot')}catch(error){applyState({status:'unavailable',error:error.message,inputs:{board:{status:'unavailable'}}})}const receive=TowerDefenceView.presentation.snapshotReceiver(state=>applyState(state,'SSE'));ui.events=new EventSource(`${SELF}/api/events?markers=1`);ui.events.addEventListener('markers',event=>{try{arucoMonitor.update(JSON.parse(event.data));savedCalibrations.camera(JSON.parse(event.data))}catch(error){arucoMonitor.disconnect();savedCalibrations.camera(null);log(`Invalid marker diagnostics: ${error.message}`)}});ui.events.addEventListener('update',event=>{try{receive.update(JSON.parse(event.data))}catch(error){log(`Invalid game update: ${error.message}`)}});ui.events.onopen=()=>{ui.view.setFeedConnected(true);dataFlow.connection('open')};ui.events.onmessage=event=>{try{ui.view.setFeedConnected(true);receive.full(JSON.parse(event.data))}catch(error){dataFlow.connection('error',`Invalid snapshot: ${error.message}`);log(`Invalid game snapshot: ${error.message}`)}};ui.events.onerror=()=>{savedCalibrations.camera(null);arucoMonitor.disconnect();operatorCamera.disconnect();syncAruco();ui.view.setFeedConnected(false);dataFlow.connection('reconnecting','Photon Game stream disconnected; reconnecting…');$('status').textContent='Photon Game stream reconnecting…'}}
+$('virtualPlay').addEventListener('change',async()=>{const requested=$('virtualPlay').checked;try{await command({action:'set_virtual',virtual_play:requested});ui.selectedAtom=null;selectTower(null);log(`${requested?'Virtual':'Physical'} presentation selected.`)}catch(error){$('virtualPlay').checked=!requested;log(`Mode change rejected: ${error.message}`)}});$('start').addEventListener('click',startGame);$('pause').addEventListener('click',()=>command({action:ui.state?.paused?'resume':'pause'}).catch(error=>log(`Pause rejected: ${error.message}`)));$('reset').addEventListener('click',()=>command({action:'reset',virtual_play:$('virtualPlay').checked}).then(()=>{ui.selectedAtom=null;selectTower(null);log('Defense reset.')}).catch(error=>log(`Reset rejected: ${error.message}`)));
+async function startGame(){
+ if(startBusy)return;
+ startBusy=true;startError='';paintHud();
+ try{await command({action:'start',virtual_play:$('virtualPlay').checked,reward_enabled:!$('virtualPlay').checked&&$('scoredPlay').checked});log('Defense started.')}
+ catch(error){startError=`Start rejected: ${error.message}`;log(startError)}
+ finally{startBusy=false;paintHud()}
+}
+function disconnectGameEvents(){
+ const events=ui.events;ui.events=null;events?.close();
+ ui.view?.setFeedConnected(false);dataFlow.connection('reconnecting','Refreshing live connection…');
+}
+function connectGameEvents(){
+ if(ui.events||document.hidden||!pageActive||pendingRequests||calibrationBusy||!ui.booted)return;
+ // Reconnect with a fresh receiver: incremental updates need a new baseline.
+ const receive=TowerDefenceView.presentation.snapshotReceiver(state=>applyState(state,'SSE'));
+ const events=ui.events=new EventSource(`${SELF}/api/events?markers=1&preview=1`);
+ const current=()=>ui.events===events;
+ events.addEventListener('camera',event=>{if(!current())return;try{operatorCamera.frame(JSON.parse(event.data))}catch(error){operatorCamera.frame(null);log(`Invalid camera update: ${error.message}`)}});
+ events.addEventListener('markers',event=>{if(!current())return;try{const value=JSON.parse(event.data);arucoMonitor.update(value);savedCalibrations.camera(value)}catch(error){arucoMonitor.disconnect();savedCalibrations.camera(null);log(`Invalid marker diagnostics: ${error.message}`)}});
+ events.addEventListener('update',event=>{if(!current())return;try{receive.update(JSON.parse(event.data))}catch(error){log(`Invalid game update: ${error.message}`)}});
+ events.onopen=()=>{if(!current())return;ui.view.setFeedConnected(true);dataFlow.connection('open')};
+ events.onmessage=event=>{if(!current())return;try{ui.view.setFeedConnected(true);receive.full(JSON.parse(event.data))}catch(error){dataFlow.connection('error',`Invalid snapshot: ${error.message}`);log(`Invalid game snapshot: ${error.message}`)}};
+ events.onerror=()=>{if(!current())return;savedCalibrations.camera(null);arucoMonitor.disconnect();operatorCamera.disconnect();syncAruco();ui.view.setFeedConnected(false);dataFlow.connection('reconnecting','Photon Game stream disconnected; reconnecting…');$('status').textContent='Photon Game stream reconnecting…'};
+}
+function syncLiveVisibility(){
+ if(document.hidden){disconnectGameEvents();operatorCamera.disconnect();arucoMonitor.disconnect();savedCalibrations.camera(null)}
+ else connectGameEvents();
+}
+async function boot(){ui.view=TowerDefenceView.create({sandboxRoot:ROOT,onAssetError:log,onAssetStatus:value=>dataFlow.assets(value),onFps:fps=>{$('fpsMonitor').textContent=`${fps==null?'—':fps} FPS`},mapCanvas:$('mapCanvas'),gameCanvas:$('gameCanvas')});try{const initial=await json(`${SELF}/api/state`);if(initial.journey?.phase==='calibration')await command({action:'show_game'});else applyState(initial,'snapshot')}catch(error){applyState({status:'unavailable',error:error.message,inputs:{board:{status:'unavailable'}}})}ui.booted=true;connectGameEvents()}
+document.addEventListener('visibilitychange',syncLiveVisibility);
+window.addEventListener('pagehide',()=>{pageActive=false;disconnectGameEvents();operatorCamera.disconnect()});
+window.addEventListener('pageshow',()=>{pageActive=true;syncLiveVisibility()});
 window.addEventListener('beforeunload',()=>{clearInterval(cameraWatchdog);savedCalibrations.destroy();operatorCamera.destroy();arucoMonitor.destroy();clearTimeout(hudTimer);clearTimeout(ui.aimTimer);ui.events?.close();ui.view?.destroy();dataFlow.destroy()});boot();
 </script>
 </body>

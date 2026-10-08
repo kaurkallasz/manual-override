@@ -55,34 +55,84 @@ release` as `hhh.cal2.session` v1. Begin binds operation ID, side, player and
 practice status; one side owns the shared display. Drafts persist atomically in
 `data/calibration-lessons.json`, but restart creates a new epoch and revokes
 live motion access. Fresh heartbeat and measured arm/camera input renew access;
-expiry pauses before Relay hold. Release requires measured stopped motion and
-restores Playfield Areas before clearing the lesson reservation.
+expiry pauses before Relay hold. Ordinary motion release requires measured
+stopped motion. Measured-target completion may restore the display offline,
+retaining a durable stop gate until Relay can confirm any unverified stop.
 
 Six fresh points (30–35), four separate ground/3 cm raised samples
-(31,35,33,34), pickup height and consistent shared transport height must validate
-before the rig model commits atomically. Accepted captures alone get green glow;
-resuming restores only those glows. A field reservation that commits before a
+(31,35,33,34) and the automatically derived heights must validate
+before the rig model commits atomically. During the first six captures, accepted
+points gain green glow. During raised-sample capture, only outer codes
+31/35/33/34 remain visible; all four start green and each saved sample removes
+its target's glow without hiding that code. Codes 30/32 remain hidden until this
+phase ends. Begin, captures and maintenance reconcile presentation from the
+durable lesson through Playfield's public progress command, including after a
+restart without a renewed motion grant. A field reservation that commits before a
 failed lesson write stays blocked and retries under the same ID. The previous
 valid rig remains available while a draft is incomplete. New profiles still
 perform fresh captures; the click-preview/explicit-Move exercise is optional.
 
 `calibration_session_complete({side,id})` returns `hhh.cal2.session` v1. It
 validates and commits the active lesson's six points, four raised samples and
-captured pickup/transport heights, then creates a durable `measured-targets`
+derived pickup/transport heights, then creates a durable `measured-targets`
 completion receipt. It does not claim guided movement or pickup evidence and
-does not release the arm/display reservation. Game records progression and
-requires Relay stop confirmation before handing off the turn. Retries retain
+does not release the arm/display reservation. Completion uses stored capture
+evidence and camera/rig identity; it requires neither connected arms nor a live
+motion grant, including after restarting the hub. It never renews access or
+connects/enables hardware. Game records progression and releases the display
+to the next player or lobby; unverified stops still inhibit subsequent motion.
+Retries retain
 the same committed revision; a fingerprint of the actual measurements ensures
-height edits made after optional validation are installed before completion.
+point recaptures made after optional validation are installed before completion.
+
+Before activating a turn and during maintenance, Cal 2 calls Relay's documented
+`disable_side(other)` (`hhh.relay.disabled` v1). A connected waiting arm must have
+fresh feedback confirming disabled servos; an offline arm has its control lease
+revoked and is never connected automatically. Completed arms are also disabled
+when connected. These actions use the existing Relay owner; neither completion
+nor the waiting player's upgrades page can enable an arm.
+
+For mobile lessons, pickup Z is the arithmetic mean of the six captured robot
+Z positions. Transport Z is that player's pickup Z plus 40 mm. The owner derives
+both after the sixth capture, on recapture, when resuming unfinished drafts and
+again before commit; it rejects nonfinite captures or heights outside the robot
+workspace. Players do not submit or separately measure either height. The rig
+stores `arms[side].transport_height`; controllers prefer this optional value and
+use `shared_z.transport_height` only for older rigs. New lesson commits leave the
+partner's height and the legacy shared value unchanged. Saved history and
+restore retain the arm-specific value. The older standalone commissioning UI
+can still set heights explicitly; legacy shared-height records remain readable.
 
 `calibration_lesson_target(side,id)` is `hhh.cal2.target` v1. Two arrivals use
 actual Relay poses. Pickup proof binds a recently visible owned Atom to suction
 and measured lift; Game then verifies fresh Board placement after that lift.
-`calibration_safety_snapshot(side)` is `hhh.cal2.safety` v1: server-owned six-point
-convex bounds, radial and Z limits, rig revision and reservation. Changed camera
-correction/device identity, invalid geometry and missing raised samples fail
+`calibration_safety_snapshot(side)` is `hhh.cal2.safety` v1: server-owned
+reach polygon, radial and Z limits, rig revision and reservation. Changed camera
+correction requires explicit saved-calibration Apply or new measurements;
+device identity changes, invalid geometry and missing raised samples fail
 closed. Lens correction runs once in Camera Calibration; raised-Atom parallax
 runs once in the owner/controller mapping, with no flat fallback.
+
+`calibration_reach_snapshot()` is `hhh.cal2.reach` v1, also included as
+`motion_envelope` in the public calibration view. It publishes the configured
+MG400 XY reach independently of calibration sample placement: 439 mm outer
+radius (1 mm inside the nominal 440 mm), 220 mm base exclusion, and a polygon
+ending at +/-155 degrees (5 degrees inside configured J1 limits). It is read-only,
+is not persisted in saved measurements, and grants no motion permission. Six
+valid samples, camera/rig identity and the existing session checks remain
+required for the safety contract. Relay retains its Z floor/ceiling, full-path
+checks and hardware limits. This nominal XY envelope does not claim all heights
+have identical kinematic reach. Controllers consume the exact owner polygon for
+planning, target availability and reach display; older owners keep the captured
+sample hull. Malformed published envelopes fail closed. Reach geometry is cached
+by measurements and envelope to avoid starving feedback polling.
+
+Mobile LTZ reads this same safety contract for its `mobile_safety` status/error
+before advertising physical controls as ready; it does not expose the guard or
+other players' sessions. Relay retains the owner's failure reason in movement
+errors. Saved measurements can remain complete while their camera revision is
+stale. The active points/perspective calibration connection remains available
+to repair that fit, with the existing session and Relay checks on every move.
 
 The old direct robot endpoints return 410. Robot motion continues exclusively
 through the existing authenticated player LTX → Relay path. No driver is
@@ -182,14 +232,34 @@ returns from the calibration display through Journey, then calls Apply. An
 earned lesson stays deferred and still requires fresh player completion.
 
 Apply validates all six finite poses, camera samples, four raised samples,
-pickup/shared transport heights, nonsingular transforms and known camera/robot
-identity bindings. Fresh Relay `hhh.relay.arms` v1 connection states are required.
+pickup/transport heights, nonsingular transforms, a valid current camera
+correction and the known robot identity. Fresh Relay `hhh.relay.arms` v1 connection states are required.
 Connected arms must confirm `hhh.relay.stop` v1 stopped; disconnected arms never
 get enabled. A durable pending-stop gate inhibits both arms while the owned rig
 is atomically replaced. Failed stops keep that gate. Both prior source rigs are
-archived because transport Z is shared. No public driver or second movement
+archived because older records can still replace shared transport Z. New
+arm-specific records preserve the partner's height. No public driver or second movement
 path is added. The rig revision makes existing mobile controllers halt and
 reload their measurements before further movement.
+
+Applying across camera sessions (2026-10-06): Apply associates the selected
+arm with the current `hhh.camera-correction` v1 revision, including when it
+differs from the arm's original correction. It preserves the original
+`camera_revision`, camera/robot samples and heights; it does not restore old
+camera settings or claim newly measured accuracy. The arm's persisted
+`camera_binding` records `{revision, applied_at}`. Safety checks use this
+explicit binding and reject later camera changes until another Apply or new
+measurement. Fresh measured completion removes the old binding.
+
+History rows, Apply results and ready safety snapshots include
+`camera_compatibility` with `status` (`matched` or `approximate`),
+`source_camera_revision`, `current_camera_revision` and `warning`. History
+reports `unavailable` when the current correction cannot be read. Laser Tag Y
+shows an amber warning for different or unknown source sessions before and
+after Apply. This warns of reduced positioning precision only: it adds no
+control-tier restriction or progression change. Existing motion limits and
+arm identity checks remain enforced. Apply rechecks camera identity after
+stopping connected arms and rejects a correction changed during the operation.
 
 
 Calibration marker occlusion (2026-10-01)

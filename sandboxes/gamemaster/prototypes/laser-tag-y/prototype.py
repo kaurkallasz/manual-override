@@ -1,6 +1,8 @@
 """Laser Tag Y: a thin gamemaster presentation over Photon Game output."""
 
+import base64
 import json
+import math
 import os
 import time
 
@@ -79,6 +81,11 @@ def _marker_diagnostics():
             "contract", "version", "status", "source", "coordinate_space",
             "width", "height", "sampled_at", "frame_at", "limits", "tags", "errors",
         ) if key in value}
+        markers = board.camera_markers_snapshot()
+        if (not isinstance(markers, dict) or markers.get("contract") != "photon.board.camera-markers"
+                or type(markers.get("version")) is not int or markers["version"] != 1):
+            raise ValueError("Incompatible Photon Board camera markers")
+        value["camera_markers"] = markers
         json.dumps(value, allow_nan=False)
         return value
     except Exception as exc:
@@ -87,8 +94,34 @@ def _marker_diagnostics():
                 "errors": [str(exc)]}
 
 
-def _with_markers(response):
-    """Multiplex display diagnostics onto the existing Game SSE connection."""
+def _camera_preview():
+    """Read display pixels only through Board's public preview contract."""
+    result = {"contract": "laser-tag-y.camera", "version": 1, "status": "unavailable"}
+    try:
+        board = _module("photon-board")
+        if board is None or not callable(getattr(board, "preview_frame", None)):
+            raise ValueError("Photon Board camera unavailable")
+        value = board.preview_frame()
+        if (not isinstance(value, dict) or value.get("contract") != "photon.board.preview"
+                or type(value.get("version")) is not int or value["version"] != 1):
+            raise ValueError("Incompatible Photon Board camera preview")
+        if value.get("status") != "ready":
+            raise ValueError(value.get("error") or "Waiting for a fresh corrected camera frame")
+        stamp = value.get("frame_at")
+        if (value.get("coordinate_space") != "corrected-camera-normalized"
+                or type(stamp) not in (int, float) or not math.isfinite(stamp)
+                or not -0.25 <= time.time() - stamp <= 2
+                or any(type(value.get(k)) is not int or value[k] <= 0 for k in ("width", "height"))
+                or not isinstance(value.get("jpeg"), bytes) or not value["jpeg"]):
+            raise ValueError("Fresh corrected camera frame unavailable")
+        return dict(result, status="ready", frame_at=stamp, width=value["width"], height=value["height"],
+                    image="data:image/jpeg;base64," + base64.b64encode(value["jpeg"]).decode("ascii"))
+    except Exception as exc:
+        return dict(result, error=str(exc))
+
+
+def _with_markers(response, *, preview=False):
+    """Multiplex display diagnostics/pixels onto the existing Game SSE connection."""
     def stream():
         next_sample, previous = 0, None
         try:
@@ -103,6 +136,9 @@ def _with_markers(response):
                 if payload != previous:
                     previous = payload
                     yield ("event: markers\ndata: " + payload + "\n\n").encode()
+                if preview:
+                    yield ("event: camera\ndata: " + json.dumps(_camera_preview(),
+                           allow_nan=False, separators=(",", ":")) + "\n\n").encode()
         finally:
             response.close()
     return Response(stream(), mimetype="text/event-stream", headers={
@@ -201,7 +237,7 @@ def events_api():
             status=503, mimetype="text/event-stream",
         )
     response = game.game_events(incremental=True)
-    return _with_markers(response) if request.args.get("markers") == "1" else response
+    return _with_markers(response, preview=request.args.get("preview") == "1") if request.args.get("markers") == "1" else response
 
 
 @bp.route("/api/command", methods=["POST"])

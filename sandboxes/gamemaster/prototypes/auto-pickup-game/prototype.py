@@ -82,6 +82,8 @@ WORKSPACE = {
 }
 RADIUS_MIN = 150.0
 RADIUS_MAX = 440.0
+CAL2_REACH_MARGIN_MM = 1.0
+CAL2_YAW_LIMIT_DEG = 155.0  # 5 degrees inside the configured +/-160 J1 limit.
 # Auto PP applies a stricter 200..400 mm motion ring than the robot's raw
 # 150..440 mm workspace. Keep Cal 2 targets another 20 mm inside that ring.
 CAL2_RADIUS_MIN = 220.0
@@ -323,8 +325,10 @@ def _prepare_calibration_markers(field):
     areas=field.get('areas',[])
     if len(areas)!=6 or {a.get('marker') for a in areas}!=set(range(30,36)):
         raise ValueError('six calibration targets required')
-    layout={'settings':field.get('settings'),
-            'targets':sorted([[a.get(k) for k in ('marker','x','y','z','size','show_aruco')] for a in areas])}
+    # Glows and hiding the two centre codes for the raised stage do not move
+    # the board. Preserve the same six references through both capture stages.
+    layout={'settings':{k:(field.get('settings') or {}).get(k) for k in ('cam','rot','fov')},
+            'targets':sorted([[a.get(k) for k in ('marker','x','y','z','size')] for a in areas])}
     _lessons.prepare_markers(reservation['side'],reservation['id'],layout)
     return reservation
 
@@ -351,18 +355,29 @@ def _calibration_camera_observation():
             if not isinstance(visible,list) or any(type(i) is not int for i in visible):
                 raise ValueError('valid current camera marker IDs required')
             tags=[{**t,'missing':0} for t in tags or [] if t.get('id') in visible]
+        # Match Auto PP Cal 2's one-second tracked-tag qualification. A tag
+        # must also be detected in this frame: held tracker entries cannot
+        # seed references while the arm covers the board.
+        confirmed={t.get('id') for t in corrected.get('tags') or [] if type(t.get('id')) is int}
+        tags=[t for t in tags or [] if t.get('id') in confirmed]
         points={}
         if reservation:
-            context={'camera_revision':corrected['calibration_revision'],'size':[raw.get('width'),raw.get('height')]}
+            context={'camera_revision':corrected['calibration_revision'],'camera_identity':raw.get('camera_identity'),
+                     'size':[raw.get('width'),raw.get('height')]}
             points=_lessons.observe_markers(reservation['side'],reservation['id'],context,stamp,tags or [])
         return raw,corrected,points
     except Exception:
-        if _lessons:_lessons.clear_marker_cache()
+        if _lessons:_lessons.suspend_marker_observation()
         raise
 
 
 def _fresh_calibration_measurement(side, marker=None):
     raw,corrected,points = _calibration_camera_observation()
+    preparation=(_lessons.snapshot().get('marker_preparation') or {}) if _lessons else {}
+    if preparation.get('movement_pending'):
+        raise ValueError('Camera movement detected; waiting for stable calibration targets')
+    if preparation and points!=preparation['marker_positions']:
+        raise ValueError('Camera references changed; capture again')
     arms = _read_contract('dobot-mg400-relay','arms_snapshot','hhh.relay.arms')
     arm = arms['arms'][side]
     frame_at, feedback_at = raw.get('frame_at'), arm.get('feedback_at')
@@ -374,6 +389,8 @@ def _fresh_calibration_measurement(side, marker=None):
         raise ValueError('fresh enabled arm pose required')
     result = {'contract':'hhh.cal2.measurement','version':1,'status':'ready','pose':pose,'frame_at':frame_at,'feedback_at':feedback_at,'camera_revision':corrected.get('calibration_revision'),'pump':arm.get('pump_mode'),
               'tags':[t for t in (corrected.get('detections') or corrected.get('tags') or []) if t.get('missing',0)==0], 'arm':arm,'rig_identity':arm.get('device')}
+    if preparation:
+        result['reference_id']=preparation['reference_id']
     if marker is not None:
         if type(marker) is not int or marker not in range(30,36):
             raise ValueError('select a marker from 30 to 35')
@@ -386,6 +403,26 @@ def _fresh_calibration_measurement(side, marker=None):
         else:
             raise ValueError('this calibration turn is not active')
     return result
+
+
+def _disable_calibration_arm(side):
+    result=_read_contract('dobot-mg400-relay','disable_side','hhh.relay.disabled',side)
+    if result.get('inhibited') is not True or type(result.get('connected')) is not bool or (result['connected'] and result.get('disabled') is not True):
+        raise ValueError('Waiting arm must be disabled before calibration')
+    return result
+
+
+def _sync_calibration_display(session):
+    """Render durable lesson progress through the display owner's public API."""
+    if not session:return
+    if session['stage']=='perspective':
+        visible=[31,35,33,34]
+        highlighted=[m for m in visible if not session['draft']['parallax_points'].get(str(m))]
+    else:
+        visible=list(range(30,36))
+        highlighted=[int(m) for m in session['captures']] if session['stage']=='points' else []
+    _read_contract('playfield-areas','display_command','hhh.playfield',
+                   {'action':'progress','id':session['id'],'visible':visible,'highlighted':highlighted})
 
 
 def calibration_session_begin(value):
@@ -429,7 +466,11 @@ def calibration_session_begin(value):
     if reservation.get('id')!=value['id'] or reservation.get('side')!=side:
         field=_read_contract('playfield-areas','display_command','hhh.playfield',
                              {'action':'begin','id':value['id'],'side':side,'areas':areas,'settings':settings})
+    if session:
+        _sync_calibration_display(session)
+        field=_read_contract('playfield-areas','display_snapshot','hhh.playfield')
     _prepare_calibration_markers(field)
+    _disable_calibration_arm('purple' if side=='green' else 'green')
     pending = calibration_session_snapshot()
     if pending['motion_blocked']:
         raise ValueError(pending['motion_error'])
@@ -439,8 +480,7 @@ def calibration_session_begin(value):
     cal['arms'][side]['camera_view'] = view
     result = _lessons.begin({**value, 'display_camera_view': view}, cal)
     session = result['sessions'][value['id']]
-    for marker in session['captures']:
-        _read_contract('playfield-areas','display_command','hhh.playfield',{'action':'capture','id':value['id'],'marker':int(marker)})
+    _sync_calibration_display(session)
     return result
 
 
@@ -456,7 +496,7 @@ def calibration_session_command(side, value):
         return _lessons.heartbeat(side,value['id'])
     if action == 'capture':
         result = _lessons.capture(side,value,_fresh_calibration_measurement(side,value.get('marker')))
-        _read_contract('playfield-areas','display_command','hhh.playfield',{'action':'capture','id':value['id'],'marker':value['marker']})
+        _sync_calibration_display(result['sessions'][value['id']])
         return result
     if action == 'ground':
         return _lessons.parallax(side,value,_fresh_calibration_measurement(side,value.get('marker')))
@@ -469,21 +509,35 @@ def calibration_session_command(side, value):
         # coordinates, with live frame/arm and draft revision checks retained.
         measurement=_fresh_calibration_measurement(side)
         measurement['camera']={k:camera[k] for k in ('u','v')}
-        return _lessons.parallax(side,value,measurement)
+        result = _lessons.parallax(side,value,measurement)
+        _sync_calibration_display(result['sessions'][value['id']])
+        return result
     if action == 'height':
-        return _lessons.height(side,value,_fresh_calibration_measurement(side)['pose'])
+        raise ValueError('Pickup and transport heights are calculated from the six arm points; refresh the player page')
     if action == 'arrival':
         target = calibration_lesson_target(side,value['id'])
         return _lessons.arrival(side,value,_fresh_calibration_measurement(side)['pose'],target['pose'])
     if action != 'commit':
         raise ValueError('unsupported calibration action')
-    state = _lessons.snapshot()
-    session = state['sessions'].get(value.get('id'))
-    if state['active_side'] != side or not session or session['side'] != side or session.get('epoch')!=state['epoch'] or session.get('paused') or session.get('access_until',0)<time.time():
+    return _commit_calibration_measurements(side,value.get('id'))
+
+
+def _commit_calibration_measurements(side, session_id, *, offline=False):
+    state = _lessons.derive_heights(side,session_id,offline=offline)
+    session = state['sessions'].get(session_id)
+    if not offline and (state['active_side'] != side or not session or session['side'] != side or session.get('epoch')!=state['epoch'] or session.get('paused') or session.get('access_until',0)<time.time()):
         raise PermissionError('calibration turn unavailable')
-    if len(session['captures']) != 6 or any(not p for p in session['draft']['parallax_points'].values()):
+    if len(session['captures']) != 6 or set(session['draft']['parallax_points'])!={'31','35','33','34'} or any(not p for p in session['draft']['parallax_points'].values()):
         raise ValueError('six points and four raised-Atom samples required')
-    measured = _fresh_calibration_measurement(side)
+    measured = ({k:session.get(k) for k in ('camera_revision','rig_identity')} if offline else _fresh_calibration_measurement(side))
+    _lessons.check_marker_reference(measured)
+    # Observing the camera above can reset this draft. Never commit the stale
+    # snapshot read before that observation.
+    current=_lessons.snapshot()['sessions'].get(session_id)
+    if current!=session:
+        raise ValueError('Calibration measurements changed; review the current draft before saving')
+    if not isinstance(measured.get('camera_revision'),str) or not measured['camera_revision']:
+        raise ValueError('saved camera correction identity required')
     if session.get('camera_revision') != measured.get('camera_revision'):
         raise ValueError('camera correction changed; restart the draft')
     candidate = _calibration2_public()
@@ -492,23 +546,24 @@ def calibration_session_command(side, value):
     candidate['camera_revision'] = measured.get('camera_revision')
     candidate['arms'][side] = session['draft']
     candidate['arms'][side]['camera_revision'] = measured.get('camera_revision')
+    # New measurements belong to this camera correction; do not inherit an
+    # older saved rig's explicit association with a different camera session.
+    candidate['arms'][side].pop('camera_binding',None)
     candidate['arms'][side]['updated_at'] = time.time()
     candidate['arms'][side]['rig_identity'] = measured.get('rig_identity')
-    if session.get('transport_height') is not None:
-        existing = candidate['shared_z'].get('transport_height')
-        if existing is not None and abs(existing-session['transport_height']) > 3:
-            raise ValueError('shared transport height must remain consistent across both turns')
-        candidate['shared_z']['transport_height'] = session['transport_height']
-    if candidate['shared_z'].get('transport_height') is None or session['draft'].get('pickup_height') is None:
-        raise ValueError('capture pickup and transport heights')
+    if any(not WORKSPACE['z'][0] <= session[k] <= WORKSPACE['z'][1]
+           for k in ('pickup_height','transport_height')):
+        raise ValueError('Calculated pickup or transport height is outside the robot workspace; check the six arm points')
     model = CalibrationProjection(candidate).models[side]
     if isinstance(model,str):
         raise ValueError(model)
+    if model[2] is None:
+        raise ValueError('Four valid raised-tag samples required')
     # Retries reuse their revision; edits made during optional practice must
     # still be committed before the player completes the calibration turn.
     fingerprint=json.dumps({'id':session['id'],
         'draft':{k:session['draft'].get(k) for k in ('points','parallax_points','pickup_height','camera_view','stack_drop_offset')},
-        'transport_height':candidate['shared_z']['transport_height'],
+        'transport_height':session['transport_height'],
         'camera_revision':measured.get('camera_revision'),'rig_identity':measured.get('rig_identity')},
         sort_keys=True,allow_nan=False)
     expected_receipt=session['id']+':'+hashlib.sha256(fingerprint.encode()).hexdigest()
@@ -522,8 +577,38 @@ def calibration_session_command(side, value):
         with _calibration_lock:
             global _calibration2
             _calibration2 = candidate
-    _lessons.mark_committed(side,session['id'],candidate['revision'])
+    _lessons.mark_committed(side,session['id'],candidate['revision'],offline=offline)
     return _lessons.snapshot()
+
+
+def _current_camera_revision():
+    corrected=_read_contract('camera-calibration','corrected_tag_snapshot','hhh.camera-correction',[],[])
+    revision=corrected.get('calibration_revision')
+    if not isinstance(revision,str) or not revision:
+        raise ValueError('Current camera calibration identity unavailable')
+    return revision
+
+
+def _camera_compatibility(source_revision,current_revision):
+    """Describe provenance only. A session mismatch never limits control tiers."""
+    matched=bool(source_revision and source_revision==current_revision)
+    warning=None if matched else (
+        'Camera and arm calibrations are from different or unverified sessions. '
+        'The saved arm calibration uses the current camera calibration, so '
+        'positioning may be less precise. All control levels remain available.')
+    return {'status':'matched' if matched else 'approximate',
+            'source_camera_revision':source_revision,'current_camera_revision':current_revision,
+            'warning':warning}
+
+
+def _bound_camera_revision(arm,fallback=None):
+    binding=arm.get('camera_binding')
+    if binding is None:return arm.get('camera_revision',fallback)
+    if (not isinstance(binding,dict) or not isinstance(binding.get('revision'),str)
+            or not binding['revision'] or type(binding.get('applied_at')) not in (int,float)
+            or not math.isfinite(binding['applied_at'])):
+        raise ValueError('Applied camera calibration association is invalid; apply the saved calibration again')
+    return binding['revision']
 
 
 def calibration_history(side):
@@ -548,13 +633,17 @@ def calibration_history(side):
     if active_id not in {row['id'] for row in rows} and any(p.get('pose',{}).get('set') for p in arm.get('points',{}).values()):
         rows.append({'id':active_id,'side':side,'label':'Current saved rig',
                      'revision':cal.get('revision',1),'saved_at':arm.get('updated_at'),
-                     'draft':arm,'transport_height':cal.get('shared_z',{}).get('transport_height'),
+                     'draft':arm,'transport_height':arm.get('transport_height') if arm.get('transport_height') is not None else cal.get('shared_z',{}).get('transport_height'),
                      'camera_revision':arm.get('camera_revision',cal.get('camera_revision'))})
     rows.sort(key=lambda row:row.get('saved_at') or 0,reverse=True)
+    try:current_camera=_current_camera_revision();camera_error=None
+    except Exception as exc:current_camera=None;camera_error=str(exc)
     for row in rows:
         row['active']=row['id']==active_id
         try:_saved_calibration_candidate(cal,side,row);row.update(applicable=True,error=None)
         except (ValueError,KeyError,TypeError,OverflowError) as exc:row.update(applicable=False,error=str(exc))
+        row['camera_compatibility']=(_camera_compatibility(row.get('camera_revision'),current_camera)
+            if current_camera else {'status':'unavailable','warning':'Current camera calibration unavailable: '+camera_error})
     latest=next((row['id'] for row in rows if row['applicable']),None)
     return {'contract':'hhh.cal2.history','version':1,'status':'ready','rows':rows,
             'active_id':active_id,'latest_id':latest,'selection':selection.get('policy','latest'),
@@ -595,7 +684,11 @@ def _saved_calibration_candidate(cal,side,row):
     arm['camera_revision']=row.get('camera_revision',arm.get('camera_revision'))
     arm['updated_at']=row.get('saved_at')
     candidate['arms'][side]=arm
-    candidate['shared_z']['transport_height']=row['transport_height']
+    if arm.get('transport_height') is not None:
+        if arm['transport_height'] != row['transport_height']:
+            raise ValueError('Saved arm transport height does not match its record')
+    else:
+        candidate['shared_z']['transport_height']=row['transport_height']
     model=CalibrationProjection(candidate).models[side]
     if isinstance(model,str):raise ValueError(model)
     if model[2] is None:raise ValueError('Four valid raised-tag samples required')
@@ -630,11 +723,12 @@ def calibration_saved_apply(value):
         if scope.get('active_side') or scope.get('motion_blocked'):
             raise ValueError('Finish returning to the game screen and confirm pending arm stops before applying')
         previous=_calibration2_public();candidate=_saved_calibration_candidate(previous,side,row)
-        camera_revision=row.get('camera_revision')
-        if camera_revision:
-            corrected=_read_contract('camera-calibration','corrected_tag_snapshot','hhh.camera-correction',[],[])
-            if corrected.get('calibration_revision')!=camera_revision:
-                raise ValueError('Saved camera correction differs from the current camera; recalibrate before applying')
+        camera_revision=_current_camera_revision()
+        # Keep the measured source revision and all original points. Reusing a
+        # saved camera-to-arm fit with today's lens correction is approximate,
+        # not a new measurement or a restoration of the old camera settings.
+        compatibility=_camera_compatibility(candidate['arms'][side].get('camera_revision'),camera_revision)
+        candidate['arms'][side]['camera_binding']={'revision':camera_revision,'applied_at':time.time()}
         relay=_read_contract('dobot-mg400-relay','arms_snapshot','hhh.relay.arms')
         observed=relay.get('observed_at')
         if type(observed) not in (int,float) or not -.25<=time.time()-observed<=1.5:
@@ -655,6 +749,8 @@ def calibration_saved_apply(value):
                     stopped=_read_contract('dobot-mg400-relay','stop_side','hhh.relay.stop',s)
                     if stopped.get('stopped') is not True:raise ValueError('Wait for '+s+' to stop before applying calibration')
                 settled.append(s)
+            if _current_camera_revision()!=camera_revision:
+                raise ValueError('Camera calibration changed while applying; apply the saved arm calibration again')
             # Transport Z is shared; preserve both arms' original measurements
             # and height before replacing the selected rig.
             for s in TEAMS:_lessons.archive_rig(s,previous)
@@ -666,7 +762,8 @@ def calibration_saved_apply(value):
                 _calibration2=candidate
         finally:
             for s in settled:_lessons.confirm_stop(s,operation)
-        return {**preview,'rig_revision':candidate['revision'],'applied':True}
+        return {**preview,'rig_revision':candidate['revision'],'applied':True,
+                'camera_compatibility':compatibility}
 
 
 def calibration_lesson_target(side, session_id):
@@ -684,7 +781,7 @@ def calibration_lesson_target(side, session_id):
     uv = [center[i]*.8 + point[k]*.2 for i,k in enumerate(('u','v'))]
     xy = model[0](*uv)
     return {'contract':'hhh.cal2.target','version':1,'status':'ready','camera':uv,
-            'pose':[xy[0],xy[1],_calibration2['shared_z']['transport_height'],0], 'step':step}
+            'pose':[xy[0],xy[1],session['transport_height'],0], 'step':step}
 
 
 def calibration_session_finish(value):
@@ -700,11 +797,9 @@ def calibration_session_complete(value):
     if scope.get('active_side')!=side or scope.get('active_id')!=session_id or not session:
         raise PermissionError('wait for your calibration turn')
     if session['stage']!='complete':
-        if any(type(session.get(k)) not in (int,float) or not math.isfinite(session[k]) for k in ('pickup_height','transport_height')):
-            raise ValueError('Capture pickup Z and transport Z before completing calibration')
-        # The normal commit validates geometry, heights, camera/rig identity and
-        # fresh feedback. Reusing a history record cannot produce this receipt.
-        calibration_session_command(side,{'id':session_id,'action':'commit'})
+        # Captures already contain validated feedback and camera/rig identity.
+        # Finishing persists that evidence; it grants no movement or connection.
+        _commit_calibration_measurements(side,session_id,offline=True)
     return _lessons.complete_measurements(side,session_id)
 
 
@@ -732,8 +827,11 @@ def calibration_session_release(value):
 
 
 def _settle_deferred_stops():
-    for side, session_id in _lessons.snapshot().get('pending_stops',{}).items():
+    state=_lessons.snapshot()
+    for side, session_id in state.get('pending_stops',{}).items():
         try:
+            if state.get('sessions',{}).get(session_id,{}).get('completion_basis')=='measured-targets':
+                _disable_calibration_arm(side)
             stopped = _read_contract('dobot-mg400-relay','stop_side','hhh.relay.stop',side)
             if stopped.get('stopped') is True:
                 _lessons.confirm_stop(side,session_id)
@@ -749,6 +847,9 @@ def calibration_session_maintain():
         return calibration_session_snapshot()
     _settle_deferred_stops()
     state = calibration_session_snapshot()
+    if state.get('active_side') in TEAMS:
+        _sync_calibration_display(state.get('sessions',{}).get(state.get('active_id')))
+        _disable_calibration_arm('purple' if state['active_side']=='green' else 'green')
     # Old stores could retain active_id after releasing active_side. Drafts are
     # historical evidence, not live turns; deferred stops have their own gate.
     session = (state.get('sessions',{}).get(state.get('active_id'))
@@ -776,6 +877,23 @@ def calibration_session_maintain():
     return result
 
 
+def calibration_reach_snapshot():
+    """Configured XY envelope, independent of camera fit or motion permission."""
+    radius = RADIUS_MAX - CAL2_REACH_MARGIN_MM
+    # A concave sector preserves the rear yaw exclusion; a convex hull would
+    # silently fill it in. The inner base exclusion is checked separately.
+    steps = math.ceil(2 * CAL2_YAW_LIMIT_DEG / 5)
+    polygon = [[0.0, 0.0]] + [
+        [radius * math.cos(math.radians(-CAL2_YAW_LIMIT_DEG + 2 * CAL2_YAW_LIMIT_DEG * i / steps)),
+         radius * math.sin(math.radians(-CAL2_YAW_LIMIT_DEG + 2 * CAL2_YAW_LIMIT_DEG * i / steps))]
+        for i in range(steps + 1)]
+    return {'contract':'hhh.cal2.reach','version':1,'status':'ready',
+            'physical_radius_max':RADIUS_MAX,'margin_mm':CAL2_REACH_MARGIN_MM,
+            'guard':{'format':'auto-pp-calibration-2-v1','polygon':polygon,
+                     'radius_min':max(RADIUS_MIN,220),'radius_max':radius,
+                     'z_min':WORKSPACE['z'][0],'z_max':WORKSPACE['z'][1]}}
+
+
 def calibration_safety_snapshot(side):
     try:
         cal = _calibration2_public()
@@ -798,29 +916,25 @@ def calibration_safety_snapshot(side):
         model = CalibrationProjection(cal).models[side]
         if isinstance(model,str):
             raise ValueError(model)
-        camera_revision=cal['arms'][side].get('camera_revision',cal.get('camera_revision'))
+        arm=cal['arms'][side]
+        camera_revision=_bound_camera_revision(arm,cal.get('camera_revision'))
+        compatibility=None
         if camera_revision:
-            corrected = _read_contract('camera-calibration','corrected_tag_snapshot','hhh.camera-correction',[],[])
-            if corrected.get('calibration_revision') != camera_revision:
-                raise ValueError('camera correction changed; recalibrate the rig before movement')
+            current_camera=_current_camera_revision()
+            if current_camera != camera_revision:
+                raise ValueError(f'{side.title()} camera correction changed. Apply a saved {side.title()} calibration or run {side.title()} calibration in Laser Tag Y before moving.')
+            compatibility=_camera_compatibility(arm.get('camera_revision',cal.get('camera_revision')),current_camera)
         identity = cal['arms'][side].get('rig_identity')
         if identity:
             arms = _read_contract('dobot-mg400-relay','arms_snapshot','hhh.relay.arms')
             if arms['arms'][side].get('device')!=identity:
-                raise ValueError('arm connection changed; recalibrate the rig')
-        points = sorted(set((p['pose']['x'],p['pose']['y']) for p in cal['arms'][side]['points'].values()))
-        def cross(a,b,c): return (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
-        lower,upper=[],[]
-        for sequence,out in ((points,lower),(reversed(points),upper)):
-            for point in sequence:
-                while len(out)>=2 and cross(out[-2],out[-1],point)<=0: out.pop()
-                out.append(point)
-        polygon=lower[:-1]+upper[:-1]
-        if len(polygon)<3: raise ValueError('calibration boundary is degenerate')
-        guard = {'format':cal['format'],'polygon':polygon,
-                 'radius_min':max(RADIUS_MIN,220),'radius_max':RADIUS_MAX,'z_min':WORKSPACE['z'][0],'z_max':WORKSPACE['z'][1]}
+                raise ValueError(f'{side.title()} arm connection changed. Restore the calibrated connection or run {side.title()} calibration in Laser Tag Y.')
+        # The six samples validate/map the camera fit, not the physical reach.
+        # Keep the fit/identity checks above while permitting the configured
+        # workspace beyond those sample centres.
+        guard = calibration_reach_snapshot()['guard']
         return {'contract':'hhh.cal2.safety','version':1,'status':'ready','revision':cal.get('revision',1),
-                'guard':guard,'session':calibration_session_snapshot()}
+                'guard':guard,'session':calibration_session_snapshot(),'camera_compatibility':compatibility}
     except Exception as exc:
         return {'contract':'hhh.cal2.safety','version':1,'status':'unavailable','error':str(exc)}
 
@@ -1348,6 +1462,12 @@ def _calibration2_from_saved(saved):
         base["arms"][side]["rig_identity"]=(saved.get("arms",{}).get(side) or {}).get("rig_identity")
         arm = ((saved.get("arms") or {}).get(side) or {})
         if 'camera_revision' in arm:base['arms'][side]['camera_revision']=arm['camera_revision']
+        if 'camera_binding' in arm:base['arms'][side]['camera_binding']=copy.deepcopy(arm['camera_binding'])
+        if 'transport_height' in arm:
+            height=arm['transport_height']
+            if type(height) not in (int,float) or not math.isfinite(height) or not WORKSPACE['z'][0]<=height<=WORKSPACE['z'][1]:
+                raise ValueError('Invalid saved arm transport height')
+            base['arms'][side]['transport_height']=height
         if arm.get("camera_view") in ("normal", "rot180"):
             base["arms"][side]["camera_view"] = arm["camera_view"]
         for key, point in (arm.get("points") or {}).items():
@@ -1430,7 +1550,9 @@ def _save_calibration2():
 
 def _calibration2_public():
     with _calibration_lock:
-        return json.loads(json.dumps(_calibration2))
+        value = json.loads(json.dumps(_calibration2))
+    value['motion_envelope'] = calibration_reach_snapshot()
+    return value
 
 
 def _fixed_cal2_playfield():
@@ -2198,6 +2320,7 @@ def api_calibration2_capture():
         if data.get("transport_height") is not None:
             _calibration2["shared_z"]["transport_height"] = \
                 round(float(data["transport_height"]), 3)
+            arm['transport_height'] = _calibration2['shared_z']['transport_height']
         _save_calibration2()
     return jsonify({"ok": True, "calibration": _calibration2_public()})
 
@@ -2286,6 +2409,7 @@ def api_calibration2_z():
         if "transport_height" in heights:
             _calibration2["shared_z"]["transport_height"] = \
                 heights["transport_height"]
+            _calibration2['arms'][side]['transport_height'] = heights['transport_height']
         if "stack_drop_offset" in heights:
             _calibration2["arms"][side]["stack_drop_offset"] = \
                 heights["stack_drop_offset"]

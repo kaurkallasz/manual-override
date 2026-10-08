@@ -11,11 +11,14 @@
     font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   #app { position: fixed; inset: 0; }
   canvas { display: block; }
+  #markerStatus{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2;max-width:90vw;padding:8px 12px;border:1px solid #ffffff40;border-radius:6px;background:#05070be8;text-align:center;font-size:14px}
+  #markerStatus[hidden]{display:none}
 </style>
   <link rel="stylesheet" href="/theme.css" />
 </head>
 <body>
 <div id="app"></div>
+<div id="markerStatus" role="status" hidden></div>
 
 <script type="importmap">
 {
@@ -121,9 +124,38 @@ const MARKER_LAYER = 1;
 
 // ArUco marker textures from the server (DICT_4X4_50), cached by id. Nearest
 // filtering keeps the black/white cells crisp so a top camera can detect them.
-const texLoader = new THREE.TextureLoader();
+const markerLoads = new THREE.LoadingManager();
+const texLoader = new THREE.TextureLoader(markerLoads);
 const markerTextures = new Map();
 const numberTextures = new Map();
+const failedMarkers = new Set(), markerStatus = document.getElementById('markerStatus');
+let markersLoading = false, markerRetry = null;
+function paintMarkerStatus(){
+  markerStatus.hidden = !markersLoading && !failedMarkers.size;
+  markerStatus.textContent = failedMarkers.size
+    ? 'ArUco codes unavailable. Retrying…'
+    : 'Loading ArUco codes…';
+}
+markerLoads.onStart = () => {
+  markersLoading = true;
+  // The calibration iframe can be the sixth HTTP/1 stream on this origin.
+  // Release its slot for marker images before reopening the live state feed.
+  disconnectEvents();
+  paintMarkerStatus();
+};
+markerLoads.onLoad = () => {
+  markersLoading = false;paintMarkerStatus();connectEvents();
+  if(failedMarkers.size && markerRetry === null)markerRetry=setTimeout(()=>{
+    markerRetry=null;
+    for(const mid of [...failedMarkers]){
+      markerTextures.get(mid)?.dispose();markerTextures.delete(mid);failedMarkers.delete(mid);
+      for(const mesh of meshes.values())if(mesh.userData.markerId===mid){
+        mesh.userData.markerId=-1;setTarget(mesh,mesh.userData.area);
+      }
+    }
+    paintMarkerStatus();
+  },3000);
+};
 function numberTexture(mid){
   if(!numberTextures.has(mid)){
     const canvas=document.createElement('canvas');canvas.width=128;canvas.height=64;
@@ -135,7 +167,9 @@ function numberTexture(mid){
 function markerTexture(mid) {
   let t = markerTextures.get(mid);
   if (!t) {
-    t = texLoader.load(U('/api/marker/' + mid));
+    t = texLoader.load(U('/api/marker/' + mid),undefined,undefined,()=>{
+      failedMarkers.add(mid);paintMarkerStatus();
+    });
     t.magFilter = THREE.NearestFilter;
     t.minFilter = THREE.NearestFilter;
     t.generateMipmaps = false;
@@ -456,8 +490,20 @@ function applyState(data) {
   if (data.rev !== lastRev) { lastRev = data.rev; syncAreas(data.areas); syncLinks(data.areas); }
   if (data.srev !== lastSrev) { lastSrev = data.srev; applySettings(data.settings); }
 }
-const es = new EventSource(U('/api/events'));   // auto-reconnects on a dropped link
-es.onmessage = e => { try { applyState(JSON.parse(e.data)); } catch (_) {} };
+let es = null;
+function disconnectEvents(){es?.close();es=null;}
+function connectEvents(){
+  if(es || markersLoading)return;
+  const source=es=new EventSource(U('/api/events'));
+  source.onmessage=e=>{
+    if(es!==source)return;
+    try{applyState(JSON.parse(e.data));}catch(error){
+      markerStatus.hidden=false;markerStatus.textContent='Calibration display unavailable: '+error.message;
+    }
+  };
+}
+connectEvents();
+addEventListener('beforeunload',()=>{disconnectEvents();clearTimeout(markerRetry);});
 
 // ---- render loop (smooth, every frame) ------------------------------------
 const clock = new THREE.Clock();

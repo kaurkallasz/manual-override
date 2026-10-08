@@ -48,9 +48,10 @@ class MobileTurretTests(unittest.TestCase):
 
     def observation(self):
         level=self.game.game_snapshot()['level']
-        tags=[{'id':s['aruco_id'],'nx':.1+.8*s['marker_x']/level['width'],
-               'ny':.05+.9*s['marker_y']/level['height'],'missing':0,'tracked':True} for s in level['sockets']]
-        return dict(contract='photon.board.runtime',version=1,status='ready',source='camera',corrected=True,
+        tags=[{'id':s['aruco_id'],'camera':[.1+.8*s['marker_x']/level['width'],
+               .05+.9*s['marker_y']/level['height']],'last_seen':time.time()} for s in level['sockets']]
+        return dict(contract='photon.board.camera-markers',version=1,status='ready',source='camera',
+                    coordinate_space='corrected-camera-normalized',max_age_s=1.5,
                     frame_at=time.time(),width=1280,height=720,tags=tags)
 
     def test_camera_registration_rejects_stale_degenerate_and_wrong_layout(self):
@@ -59,9 +60,9 @@ class MobileTurretTests(unittest.TestCase):
         matrix,ids=registration(level,board)
         self.assertGreater(len(ids),4)
         x,y=project(matrix,.3,.7);self.assertAlmostEqual(x,.34);self.assertAlmostEqual(y,.68)
-        for changed in ({'frame_at':time.time()-10},{'corrected':False},{'tags':board['tags'][:3]}):
+        for changed in ({'frame_at':time.time()-10},{'coordinate_space':'raw'},{'tags':board['tags'][:3]}):
             with self.assertRaises(ValueError):registration(level,{**board,**changed})
-        bad=copy.deepcopy(board);bad['tags'][0]['nx']+=.2
+        bad=copy.deepcopy(board);bad['tags'][0]['camera'][0]+=.2
         with self.assertRaises(ValueError):registration(level,bad)
         bad=copy.deepcopy(board);bad['tags'].append(bad['tags'][0])
         with self.assertRaises(ValueError):registration(level,bad)
@@ -69,7 +70,7 @@ class MobileTurretTests(unittest.TestCase):
     def test_physical_aim_requires_tracking_but_not_virtual_robot_connection(self):
         board=self.observation()
         camera=SimpleNamespace(preview_snapshot=lambda:dict(contract='hhh.camera-preview',version=1,status='ready',coordinate_space='corrected-camera-normalized'))
-        self.facade.hub_init(FakeContext({'photon-game':self.game,'photon-board':SimpleNamespace(runtime_observation=lambda:board),'camera-calibration':camera}))
+        self.facade.hub_init(FakeContext({'photon-game':self.game,'photon-board':SimpleNamespace(camera_markers_snapshot=lambda:board),'camera-calibration':camera}))
         self.engine.virtual_play=False
         self.assertEqual(self.post().status_code,200)
         self.assertIsNone(self.engine.mobile_arm.token)

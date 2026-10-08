@@ -261,9 +261,8 @@ class LaserTagYExtractionTests(unittest.TestCase):
         ).lower()
         # The operator may display Board video and versioned read-only diagnostics.
         # Neither branch supplies gameplay evidence or commands.
-        for display_url in ('/p/photon-board/api/preview',):
-            self.assertEqual(runtime_source.count(display_url), 1)
-            runtime_source = runtime_source.replace(display_url, '')
+        self.assertIn('board.preview_frame()', runtime_source)
+        self.assertNotIn('/p/photon-board/api/preview', runtime_source)
         for forbidden in (
             "photon-level", "webcam", "camera-calibration",
             ".tmj", "layout-edit", "loadlevel", "setsocket",
@@ -887,6 +886,10 @@ class PhotonGameExtractionTests(unittest.TestCase):
             engine.set_virtual_play(True)
             engine.place(100, socket_id, source="virtual")
             engine.start(settings)
+            if engine is extracted:
+                # Compare the original unbuffed combat rules; active Atom
+                # damage/health is covered by test_atom_tower_buff.py.
+                engine.remove_atom(100, source='virtual')
             for _ in range(20):
                 engine.step(0.1)
 
@@ -916,6 +919,9 @@ class PhotonGameExtractionTests(unittest.TestCase):
             for tower in value["towers"]:
                 # Opaque mobile edit identity does not change combat behavior.
                 tower.pop("aim_instance", None)
+                for key in ('atom_buff_state', 'occupying_atom_id', 'atom_health_multiplier',
+                            'atom_damage_multiplier', 'normal_max_hp'):
+                    tower.pop(key, None)
                 tower.get("targeting", {}).pop("control", None)
                 if "upgrade_multiplier" in tower:
                     self.assertEqual(tower.pop("upgrade_multiplier"), 1)
@@ -1070,7 +1076,8 @@ class PhotonGameExtractionTests(unittest.TestCase):
         engine.ingest_physical(descriptor(100.54))
         self.assertEqual(engine.core_stage, "ring_ready")
         engine.ingest_physical(descriptor(100.56))
-        self.assertEqual(engine.core_stage, "detonating")
+        self.assertEqual(engine.core_stage, "first_tag")
+        self.assertEqual(engine.core_first_tag, 100)
 
     def test_runtime_has_no_file_level_camera_render_or_asset_dependency(self):
         module_dir = PROTOTYPES / "photon-game"

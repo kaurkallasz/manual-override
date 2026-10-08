@@ -15,6 +15,8 @@ class DisplayOwnershipTests(unittest.TestCase):
         self.field=load('playfield-areas');self.field.HERE=str(self.path);self.field.SETTINGS_PATH=str(self.path/'settings.json');self.field.AREAS_PATH=str(self.path/'areas.json')
         self.owner=load('auto-pickup-game');self.owner._lessons=self.owner.LessonStore(self.path/'lessons.json')
         self.relay=SimpleNamespace(stop_side=lambda side:dict(contract='hhh.relay.stop',version=1,status='ready',stopped=True))
+        self.disabled=[]
+        self.relay.disable_side=lambda side:(self.disabled.append(side) or dict(contract='hhh.relay.disabled',version=1,status='ready',inhibited=True,connected=True,disabled=True))
         self.owner._hub_ctx=FakeContext({'playfield-areas':self.field,'dobot-mg400-relay':self.relay})
         self.cal={'revision':1,'playfield':{'saved_areas':[{'id':f'a{i}','marker':i,'color':'#33ff88','glow':4} for i in range(30,36)]},
                   'arms':{side:{'points':{str(i):{'marker':i,'camera':{'u':.1,'v':.1},'pose':{'set':True}} for i in range(30,36)}} for side in ('green','purple')}}
@@ -32,6 +34,56 @@ class DisplayOwnershipTests(unittest.TestCase):
         self.assertGreater(self.field.display_snapshot()['settings']['bloom'],0)
         self.owner.calibration_session_begin(self.value)
         self.assertEqual([a['marker'] for a in self.field.list_areas() if a['color']=='#33ff88'],[30])
+
+    def test_waiting_arm_is_disabled_before_activation_and_during_maintenance(self):
+        self.owner.calibration_session_begin(self.value)
+        self.assertEqual(self.disabled,['purple'])
+        self.owner.calibration_session_maintain()
+        self.assertEqual(self.disabled,['purple','purple'])
+        with patch.object(self.relay,'disable_side',return_value=dict(contract='hhh.relay.disabled',version=1,status='ready',inhibited=True,connected=True,disabled=False)):
+            with self.assertRaisesRegex(ValueError,'disabled'):self.owner.calibration_session_begin(self.value)
+            with self.assertRaisesRegex(ValueError,'disabled'):self.owner.calibration_session_maintain()
+
+    def test_raised_phase_hides_centre_markers_and_extinguishes_each_saved_sample(self):
+        for side in ('green','purple'):
+            value={**self.value,'id':'raised:'+side,'side':side}
+            self.owner.calibration_session_begin(value)
+            geometry={a['marker']:(a['x'],a['z'],a['size']) for a in self.field.list_areas()}
+            with patch.object(self.owner,'_fresh_calibration_measurement',side_effect=lambda side,marker=None:{
+                'pose':[300+10*((marker or 30)-30),0,10,0],'camera':{'u':.1,'v':.2},
+                'frame_at':time.time(),'feedback_at':time.time(),'camera_revision':'lens','rig_identity':{'ip':'test'}}):
+                for marker in range(30,36):
+                    self.owner.calibration_session_command(side,{'id':value['id'],'action':'capture','marker':marker})
+                remaining={31,35,33,34}
+                def check():
+                    areas=self.field.list_areas()
+                    self.assertEqual({a['marker'] for a in areas if a['show_aruco']},{31,35,33,34})
+                    self.assertEqual({a['marker'] for a in areas if a['show_area'] and a['glow']>0},remaining)
+                    self.assertTrue(all(a['glow']==0 for a in areas if a['marker'] not in remaining))
+                    self.assertEqual({a['marker']:(a['x'],a['z'],a['size']) for a in areas},geometry)
+                check()
+                for marker in (31,35,33,34):
+                    self.owner.calibration_session_command(side,{'id':value['id'],'action':'raised','marker':marker,'camera':{'u':.2,'v':.3}})
+                    remaining.remove(marker);check()
+                # Reconcile an old or interrupted display update from saved evidence,
+                # even before fresh hardware can reactivate a restarted lesson.
+                self.field.display_command({'action':'capture','id':value['id'],'marker':31})
+                self.owner._lessons=self.owner.LessonStore(self.path/'lessons.json')
+                self.owner.calibration_session_maintain();check()
+                with patch.object(self.field,'_save_areas') as save:
+                    self.owner.calibration_session_maintain()
+                    save.assert_not_called()
+                self.owner.calibration_session_begin(value)
+                self.owner.calibration_session_release(value)
+
+    def test_display_progress_rejects_invalid_markers_before_mutating(self):
+        self.owner.calibration_session_begin(self.value)
+        before=self.field.list_areas()
+        for invalid in ({'visible':[True],'highlighted':[]},{'visible':[31,31],'highlighted':[]},
+                        {'visible':[999],'highlighted':[]},{'visible':[31],'highlighted':[35]}):
+            with self.assertRaises(ValueError):
+                self.field.display_command({'action':'progress','id':self.value['id'],**invalid})
+            self.assertEqual(self.field.list_areas(),before)
 
     def test_initial_calibration_uses_workspace_guard_without_a_finished_camera_fit(self):
         self.cal['format']='auto-pp-calibration-2-v1'
@@ -83,6 +135,7 @@ class DisplayOwnershipTests(unittest.TestCase):
         from types import SimpleNamespace
         from test_photon_framework import FakeContext
         relay=SimpleNamespace(stop_side=lambda side:dict(contract='hhh.relay.stop',version=1,status='ready',stopped=True))
+        relay.disable_side=self.relay.disable_side
         self.owner._hub_ctx=FakeContext({'playfield-areas':self.field,'dobot-mg400-relay':relay})
         before=self.field.list_areas()
         with patch.object(self.owner,'_fresh_calibration_measurement',side_effect=ValueError('camera stale')):

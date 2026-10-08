@@ -28,6 +28,7 @@ class ClientBuildTests(unittest.TestCase):
         (self.root/'physical-arm.js').write_text((self.ui.HERE/'physical-arm.js').read_text())
         (self.root/'journey.js').write_text((self.ui.HERE/'journey.js').read_text())
         (self.root/'operation-id.js').write_text((self.ui.HERE/'operation-id.js').read_text())
+        (self.root/'connection-log.js').write_text((self.ui.HERE/'connection-log.js').read_text())
         self.ui.HERE = self.root
         self.ui.hub_init(None)
         self.addCleanup(self.ui.hub_stop)

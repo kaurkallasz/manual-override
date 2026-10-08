@@ -36,6 +36,9 @@
     border-radius:10px; overflow:hidden; aspect-ratio:16/9; display:flex;
     align-items:center; justify-content:center; }
   .video img { width:100%; height:100%; object-fit:contain; display:block; }
+  #feedNotice { position:absolute; padding:8px 12px; background:#161922e8;
+    border-radius:6px; color:var(--txt); font-size:13px; }
+  #feedNotice[hidden] { display:none; }
   .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr));
     gap:10px; margin-top:14px; }
   .stat { background:#13161c; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
@@ -76,13 +79,14 @@
     <div class="row">
       <select id="cam"><option>Scanning…</option></select>
       <button id="refresh" title="Re-scan for cameras">↻ Rescan</button>
+      <button id="reconnect" title="Reopen the selected webcam">Reconnect</button>
       <button id="stop" title="Release the camera">Stop</button>
     </div>
     <div class="row" style="margin-top:10px;">
       <select id="resSel" title="Preview resolution"></select>
     </div>
     <p class="note">Choose the camera and preview resolution. The selection is
-      remembered, so reopening this page brings the feed back automatically.</p>
+      remembered. If the camera was stopped or disconnected, press Reconnect.</p>
   </div>
 
   <div class="panel">
@@ -104,7 +108,7 @@
 
   <div class="panel">
     <h2>Live feed</h2>
-    <div class="video"><img id="feed" alt="camera feed" /></div>
+    <div class="video"><img id="feed" alt="camera feed" /><span id="feedNotice" role="status">Connecting video…</span></div>
     <div class="grid">
       <div class="stat"><div class="k">Status</div>
         <div class="v"><span id="pill" class="pill idle"><span class="dot"></span><span id="pillTxt">…</span></span></div></div>
@@ -115,7 +119,7 @@
       <div class="stat"><div class="k">Detection FPS</div><div class="v" id="detectionFps">—</div></div>
       <div class="stat"><div class="k">Index</div><div class="v" id="idx">—</div></div>
     </div>
-    <p class="note">Frames come from OpenCV on the server, served as MJPEG. ArUco
+    <p class="note">Live frames and status share one connection. ArUco
       markers (DICT_4X4_50) are detected and outlined live — green once tracked,
       amber while still qualifying.</p>
   </div>
@@ -142,18 +146,89 @@ const camSel = el('cam');
 const resSel = el('resSel');
 const trackingResSel = el('trackingResSel');
 const detectionFpsSel = el('detectionFpsSel');
-let autoSelected = false;   // only auto-pick the remembered camera once
+let lastStatus = null;
+let cameraChoices = [];
+let rememberedCamera = null;
+let events = null;
+let lastPanelUpdate = 0;
+let previewAt = 0;
+let pendingRequests = 0;
+
+function renderCameras(remembered) {
+  if (remembered) rememberedCamera = remembered;
+  remembered = rememberedCamera;
+  const keep = camSel.value || String(remembered?.index ?? '');
+  const choices = cameraChoices.map(c => ({...c}));
+  const selected = lastStatus?.index ?? remembered?.index;
+  const selectedId = lastStatus?.unique_id || remembered?.unique_id;
+  const matches = c => selectedId && c.unique_id ? selectedId === c.unique_id : selected === c.index;
+  if (selected != null && !choices.some(matches)) {
+    choices.unshift({index:'', name:remembered?.name || `Camera ${selected}`, unavailable:true});
+  }
+  camSel.replaceChildren();
+  for (const c of choices) {
+    const option = document.createElement('option');
+    option.value = String(c.index);
+    const active = lastStatus?.open && matches(c);
+    const missing = c.unavailable || (lastStatus && !lastStatus.open && matches(c));
+    option.textContent = (c.name || `Camera ${c.index}`) + (active ? ` · ${lastStatus.width}×${lastStatus.height} (active)` : missing ? ' (unavailable)' : '');
+    camSel.append(option);
+  }
+  if (!choices.length) {const option=document.createElement('option');option.value='';option.textContent='No cameras found';camSel.append(option);}
+  if (choices[0]?.unavailable) camSel.value = '';
+  else if (choices.some(c => String(c.index) === keep)) camSel.value = keep;
+}
 
 function startStream() {
-  // cache-buster forces the <img> to (re)open the MJPEG connection
-  el('feed').src = U('/api/stream') + '?t=' + Date.now();
+  if (events || document.hidden || pendingRequests) return;
+  previewAt = 0;
+  const es = events = new EventSource(U('/api/events?preview=1'));
+  es.onmessage = e => {
+    if (events !== es) return;
+    try {
+      const d = JSON.parse(e.data);
+      if (typeof d.preview === 'string' && d.preview.startsWith('data:image/jpeg;base64,')) {
+        el('feed').src = d.preview;
+        previewAt = Date.now();
+      }
+      if (!lastPanelUpdate || Date.now() - lastPanelUpdate >= 300 || !d.status?.open) {
+        if (d.status) applyStatus(d.status);
+        if (d.tags) applyTags(d.tags);
+        lastPanelUpdate = Date.now();
+      }
+      el('conn').textContent = 'live';
+    } catch (_) { showFeedNotice('Could not read the video update.'); }
+  };
+  es.onerror = () => {
+    if (events !== es) return;
+    el('conn').textContent = 'offline';
+    showFeedNotice('Video disconnected · reconnecting…');
+  };
+}
+
+function stopStream() {
+  events?.close();
+  events = null;
+  lastPanelUpdate = 0;
+}
+
+function showFeedNotice(message) {
+  el('feedNotice').textContent = message;
+  el('feedNotice').hidden = !message;
+}
+
+async function cameraRequest(path, options) {
+  pendingRequests++;
+  stopStream(); // Leave a connection available for finite requests and controls.
+  try { return await (await fetch(U(path), options)).json(); }
+  finally { pendingRequests--; startStream(); }
 }
 
 async function loadCameras() {
   let data;
   try {
-    data = await (await fetch(U('/api/cameras'))).json();
-  } catch (_) { return; }
+    data = await cameraRequest('/api/cameras');
+  } catch (_) { showAlert('Could not load the camera list.'); return; }
 
   // resolution dropdown
   const res = data.resolutions || [];
@@ -168,16 +243,9 @@ async function loadCameras() {
   }
 
   // camera dropdown
-  const cams = data.cameras || [];
-  if (!cams.length) {
-    camSel.innerHTML = '<option value="">No cameras found</option>';
-    return;
-  }
-  const keep = camSel.value;
-  camSel.innerHTML = cams.map(c => `<option value="${c.index}">${c.label}</option>`).join('');
-  // restore a sensible selection: current value, else the remembered one
-  const wantIdx = keep || (data.remembered ? String(data.remembered.index) : '');
-  if (wantIdx && cams.some(c => String(c.index) === wantIdx)) camSel.value = wantIdx;
+  cameraChoices = data.cameras || [];
+  if (data.status) lastStatus = data.status;
+  renderCameras(data.remembered);
 }
 
 function chosenRes() {
@@ -192,15 +260,15 @@ function chosenTracking() {
 
 async function selectCamera(index) {
   try {
-    const r = await (await fetch(U('/api/select'), {
+    const r = await cameraRequest('/api/select', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ index: Number(index), ...chosenRes(), ...chosenTracking(),
         detection_fps: Number(detectionFpsSel.value) }),
-    })).json();
+    });
     if (!r.ok) showAlert(r.error || 'could not open that camera');
     else hideAlert();
+    if (r.status) applyStatus(r.status);
   } catch (_) { showAlert('request failed'); }
-  startStream();
 }
 
 camSel.onchange = () => { if (camSel.value !== '') selectCamera(camSel.value); };
@@ -208,44 +276,42 @@ resSel.onchange = () => { if (camSel.value !== '') selectCamera(camSel.value); }
 trackingResSel.onchange = () => { if (camSel.value !== '') selectCamera(camSel.value); };
 detectionFpsSel.onchange = () => { if (camSel.value !== '') selectCamera(camSel.value); };
 el('refresh').onclick = loadCameras;
-el('stop').onclick = async () => {
-  try { await fetch(U('/api/stop'), { method: 'POST' }); } catch (_) {}
-  startStream();
+el('reconnect').onclick = async () => {
+  try {
+    const r = await cameraRequest('/api/reconnect', {method:'POST'});
+    if (!r.ok) showAlert(r.error || 'Could not reconnect the selected webcam.');
+    else hideAlert();
+    if (r.status) applyStatus(r.status);
+  } catch (_) { showAlert('Reconnect request failed.'); }
+  await loadCameras();
 };
-el('feed').onerror = () => setTimeout(startStream, 1000);
+el('stop').onclick = async () => {
+  try { await cameraRequest('/api/stop', { method: 'POST' }); }
+  catch (_) { showAlert('Stop request failed.'); }
+};
+el('feed').onload = () => showFeedNotice('');
+el('feed').onerror = () => showFeedNotice('Could not display the video frame. Waiting for the next frame…');
 function showAlert(msg) { const a = el('alert'); a.textContent = msg; a.style.display = 'block'; }
 function hideAlert() { el('alert').style.display = 'none'; }
 
-async function poll() {   // one-shot pull, used after a local action (select camera)
-  let s;
-  try { s = await (await fetch(U('/api/status'))).json(); el('conn').textContent = 'live'; }
-  catch (_) { el('conn').textContent = 'offline'; return; }
-  applyStatus(s);
-}
-
 function applyStatus(s) {
+  lastStatus = s;
+  renderCameras(s.remembered);
   el('conn').textContent = 'live';
   const pill = el('pill'), txt = el('pillTxt');
   if (s.error) { pill.className = 'pill err'; txt.textContent = s.error; }
   else if (s.open) { pill.className = 'pill run'; txt.textContent = 'streaming'; }
   else { pill.className = 'pill idle'; txt.textContent = 'no camera'; }
 
-  el('res').textContent = s.width ? `${s.width}×${s.height}` : '—';
-  el('previewRes').textContent = s.preview_width ? `${s.preview_width}×${s.preview_height}` : '—';
-  el('trackingRes').textContent = s.tracking_width ? `${s.tracking_width}×${s.tracking_height}` : '—';
+  el('res').textContent = s.open && s.width ? `${s.width}×${s.height}` : '—';
+  el('previewRes').textContent = s.open && s.preview_width ? `${s.preview_width}×${s.preview_height}` : '—';
+  el('trackingRes').textContent = s.open && s.tracking_width ? `${s.tracking_width}×${s.tracking_height}` : '—';
   el('fps').textContent = s.open ? (s.fps || 0).toFixed(0) : '—';
   el('detectionFps').textContent = s.open ? `${(s.detection_fps || 0).toFixed(1)} / ${s.detection_fps_limit}` : '—';
   el('idx').textContent = (s.index != null) ? s.index : '—';
 
-  // first update: if nothing is open but we remember a camera, bring it up once
-  if (!autoSelected && !s.open && s.remembered) {
-    autoSelected = true;
-    if (camSel.value === '') camSel.value = String(s.remembered.index);
-    if (s.remembered.width) resSel.value = `${s.remembered.width}x${s.remembered.height}`;
-    if (s.remembered.tracking_width) trackingResSel.value = `${s.remembered.tracking_width}x${s.remembered.tracking_height}`;
-    if (s.remembered.detection_fps) detectionFpsSel.value = String(s.remembered.detection_fps);
-    selectCamera(s.remembered.index);
-  }
+  // Startup/reconnect selection belongs to the server's saved device identity.
+  // Never reopen a remembered numeric index from a status update or after Stop.
 }
 
 function applyTags(tags) {
@@ -257,21 +323,18 @@ function applyTags(tags) {
     + `<td>${t.missing > 0 ? t.missing.toFixed(1) + 's' : '—'}</td></tr>`).join('');
 }
 
-(async () => {
-  await loadCameras();
-  startStream();          // shows remembered feed (server auto-opens) or 'no signal'
-  poll();                 // initial status paint
-  // One SSE stream carries both the status panel and the tracked-tag table.
-  const es = new EventSource(U('/api/events'));   // auto-reconnects
-  es.onmessage = e => {
-    try {
-      const d = JSON.parse(e.data);
-      if (d.status) { el('conn').textContent = 'live'; applyStatus(d.status); }
-      if (d.tags) applyTags(d.tags);
-    } catch (_) {}
-  };
-  es.onerror = () => { el('conn').textContent = 'offline'; };
-})();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopStream();
+  else { showFeedNotice('Connecting video…'); startStream(); }
+});
+window.addEventListener('pagehide', stopStream);
+window.addEventListener('pageshow', startStream);
+setInterval(() => {
+  if (!document.hidden && (!previewAt || Date.now() - previewAt > 2500)) {
+    showFeedNotice('Waiting for live video…');
+  }
+}, 1000);
+loadCameras();
 </script>
 </body>
 </html>

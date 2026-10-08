@@ -150,7 +150,7 @@
 
 <script>
 const tabsEl = document.getElementById('tabs');
-const frame = document.getElementById('frame');
+let frame = document.getElementById('frame');
 // A player presentation can expand its own iframe without changing other tabs.
 window.addEventListener('message', event => {
   if (event.origin !== location.origin || event.source !== frame.contentWindow ||
@@ -159,7 +159,19 @@ window.addEventListener('message', event => {
   frame.style.cssText = event.data.expanded
     ? 'position:fixed;inset:0;width:100vw;height:100dvh;z-index:10000' : '';
 });
-frame.addEventListener('load', () => { frame.style.cssText = ''; });
+function replaceFrame(url, hidden = false) {
+  // A second navigation can cancel about:blank before the old document unloads.
+  // Remove its browsing context first so SSE/MJPEG connections cannot keep the
+  // next module waiting in the browser's per-origin connection queue.
+  const next = document.createElement('iframe');
+  next.id = 'frame';
+  next.title = 'prototype';
+  next.style.display = hidden ? 'none' : 'block';
+  next.addEventListener('load', () => { if (!hidden) next.style.cssText = ''; });
+  frame.replaceWith(next);
+  frame = next;
+  if (url) frame.src = freshUrl(url);
+}
 const descEl = document.getElementById('desc');
 const pageLinksEl = document.getElementById('pageLinks');
 const openTab = document.getElementById('openTab');
@@ -172,7 +184,6 @@ const toggleDisabled = document.getElementById('toggleDisabled');
 let protos = [];
 let active = null;
 let meta = { sandbox: '', label: 'Manual Override', accent: '' };
-let frameLoadSeq = 0;
 // "tab order" mode: ON shows the reorder/enable-disable GUI (drag handles,
 // switches, disabled tabs); OFF is the clean operating mode — plain tabs only,
 // so switching between machines never fights the management controls.
@@ -394,31 +405,25 @@ function mdToHtml(src) {
 }
 
 function selectProto(p) {
-  const seq = ++frameLoadSeq;
   active = p;
   for (const el of tabsEl.children) el.classList.toggle('active', el.dataset.slug === p.slug);
   descEl.innerHTML = mdToHtml(p.description || '') + (p.enabled ? '' : '<div>·  (disabled)</div>');
 
   if (!p.enabled) {
     // don't load the GUI — stop its polling — and offer to re-enable
-    frame.src = 'about:blank';
-    frame.style.display = 'none';
+    replaceFrame(null, true);
     disabledMsg.style.display = 'flex';
     pageLinksEl.innerHTML = '';
     reloadBtn.style.display = 'none';
     openTab.style.display = 'none';
     return;
   }
-  frame.style.display = 'block';
   disabledMsg.style.display = 'none';
   reloadBtn.style.display = '';
   openTab.style.display = '';
 
   openTab.href = p.default_url;
-  frame.src = 'about:blank';     // stop old streams before loading the next GUI
-  requestAnimationFrame(() => {
-    if (seq === frameLoadSeq) frame.src = freshUrl(p.default_url);
-  });
+  replaceFrame(p.default_url);
 
   // extra page links (e.g. "Open clean playfield ↗")
   pageLinksEl.innerHTML = '';
@@ -431,12 +436,8 @@ function selectProto(p) {
     if (page.newtab) a.target = '_blank';
     else a.onclick = e => {
       e.preventDefault();
-      const pageSeq = ++frameLoadSeq;
-      frame.src = 'about:blank';
       openTab.href = page.url;
-      requestAnimationFrame(() => {
-        if (pageSeq === frameLoadSeq) frame.src = freshUrl(page.url);
-      });
+      replaceFrame(page.url);
     };
     pageLinksEl.appendChild(a);
   }
@@ -444,11 +445,7 @@ function selectProto(p) {
 
 reloadBtn.onclick = () => {
   const url = frame.src;
-  const seq = ++frameLoadSeq;
-  frame.src = 'about:blank';
-  requestAnimationFrame(() => {
-    if (seq === frameLoadSeq) frame.src = freshUrl(url.replace(/[?&]_=\d+$/, ''));
-  });
+  replaceFrame(url.replace(/[?&]_=\d+$/, ''));
 };
 
 async function load() {

@@ -17,6 +17,8 @@ Stdlib only (urllib + json + threading); no new dependencies.
 """
 
 import json
+import math
+import uuid
 import threading
 import time
 import urllib.error
@@ -70,6 +72,8 @@ class RelayClient:
         self.auth = auth
 
         self._token = None
+        self.control_session = uuid.uuid4().hex
+        self._motion_epoch = None
         self._lock = threading.Lock()
         self._hb_thread = None
         self._hb_running = False
@@ -130,12 +134,24 @@ class RelayClient:
             raise RelayError((body or {}).get("error", "relay arm connect failed"),
                              status=status)
 
+    def _store_state(self, body):
+        """A delayed heartbeat must not undo a newer connection/Enable snapshot."""
+        with self._lock:
+            old, _ = self._our_arm_and_lease(self._relay_state)
+            new, _ = self._our_arm_and_lease(body)
+            old_epoch, new_epoch = old.get('motion_epoch'), new.get('motion_epoch')
+            if type(old_epoch) is int and type(new_epoch) is int:
+                if new_epoch < old_epoch:
+                    return
+                if new_epoch == old_epoch and (new.get('feedback_at') or 0) < (old.get('feedback_at') or 0):
+                    return
+            self._relay_state = body
+
     def _refresh_state(self):
         """Refresh the cached full relay state once, without touching the lease."""
         status, body = self._get("/api/state")
         if status is not None and body:
-            with self._lock:
-                self._relay_state = body
+            self._store_state(body)
         return body
 
     # -- connection (lease) ---------------------------------------------------
@@ -155,6 +171,7 @@ class RelayClient:
                              holder=(body or {}).get("holder"), status=status)
         with self._lock:
             self._token = body.get("token")
+            self._motion_epoch = body.get("motion_epoch")
             self._hb_ok = True
         self._refresh_state()
         self._start_heartbeat()
@@ -176,7 +193,8 @@ class RelayClient:
             if status is not None and body and body.get("ok"):
                 with self._lock:
                     self._hb_ok = True
-                    self._relay_state = body.get("state") or self._relay_state
+                if body.get("state"):
+                    self._store_state(body["state"])
             else:
                 # Lost the lease (expired / revoked / unreachable): stop holding it.
                 with self._lock:
@@ -214,6 +232,22 @@ class RelayClient:
         merged.update(arm)
         return merged, lease
 
+    @staticmethod
+    def validate_z_limits(value):
+        if (not isinstance(value, dict) or value.get('contract') != 'hhh.relay.z-limits'
+                or type(value.get('version')) is not int or value['version'] != 1
+                or value.get('status') != 'ready'
+                or any(type(value.get(k)) not in (int,float) or not math.isfinite(value[k])
+                       for k in ('minimum','maximum'))
+                or not -150 <= value['minimum'] < value['maximum'] <= 230):
+            return {'contract':'hhh.relay.z-limits','version':1,'status':'unavailable',
+                    'error':'Relay Z limits unavailable'}
+        return dict(value)
+
+    def read_z_limits(self):
+        code, value = self._get('/api/z-limits')
+        return self.validate_z_limits(value if code == 200 else None)
+
     def get_state(self):
         """Return the controller-shaped status dict derived from the cached relay
         state, sourced from OUR side's arm + lease. Shape matches the direct driver's
@@ -227,14 +261,18 @@ class RelayClient:
         pump_mode = arm.get("pump_mode", "off")
         link_connected = bool(have_token and hb_ok)
         arm_connected = bool(arm.get("connected"))
-        connected = link_connected
+        connected = link_connected and arm_connected
+        stamp = arm.get('feedback_at')
+        fresh = (connected and arm.get('feedback_ok') is True
+                 and type(stamp) in (int, float) and math.isfinite(stamp)
+                 and 0 <= time.time()-stamp <= 1.5)
         # We own our own arm now: "holder" (for the controller UI's holder===side
         # check) is OUR side while we're present/driving, else None.
         present = bool(lease.get("present"))
         holder = self.side if (have_token and hb_ok and present) else None
         return {
             "connected": connected,
-            "robot_mode": 0,
+            "robot_mode": arm.get("robot_mode", 0),
             "mode_name": arm.get("mode_name", "RELAY"),
             "enabled": bool(link_connected and arm_connected and arm.get("enabled")),
             "error": bool(arm.get("servo_error")),
@@ -244,8 +282,15 @@ class RelayClient:
             "digital_in": 0,
             "digital_out": self._relay_pump_to_do_bits(pump_mode),
             "pump_mode": pump_mode,
-            "last_feedback": time.time() if arm_connected else 0.0,
-            "feedback_ok": arm_connected,
+            "last_feedback": stamp if fresh else 0.0,
+            "feedback_ok": fresh,
+            "motion_epoch": arm.get("motion_epoch"),
+            "motion_ready": bool(fresh and arm.get("motion_ready") is True
+                                 and arm.get("robot_mode") in (5, 7)
+                                 and type(self._motion_epoch) is int
+                                 and self._motion_epoch == arm.get("motion_epoch")),
+            "control_session": self.control_session,
+            "z_limits": self.validate_z_limits((rs or {}).get("z_limits")),
             "servo_active": bool(arm.get("servo_active")),
             "servo_error": arm.get("servo_error"),
             "control_mode": arm.get("control_mode"),
@@ -262,7 +307,7 @@ class RelayClient:
         return arm.get("target")
 
     # -- motion ---------------------------------------------------------------
-    def set_target_pose(self, x, y, z, r=None, *, ltz_action="xyz"):
+    def set_target_pose(self, x, y, z, r=None, *, ltz_action="xyz", motion_epoch=None):
         """Forward a Cartesian target to the relay. Signature matches the direct
         driver's set_target_pose so prototype.py / recall call it unchanged. R
         falls back to the last cached target's R when omitted."""
@@ -271,8 +316,12 @@ class RelayClient:
             r = cur[3] if cur and len(cur) > 3 else 0.0
         token = self._token
         if token is None:
-            return
+            return False, "Not connected"
+        epoch = self._motion_epoch
+        if motion_epoch is not None and motion_epoch != epoch:
+            return False, "Arm position changed. Reconnect to synchronize controls."
         status, body = self._post("/api/move", {
+            "motion_epoch": epoch,
             "side": self.side, "token": token, "mode": "cartesian", "ltz_action": ltz_action,
             "pose": [float(x), float(y), float(z), float(r)],
         })
@@ -286,6 +335,9 @@ class RelayClient:
             float(clamped.get("r", r)),
         ]
         with self._lock:
+            arm, _ = self._our_arm_and_lease(self._relay_state)
+            if self._token != token or self._motion_epoch != epoch or arm.get('motion_epoch') != epoch:
+                return False, "Arm changed while moving. Reconnect to synchronize controls."
             rs = self._relay_state
             if isinstance(rs, dict):
                 arms = rs.setdefault("arms", {})
@@ -294,14 +346,18 @@ class RelayClient:
                 arm["control_mode"] = "cartesian"
         return True, None
 
-    def set_target_joints_guarded(self, joints, cal2_guard):
+    def set_target_joints_guarded(self, joints, cal2_guard, *, motion_epoch=None):
         """Send a joint target through this lease with an LTX Cal 2 guard."""
         if not isinstance(joints, (list, tuple)) or len(joints) != 4:
             return False, {"error": "expected four joint angles"}
         token = self._token
         if token is None:
             return False, {"error": "not connected"}
+        epoch = self._motion_epoch
+        if motion_epoch is not None and motion_epoch != epoch:
+            return False, {"error": "Arm position changed. Reconnect to synchronize controls."}
         status, body = self._post("/api/move", {
+            "motion_epoch": epoch,
             "side": self.side,
             "token": token,
             "mode": "joint",
@@ -314,6 +370,9 @@ class RelayClient:
         target = [float(clamped.get(f"j{index + 1}", joints[index]))
                   for index in range(4)]
         with self._lock:
+            arm, _ = self._our_arm_and_lease(self._relay_state)
+            if self._token != token or self._motion_epoch != epoch or arm.get('motion_epoch') != epoch:
+                return False, {"error": "Arm changed while moving. Reconnect to synchronize controls."}
             rs = self._relay_state
             if isinstance(rs, dict):
                 arms = rs.setdefault("arms", {})
@@ -346,9 +405,10 @@ class RelayClient:
     # -- dashboard-style commands (mapped to relay endpoints) -----------------
     def enable(self):
         """Ask the relay to enable the arm (operator-level; clients MAY call it)."""
-        status, body = self._post("/api/enable", {"side": self.side})
+        status, body = self._post("/api/enable", {"side": self.side, "token": self._token})
         ok = bool(body and body.get("ok"))
         if ok:
+            self._motion_epoch = body.get("motion_epoch")
             self._refresh_state()
         return (0 if ok else -1), json.dumps(body) if body else ""
 

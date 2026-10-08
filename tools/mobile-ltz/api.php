@@ -15,9 +15,9 @@ if (!in_array($team,['green','purple'],true)) fail(400,'Invalid player team');
 // Presentation URLs may carry an asset revision; it is never an upstream route.
 $path = explode('?', $path, 2)[0];
 $client = preg_match('/^client\/(?:manifest|(?:[a-f0-9]{32}|latest)\/(?:index\.html|mobile\.css|mobile\.js|viewport\.js|live-game\.js|network\.js|joint-rig\.js))$/D', $path) === 1;
-if (!$client && !in_array($path, ['login','state','events','command','player','journey','history','calibrations','renderer.js'], true) && !str_starts_with($path, 'assets/')) fail(404,'Not found');
+if (!$client && !in_array($path, ['login','state','events','command','player','journey','history','calibrations','diagnostics','renderer.js'], true) && !str_starts_with($path, 'assets/')) fail(404,'Not found');
 if (str_contains($path,'..') || str_contains($path,'\\') || str_contains($path,'#')) fail(400,'Invalid path');
-$post = in_array($path, ['login','command','player','journey'], true);
+$post = in_array($path, ['login','command','player','journey','diagnostics'], true);
 if ($_SERVER['REQUEST_METHOD'] !== ($post ? 'POST' : 'GET')) fail(405,'Method not allowed');
 if ($post && ($_SERVER['HTTP_ORIGIN'] ?? '') !== 'https://mecharena.eu') fail(403,'Origin rejected');
 if ($post && !str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'application/json')) fail(415,'JSON required');
@@ -67,7 +67,7 @@ if ($path === 'login') {
     header('Content-Type: application/json');echo '{"ok":true}';exit;
 }
 // Never pass a tunnel HTML error page or a truncated JSON body to Safari.
-if (in_array($path,['state','command','player','journey','history','calibrations','client/manifest'],true)) {
+if (in_array($path,['state','command','player','journey','history','calibrations','diagnostics','client/manifest'],true)) {
     curl_setopt($ch,CURLOPT_RETURNTRANSFER,true);
     $raw=curl_exec($ch);$code=(int)curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
     if ($raw===false) fail(503,'Local Gamemaster connection was interrupted. Try again.');

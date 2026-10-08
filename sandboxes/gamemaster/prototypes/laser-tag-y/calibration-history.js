@@ -4,6 +4,7 @@ window.CalibrationHistory={create({root,overlay,image,read,apply,onPreview}){
   const side=root.querySelector('[data-history-side]'),select=root.querySelector('[data-history-select]');
   const preview=root.querySelector('[data-history-preview]'),save=root.querySelector('[data-history-apply]');
   const refresh=root.querySelector('[data-history-refresh]'),status=root.querySelector('[data-history-status]'),cameraNotice=root.querySelector('[data-history-camera]');
+  const warning=root.querySelector('[data-history-warning]');
   let history=null,show=false,busy=false,loading=false,state=null,generation=0,signature='',lastPhase=null,camera=null,received=0;
   const chosen=()=>history?.rows.find(row=>row.id===(select.value==='latest'?history.latest_id:select.value));
   const date=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():'Undated';
@@ -14,9 +15,11 @@ window.CalibrationHistory={create({root,overlay,image,read,apply,onPreview}){
   }
   function render(){
     const row=chosen(),ready=!!row?.applicable;
+    warning.textContent=row?.camera_compatibility?.warning||'';
+    warning.hidden=!warning.textContent;
     preview.disabled=loading||!ready;preview.setAttribute('aria-pressed',String(show));
     preview.textContent=show?'Hide preview':'Preview on camera';
-    save.disabled=loading||busy||!ready||state?.status!=='ready'||state?.phase==='running';
+    save.disabled=loading||busy||!ready||row?.camera_compatibility?.status==='unavailable'||state?.status!=='ready'||state?.phase==='running';
     side.disabled=select.disabled=refresh.disabled=busy;
     const cameraReady=cameraFresh();
     cameraNotice.hidden=!show||cameraReady&&!image.hidden;

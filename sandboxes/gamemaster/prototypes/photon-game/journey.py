@@ -131,7 +131,7 @@ class Journey:
                            'milestone_id':player['calibration_milestone'],'lesson_version':1,
                            'calibration_revision':session['calibration_revision'],'evidence_id':session['evidence_id']})
         self.call('auto-pickup-game','calibration_session_release','hhh.cal2.session',1,
-                  {'side':side,'id':session['id']})
+                  {'side':side,'id':session['id'],'defer_stop':session.get('completion_basis')=='measured-targets'})
         state.update(active_side=None,turn=state['turn']+1,error=None)
         self._save(state)
 
@@ -225,11 +225,13 @@ class Journey:
     def complete_calibration(self, side):
         with self.operation_lock:
             state=self._state()
-            if state['phase']!='calibration' or state['active_side']!=side:
+            selected=state['queue'][state['turn']] if state['turn']<len(state['queue']) else None
+            if state['phase']!='calibration' or selected!=side:
                 raise PermissionError('wait for your calibration turn')
+            session_id=state['id']+':'+side
             cal=self.call('auto-pickup-game','calibration_session_complete','hhh.cal2.session',1,
-                          {'side':side,'id':state['session_id']})
-            session=cal.get('sessions',{}).get(state['session_id'],{})
+                          {'side':side,'id':session_id})
+            session=cal.get('sessions',{}).get(session_id,{})
             if session.get('stage')!='complete' or session.get('side')!=side:
                 raise ValueError('Calibration completion receipt unavailable')
             self._complete_turn(state,session)

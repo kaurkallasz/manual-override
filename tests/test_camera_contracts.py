@@ -116,5 +116,17 @@ class CameraContractTests(unittest.TestCase):
             with self.assertRaises(OSError):self.client.post('/api/calibrate')
         self.assertIs(self.camera._calibration,previous)
 
+    def test_controller_events_share_preview_status_and_controls(self):
+        with patch.object(self.camera, '_preview_jpeg', return_value=b'fixture-jpeg'), \
+                patch.object(self.camera, '_status_dict', return_value={'camera_ready':True}):
+            response = self.client.get('/api/events', buffered=False)
+            self.assertEqual(response.mimetype, 'text/event-stream')
+            event = json.loads(next(iter(response.response)).decode().removeprefix('data: '))
+            response.close()
+            self.assertEqual(event['preview'], 'data:image/jpeg;base64,Zml4dHVyZS1qcGVn')
+            self.assertTrue(event['calibration']['camera_ready'])
+            self.assertTrue(event['controls']['ok'])
+            self.assertIn(('command', {'action':'focus_read'}), self.calls)
+
 
 if __name__ == '__main__':unittest.main()

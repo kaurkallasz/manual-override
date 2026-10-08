@@ -19,6 +19,7 @@ from flask import Blueprint, jsonify, request, send_from_directory
 import live
 from photon_game_runtime import ContractLevelModel, DefenseEngine, SettingsStore
 from photon_game_runtime.engine import orc_schedule
+from photon_game_runtime.atom_buff import validated as _validated_occupancy, unavailable as _unavailable_occupancy
 from photon_game_runtime.settings import validate_settings, PRESETS
 from progress_link import ProgressLink
 from journey import Journey
@@ -447,6 +448,53 @@ def _unavailable_placement(error):
     }
 
 
+def _validated_stacking(value, sampled_at, source_epoch):
+    """Validate the optional camera-only cover contract independently of arms."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or value.get("contract") != "photon.board.stacking"
+        or type(value.get("version")) is not int or value["version"] != 1
+        or value.get("status") != "ready"
+        or value.get("sampled_at") != sampled_at
+        or value.get("source_epoch") != source_epoch
+        or not isinstance(value.get("relations"), list)
+        or len(value["relations"]) > 512
+    ):
+        raise ValueError("Invalid stacking contract")
+    clean, lowers, uppers, identities = [], set(), set(), set()
+    for relation in value["relations"]:
+        if not isinstance(relation, dict):
+            raise ValueError("Invalid cover")
+        lower, upper = relation.get("lower_id"), relation.get("upper_id")
+        identity, stable = relation.get("relation_id"), relation.get("stable")
+        numbers = [relation.get(key) for key in (
+            "distance", "lower_seen_at", "observed_since", "stable_at",
+        )]
+        if (
+            type(lower) is not int or not 100 <= lower <= 999
+            or type(upper) is not int or not 100 <= upper <= 999 or upper == lower
+            or lower in lowers or upper in uppers
+            or not isinstance(identity, str) or not 1 <= len(identity) <= 240
+            or identity in identities or type(stable) is not bool
+            or any(type(number) not in (int, float) or not math.isfinite(number) for number in numbers)
+        ):
+            raise ValueError("Invalid cover identity or evidence")
+        distance, seen_at, since, stable_at = numbers
+        if (not 0 <= distance <= 1 or not seen_at <= since < stable_at
+            or since > sampled_at or stable and stable_at > sampled_at + 0.01):
+            raise ValueError("Invalid cover timestamps or distance")
+        lowers.add(lower)
+        uppers.add(upper)
+        identities.add(identity)
+        clean.append({key: relation[key] for key in (
+            "relation_id", "lower_id", "upper_id", "distance", "lower_seen_at",
+            "observed_since", "stable_at", "stable",
+        )})
+    return {**value, "relations": clean}
+
+
 def _board_observation(diagnostics=None):
     module = _module("photon-board")
     if module is None or not callable(getattr(module, "runtime_observation", None)):
@@ -548,6 +596,7 @@ def _board_observation(diagnostics=None):
                 "stable_at": stable_at, "stable": stable,
                 "marker_seen_at": marker_seen_at,
             })
+        stacking = _validated_stacking(placement.get("stacking"), sampled_at, source_epoch)
     except (KeyError, TypeError, ValueError, OverflowError):
         return None, "Photon Board placement payload is invalid"
     return {
@@ -558,22 +607,33 @@ def _board_observation(diagnostics=None):
         "source": str(value.get("source") or "unknown")[:80],
         "source_epoch": source_epoch, "sampled_at": sampled_at,
         "relations": clean_relations,
+        "stacking": stacking,
     }, None
 
 
 def _physical_observation():
     upstream = {}
     observation, error = _board_observation(upstream)
+    occupancy_supported = False
+    try:
+        module = _module('photon-board')
+        reader = getattr(module, 'occupancy_snapshot', None)
+        occupancy_supported = callable(reader)
+        occupancy = _validated_occupancy(reader()) if callable(reader) else _unavailable_occupancy('Board occupancy unavailable')
+    except Exception as exc:
+        occupancy = _unavailable_occupancy(f'Board occupancy failed: {exc}')
+    if occupancy_supported:
+        upstream['occupancy'] = {'status': occupancy['status'], 'error': occupancy.get('error')}
     if error:
         _set_input("board", status="unavailable", error=error, upstream=upstream)
-        return _unavailable_placement(error)
+        return {**_unavailable_placement(error), 'occupancy': occupancy}
     _set_input(
         "board", status="ready", revision=int(observation["board_revision"]),
         source=str(observation.get("source") or "unknown"),
         placement_revision=int(observation["revision"]),
         upstream=upstream,
     )
-    return _copy(observation)
+    return {**_copy(observation), 'occupancy': occupancy}
 
 
 def _append_history(kind, detail=None):

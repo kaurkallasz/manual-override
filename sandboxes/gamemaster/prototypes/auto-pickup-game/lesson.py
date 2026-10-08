@@ -1,5 +1,6 @@
 """Cal 2's durable drafts and single playfield reservation; no device ownership."""
 import copy
+import itertools
 import json
 import math
 import os
@@ -7,6 +8,16 @@ from pathlib import Path
 import threading
 import time
 import uuid
+
+
+def _spread(points):
+    """Require anchors spanning the board, not one edge or one occluding object."""
+    return any(abs((b['u']-a['u'])*(c['v']-a['v'])-(b['v']-a['v'])*(c['u']-a['u'])) >= .02
+               for a,b,c in itertools.combinations(points,3))
+
+
+def _pixel_distance(a, b, size):
+    return math.hypot((a['u']-b['u'])*size[0], (a['v']-b['v'])*size[1])
 
 
 def atomic_json(path, value):
@@ -28,6 +39,23 @@ def atomic_json(path, value):
         temp.unlink(missing_ok=True)
 
 
+def set_capture_heights(session):
+    """Each arm uses its six measured ground Z values, plus 40 mm clearance."""
+    draft = session['draft']
+    points = list(draft['points'].values())
+    complete = (set(session['captures']) == {str(i) for i in range(30, 36)}
+                and len(points) == 6 and {p['marker'] for p in points} == set(range(30, 36)))
+    pickup = transport = None
+    if complete:
+        if any(p['pose'].get('set') is not True or type(p['pose'].get('z')) not in (int, float)
+               or not math.isfinite(p['pose']['z']) for p in points):
+            raise ValueError('All six captured arm heights must be finite')
+        pickup = math.fsum(p['pose']['z'] / 6 for p in points)
+        transport = pickup + 40
+    session.update(pickup_height=pickup, transport_height=transport)
+    draft.update(pickup_height=pickup, transport_height=transport)
+
+
 class LessonStore:
     def __init__(self, path):
         self.path = Path(path)
@@ -45,6 +73,9 @@ class LessonStore:
             self.state['epoch'] = uuid.uuid4().hex
             self.state['active_side'] = None
             self.state['active_id'] = None
+            for session in self.state['sessions'].values():
+                if session.get('stage') != 'complete':
+                    set_capture_heights(session)
         except FileNotFoundError:
             pass
 
@@ -61,7 +92,11 @@ class LessonStore:
             if cache:
                 value['marker_preparation']={'id':cache['id'],'side':cache['side'],
                     'marker_positions':copy.deepcopy(cache['points']),
-                    'ready':len(cache['points'])==6 and -1<=time.time()-cache.get('frame_at',0)<=1.5}
+                    'reference_id':cache['reference_id'],
+                    'movement_pending':bool(cache.get('movement')),
+                    'notice':cache.get('notice'),
+                    'ready':len(cache['points'])==6 and not cache.get('movement')
+                            and -1<=time.time()-cache.get('frame_at',0)<=1.5}
                 if cache['id']==self.state.get('active_id') and cache['side']==self.state.get('active_side'):
                     value['sessions'][cache['id']]['marker_positions']=copy.deepcopy(cache['points'])
             return value
@@ -70,35 +105,95 @@ class LessonStore:
         with self.lock:
             self.marker_cache=None
 
+    def suspend_marker_observation(self):
+        """An outage prevents capture but is not evidence that the camera moved."""
+        with self.lock:
+            if self.marker_cache:
+                self.marker_cache.update(frame_at=0, movement=None)
+
+    def _reset_marker_reference(self, cache, reason):
+        # A moved camera invalidates both halves of every camera/arm pair and
+        # the raised samples. Never combine old captures with new references.
+        state=copy.deepcopy(self.state)
+        session=state['sessions'].get(cache['id'])
+        if session and session.get('stage') in ('points','perspective'):
+            for point in session['draft']['points'].values():
+                point.update(camera=None,pose={'set':False})
+                point.pop('camera_observed_at',None)
+                point.pop('camera_cached',None)
+            session['draft']['parallax_points']={str(m):None for m in (31,35,33,34)}
+            session.update(captures={},ground={},stage='points',camera_revision=None,
+                           calibration_revision=None,arrivals=[],pickup_evidence=None,
+                           reference_reset={'reason':reason,'at':time.time()})
+            set_capture_heights(session)
+            self._save(state)
+        cache.update(points={},started_at=time.time(),frame_at=0,movement=None,
+                     reference_id=uuid.uuid4().hex,notice=reason)
+
     def prepare_markers(self, side, session_id, layout):
         """Start optical preparation when targets load, before any motion grant."""
         with self.lock:
             key=[session_id,side,self.state['epoch'],layout]
             if not self.marker_cache or self.marker_cache['key']!=key:
+                if self.marker_cache and self.marker_cache['id']==session_id:
+                    self._reset_marker_reference(self.marker_cache,'Calibration board changed. Capture the six arm points again.')
                 self.marker_cache={'key':copy.deepcopy(key),'id':session_id,'side':side,'points':{},
-                                   'started_at':time.time(),'context':None}
+                                   'started_at':time.time(),'context':None,'reference_id':uuid.uuid4().hex}
 
     def observe_markers(self, side, session_id, context, frame_at, tags):
-        """Remember corrected codes only inside the owner's prepared display."""
+        """Freeze confirmed, currently visible targets as in Auto PP Cal 2."""
         with self.lock:
             cache=self.marker_cache
             if not cache or cache['id']!=session_id or cache['side']!=side:
                 raise ValueError('calibration marker preparation has not started')
             if cache['context']!=context:
                 if cache['context'] is not None:
-                    cache.update(points={},started_at=time.time())
+                    self._reset_marker_reference(cache,'Camera source or correction changed. Capture the six arm points again.')
                 cache['context']=copy.deepcopy(context)
-            points=self.marker_cache['points']
-            if frame_at<=cache['started_at']:return copy.deepcopy(points)
+            points=cache['points']
+            if frame_at<=max(cache['started_at'],cache.get('frame_at',0)):return copy.deepcopy(points)
             cache['frame_at']=frame_at
+            visible={}
             for tag in tags:
                 marker=tag.get('id')
                 if type(marker) is not int or marker not in range(30,36) or tag.get('missing',0)!=0:continue
                 if not all(type(tag.get(k)) in (int,float) and math.isfinite(tag[k]) and 0<=tag[k]<=1 for k in ('nx','ny')):continue
-                previous=points.get(str(marker))
-                if previous and frame_at<=previous['frame_at']:continue
-                points[str(marker)]={'camera':{'u':tag['nx'],'v':tag['ny']},'frame_at':frame_at}
+                visible[str(marker)]={'u':tag['nx'],'v':tag['ny']}
+            # Four separated targets must remain displaced by >4 pixels for
+            # three distinct frames spanning 0.5 s. Single-tag projection onto
+            # the arm, jitter and occlusion must never replace frozen points.
+            size=context.get('size') or []
+            if len(size)!=2 or any(type(n) not in (int,float) or not math.isfinite(n) or n<=0 for n in size):
+                raise ValueError('valid camera dimensions required')
+            moved={m:p for m,p in visible.items() if m in points
+                   and _pixel_distance(p,points[m]['camera'],size)>4}
+            movement=cache.get('movement')
+            if len(moved)>=4 and _spread([points[m]['camera'] for m in moved]):
+                stable=({m:p for m,p in moved.items() if m in movement['points']
+                         and _pixel_distance(p,movement['points'][m],size)<=2} if movement else {})
+                if len(stable)>=4 and _spread([points[m]['camera'] for m in stable]):
+                    movement['frames']+=1
+                    if movement['frames']>=3 and frame_at-movement['since']>=.5:
+                        self._reset_marker_reference(cache,'Camera moved. References cleared; capture the six arm points again.')
+                        return {}
+                else:
+                    cache['movement']={'points':moved,'since':frame_at,'frames':1}
+            else:
+                cache['movement']=None
+            if not cache.get('movement'):
+                for marker,camera in visible.items():
+                    if marker not in points:
+                        points[marker]={'camera':camera,'frame_at':frame_at}
             return copy.deepcopy(points)
+
+    def check_marker_reference(self, measurement):
+        """Reject a command measured just before another poll invalidated it."""
+        with self.lock:
+            cache=self.marker_cache
+            if cache and cache.get('movement'):
+                raise ValueError('Camera movement detected; waiting for stable calibration targets')
+            if 'reference_id' in measurement and (not cache or measurement['reference_id']!=cache['reference_id']):
+                raise ValueError('Camera references changed; capture again')
 
     def defer_stop(self, side, session_id):
         """Revoke lesson access durably before changing the projected screen."""
@@ -144,6 +239,8 @@ class LessonStore:
                            'ground': {}, 'stage': 'points', 'arrivals': [], 'calibration_revision': None,
                            'piece_ids':value.get('piece_ids',[]),'pickup_evidence':None}
                 state['sessions'][session_id] = session
+            if session['stage'] != 'complete':
+                set_capture_heights(session)
             state['active_side'] = side
             state['active_id'] = session_id
             if 'display_camera_view' in value:
@@ -189,6 +286,7 @@ class LessonStore:
 
     def capture(self, side, value, measurement):
         with self.lock:
+            self.check_marker_reference(measurement)
             state = copy.deepcopy(self.state)
             session = self._active(state, side, value.get('id'))
             marker = value.get('marker')
@@ -219,6 +317,7 @@ class LessonStore:
                 session['draft']['parallax_points'][str(marker)] = None
             if len(session['captures']) == 6:
                 session['stage'] = 'perspective'
+            set_capture_heights(session)
             self._save(state)
             return self.snapshot()
 
@@ -227,6 +326,7 @@ class LessonStore:
         if type(marker) is not int or marker not in (31,35,33,34):
             raise ValueError('outer perspective marker required')
         with self.lock:
+            self.check_marker_reference(measurement)
             state = copy.deepcopy(self.state)
             session = self._active(state, side, value.get('id'))
             if session.get('camera_revision') != measurement.get('camera_revision'):
@@ -246,16 +346,24 @@ class LessonStore:
             self._save(state)
             return self.snapshot()
 
-    def height(self, side, value, pose):
-        if value.get('height') not in ('pickup_height','transport_height'):
-            raise ValueError('supported height required')
+    def _measured_session(self, state, side, session_id):
+        """Read captured evidence without renewing an expired motion grant."""
+        session=state['sessions'].get(session_id)
+        if not session or session['side']!=side:
+            raise PermissionError('calibration measurements belong to another turn')
+        if self.marker_cache and self.marker_cache['id']==session_id:
+            self.check_marker_reference({})
+        return session
+
+    def derive_heights(self, side, session_id, *, offline=False):
         with self.lock:
             state = copy.deepcopy(self.state)
-            session = self._active(state, side, value.get('id'))
-            session[value['height']] = pose[2]
-            if value['height'] == 'pickup_height':
-                session['draft']['pickup_height'] = pose[2]
-            self._save(state)
+            session = self._measured_session(state, side, session_id) if offline else self._active(state, side, session_id)
+            set_capture_heights(session)
+            if session['pickup_height'] is None:
+                raise ValueError('Capture all six arm points to calculate heights')
+            if state != self.state:
+                self._save(state)
             return self.snapshot()
 
     def archive_rig(self, side, calibration):
@@ -270,14 +378,14 @@ class LessonStore:
             if identity in records:return
             records[identity]={'id':identity,'side':side,'label':'Previous saved rig',
                                'revision':calibration.get('revision',1),'saved_at':arm.get('updated_at'),
-                               'draft':copy.deepcopy(arm),'transport_height':calibration.get('shared_z',{}).get('transport_height'),
+                               'draft':copy.deepcopy(arm),'transport_height':arm.get('transport_height') if arm.get('transport_height') is not None else calibration.get('shared_z',{}).get('transport_height'),
                                'camera_revision':arm.get('camera_revision',calibration.get('camera_revision'))}
             self._save(state)
 
-    def mark_committed(self, side, session_id, revision):
+    def mark_committed(self, side, session_id, revision, *, offline=False):
         with self.lock:
             state = copy.deepcopy(self.state)
-            session = self._active(state, side, session_id)
+            session = self._measured_session(state, side, session_id) if offline else self._active(state, side, session_id)
             session.update(stage='tutorial', calibration_revision=revision, committed_at=time.time())
             record={'id':session_id+':'+str(revision),'side':side,'revision':revision,
                     'saved_at':session['committed_at'],'practice':session['practice'],
@@ -340,7 +448,7 @@ class LessonStore:
         """Completion receipt for the validated target measurements, not pickup proof."""
         with self.lock:
             state=copy.deepcopy(self.state)
-            session=self._active(state,side,session_id)
+            session=self._measured_session(state,side,session_id)
             if session['stage']=='complete':return self.snapshot()
             if (session['stage']!='tutorial' or type(session.get('calibration_revision')) is not int
                     or not session.get('committed_at') or len(session['captures'])!=6
@@ -361,7 +469,10 @@ class LessonStore:
                     state['active_id'] = None
                     self._save(state)
                 return self.snapshot()
-            self._active(state, side, session_id, allow_paused=True)
+            if not session or session.get('stage')!='complete':
+                self._active(state, side, session_id, allow_paused=True)
+            elif state.get('active_side') not in (None,side) or state.get('active_id') not in (None,session_id):
+                raise PermissionError('another calibration owns the playfield')
             state['active_side'] = None
             state['active_id'] = None
             self.marker_cache = None

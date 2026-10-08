@@ -1,5 +1,22 @@
 # Laser Tag Y
 
+## Atom buff display
+
+Both displays render Game's explicit `atom_buff_state`. Active turrets keep a
+green halo for both teams, including their L4 companions. The inexpensive halo
+survives dense effect quality and clips against authored ArUco keep-out regions.
+An active health bar has two equal stacked rows within the existing width and
+a ×2 indicator; together they represent the effective doubled maximum. Damage
+drains the bonus row before the base row. Inactive/unavailable states restore
+the single bar and remove the halo. The selected defense details show
+`Health ×2 · Damage ×2` only while active.
+
+The Virtual Atom controls provide **Lift selected Atom**, forwarding the existing
+Game `place` command with null `socket_id`. It removes occupancy, not the installed
+turret. The renderer cannot decide presence, heal, or calculate weapon damage.
+Full and incremental snapshots, including reconnects, carry explicit clearing
+through the existing SSE transport. Both pages use renderer revision 18.
+
 ## L4 companion display
 
 Both game pages render Game's authoritative `companions` alongside its primary

@@ -55,6 +55,35 @@ class IndicatorMotion{
   return this.value;
  }
 }
+// Play measured positions on their source timeline, a short distance behind
+// receipt. Unlike easing toward the latest packet, this keeps constant-speed
+// travel constant through packet boundaries. Never predict an unmeasured pose.
+class PositionPlayback{
+ constructor(){this.reset();}
+ reset(){this.samples=[];this.cursor=null;this.frameAt=null;this.settled=false;}
+ update(point,stamp,now,delay=250,settled=false){
+  if(!point||!['x','y','z'].every(k=>Number.isFinite(point[k]))){this.reset();return null;}
+  const copy=()=>({x:point.x,y:point.y,z:point.z});
+  if(!Number.isFinite(stamp)||!Number.isFinite(now)){this.reset();return copy();}
+  let last=this.samples.at(-1);
+  if(last&&stamp<last.at)return this.update(last.point,last.at,now,delay,this.settled);
+  if(last&&(stamp-last.at>1500||now-this.frameAt>1500||now<this.frameAt)){this.reset();last=null;}
+  // A measured stop ends playback immediately at the measured pose, including
+  // mid-route pauses. Never finish a stopped movement toward a requested goal.
+  if(settled){this.samples=[{at:stamp,point:copy()}];this.cursor=stamp;this.frameAt=now;this.settled=true;return copy();}
+  if(this.settled){this.cursor=Math.min(this.cursor,stamp-delay);this.frameAt=now;this.settled=false;}
+  if(!last){this.cursor=stamp-delay;this.frameAt=now;}
+  if(!last||stamp>last.at)this.samples.push({at:stamp,point:copy()});
+  last=this.samples.at(-1);
+  // If the buffer runs dry, hold the last measured position. Resume from it
+  // at real-time speed when feedback returns, without a catch-up jump.
+  this.cursor=Math.min(last.at,this.cursor+Math.max(0,now-this.frameAt));this.frameAt=now;
+  while(this.samples.length>2&&(this.samples[1].at<=this.cursor||this.samples.length>128))this.samples.shift();
+  const a=this.samples[0],b=this.samples[1]||a;
+  const t=b.at>a.at?clamp((this.cursor-a.at)/(b.at-a.at),0,1):0;
+  return Object.fromEntries(['x','y','z'].map(k=>[k,a.point[k]+(b.point[k]-a.point[k])*t]));
+ }
+}
 // Align the stationary shoulder guide with the control panel edge. Never follow
 // a moving elbow or telemetry packet; only layout/limit changes can reframe it.
 function alignRight(frame,bounds,rightEdge=frame.w-8){
@@ -236,5 +265,5 @@ function mount(host,options){
  raf=requestAnimationFrame(tick);
  return {cancelDrag:finish,relayout(){drawKey='';},destroy(){finish();destroyed=true;cancelAnimationFrame(raf);}};
 }
-const api={pose,bearing,layout,alignRight,Motion,IndicatorMotion,JointControls,JointDrag,delta,displayAngles,sliderBounds,baseDialAngle,baseDialValue,mount};if(typeof module==='object'&&module.exports)module.exports=api;else root.MobileJointRig=api;
+const api={pose,bearing,layout,alignRight,Motion,IndicatorMotion,PositionPlayback,JointControls,JointDrag,delta,displayAngles,sliderBounds,baseDialAngle,baseDialValue,mount};if(typeof module==='object'&&module.exports)module.exports=api;else root.MobileJointRig=api;
 })(typeof globalThis==='object'?globalThis:this);

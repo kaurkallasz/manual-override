@@ -38,6 +38,8 @@ import sys
 import threading
 import time
 from collections import deque
+from contextlib import ExitStack
+from functools import wraps
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
@@ -157,7 +159,7 @@ BLOW_DO_INDEX = 1
 
 # Per-side arm connections, guarded by _arm_locks[side] while reconnecting.
 _robots = {s: None for s in SIDES}
-_arm_locks = {s: threading.Lock() for s in SIDES}
+_arm_locks = {s: threading.RLock() for s in SIDES}
 # Last link params each side connected with, so /api/reset can rebuild the driver
 # (fresh sockets) without the operator re-typing the IP.
 _last_link = {s: None for s in SIDES}
@@ -177,13 +179,28 @@ _arb_lock = threading.Lock()
 _token_counter = 0             # bumps on every acquire → opaque per-side tokens
 # Per side: who (if anyone) holds it, the mode they acquired with, and their lease.
 _sides = {
-    s: {"present": False, "last_seen": 0.0, "token": None, "mode": "joint"}
+    s: {"present": False, "last_seen": 0.0, "token": None, "mode": "joint", "motion_epoch": None}
     for s in SIDES
 }
 
 
 def _arm(side):
     return _robots.get(side)
+
+
+def _serialize_arm_control(fn):
+    """Keep connection replacement and validated target submission in one order."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        side = (request.get_json(silent=True) or {}).get('side')
+        if side not in SIDES:
+            return fn(*args, **kwargs)
+        with _arm_locks[side]:
+            try:
+                return fn(*args, **kwargs)
+            except DobotError as exc:
+                return _fail(str(exc), code='motion_resync_required')
+    return wrapped
 
 
 def _redact_payload(value):
@@ -391,35 +408,77 @@ def _clamp_pose(x, y, z, r):
 # drop below. Cartesian/XYZ targets are clamped directly. Joint targets are
 # clamped through a learned local height model z ≈ a + b·J2 + c·J3 per side
 # (J1/J4 don't change height), so a descending joint target can be stopped at the
-# floor instead of crashing through it. Operator-editable from the relay screen;
-# persisted across restarts.
+# floor instead of crashing through it. The ceiling uses controller forward
+# kinematics for joint paths and direct Cartesian target checks. Both limits
+# are operator-editable from the relay screen and persisted across restarts.
 Z_FLOOR_PATH = os.path.join(HERE, "z-floor.json")
 DEFAULT_Z_FLOOR = -72.0
+DEFAULT_Z_CEILING = 80.0
 _z_lock = threading.Lock()
 _z_floor = DEFAULT_Z_FLOOR
 _z_floor_enabled = True
+_z_ceiling = DEFAULT_Z_CEILING
+_z_ceiling_enabled = True
 _z_samples = {s: deque(maxlen=120) for s in SIDES}  # recent (j2, j3, z) feedback
 _z_coef = {s: None for s in SIDES}                  # fitted (a, b, c) or None
 _Z_MIN_SAMPLES = 6
 
 
 def _load_z_floor():
-    global _z_floor, _z_floor_enabled
+    global _z_floor, _z_floor_enabled, _z_ceiling, _z_ceiling_enabled
     try:
         with open(Z_FLOOR_PATH) as f:
             data = json.load(f)
-        _z_floor = float(data.get("z_floor", DEFAULT_Z_FLOOR))
-        _z_floor_enabled = bool(data.get("enabled", True))
+        floor, floor_enabled, ceiling, ceiling_enabled = _validate_z_settings(data)
+        _z_floor, _z_floor_enabled = floor, floor_enabled
+        _z_ceiling, _z_ceiling_enabled = ceiling, ceiling_enabled
     except (OSError, ValueError, TypeError):
         pass
 
 
-def _save_z_floor():
+def _validate_z_settings(data):
+    if not isinstance(data, dict):raise ValueError('Z limits must be an object')
+    floor, ceiling = data.get('z_floor', DEFAULT_Z_FLOOR), data.get('z_ceiling', DEFAULT_Z_CEILING)
+    if any(type(v) not in (int,float) or not math.isfinite(v) for v in (floor,ceiling)):
+        raise ValueError('Z limits must be finite numbers')
+    if not WORKSPACE['z'][0] <= floor < ceiling <= WORKSPACE['z'][1]:
+        raise ValueError('Floor must be below ceiling, within -150 to 230 mm')
+    enabled, ceiling_enabled = data.get('enabled', True), data.get('ceiling_enabled', True)
+    if type(enabled) is not bool or type(ceiling_enabled) is not bool:
+        raise ValueError('Enforce floor/ceiling must be true or false')
+    return floor, enabled, ceiling, ceiling_enabled
+
+
+def _save_z_floor(data):
+    temporary = Z_FLOOR_PATH + '.tmp'
     try:
-        with open(Z_FLOOR_PATH, "w") as f:
-            json.dump({"z_floor": _z_floor, "enabled": _z_floor_enabled}, f, indent=2)
-    except OSError:
-        pass
+        with open(temporary, 'w') as f:
+            json.dump(data, f, indent=2, allow_nan=False)
+        os.replace(temporary, Z_FLOOR_PATH)
+    finally:
+        if os.path.exists(temporary):os.unlink(temporary)
+
+
+def z_limits_snapshot():
+    """Shared, versioned effective Z bounds for player height controls."""
+    with _z_lock:
+        return {'contract':'hhh.relay.z-limits','version':1,'status':'ready',
+                'minimum':_z_floor if _z_floor_enabled else WORKSPACE['z'][0],
+                'maximum':_z_ceiling if _z_ceiling_enabled else WORKSPACE['z'][1]}
+
+
+def _ceiling_path_error(z, previous_z):
+    with _z_lock:ceiling, enabled = _z_ceiling, _z_ceiling_enabled
+    if not enabled:return None
+    if not all(type(v) in (int,float) and math.isfinite(v) for v in (z,previous_z)):
+        return 'Cannot verify joint path against Z ceiling'
+    # If manually positioned above the ceiling, only a descending recovery
+    # is allowed. Never silently send a different joint/XYZ goal to get inside.
+    if z > ceiling and z >= previous_z - 1e-6:
+        return f'Z ceiling {ceiling:g} mm exceeded by joint path ({z:.1f} mm)'
+    if previous_z <= ceiling and z > ceiling:
+        return f'Z ceiling {ceiling:g} mm exceeded by joint path ({z:.1f} mm)'
+    return None
 
 
 def _solve3(S, rhs):
@@ -582,7 +641,7 @@ def _apply_motion(robot):
     robot.set_max_accel_joint(settings["joint"] / secs)
 
 
-def _ensure_follower(robot, mode):
+def _ensure_follower(robot, mode, motion_epoch):
     """Make sure the arm is running the follower for `mode` (switching followers if
     a different one is active). Keeps the connection + enabled state intact. No
     arbitration lock is held here — this does blocking arm I/O."""
@@ -590,9 +649,9 @@ def _ensure_follower(robot, mode):
         return
     if not robot.get_state().get("enabled"):
         return
-    if robot.control_mode() != mode:
-        robot.start_servo(mode)   # start_servo stops any current follower first
+    if robot.control_mode() != mode or not robot.get_state().get('servo_active'):
         _apply_motion(robot)
+        robot.start_servo(mode, expected_epoch=motion_epoch)
 
 
 # ---- lease / arbitration helpers (call with _arb_lock held) ----------------
@@ -652,6 +711,38 @@ def stop_side(side):
         return {'contract':'hhh.relay.stop','version':1,'status':'unavailable','error':str(exc),'stopped':False}
 
 
+def disable_side(side):
+    """Revoke control and keep a waiting calibration arm disabled; never connect it."""
+    if side not in SIDES:raise ValueError('invalid side')
+    with _arb_lock:
+        _sides[side].update(present=False,token=None)
+    robot=_arm(side)
+    result={'contract':'hhh.relay.disabled','version':1,'status':'ready',
+            'inhibited':True,'connected':bool(robot and robot.is_connected()),'disabled':False}
+    if not result['connected']:
+        # Offline means no command access, not evidence of a physical stop.
+        return result
+    try:
+        state=robot.get_state()
+        if state.get('enabled') is not False or state.get('servo_active'):
+            stopped=stop_side(side)
+            if stopped.get('stopped') is not True:raise ValueError('Waiting arm has not stopped')
+            robot.stop_servo()
+            errid,response=robot.disable()
+            if errid!=0:raise ValueError('Waiting arm disable failed: '+str(response))
+            state=robot.get_state()
+        stamp=state.get('last_feedback')
+        if type(stamp) not in (int,float) or not math.isfinite(stamp) or not -.25<=time.time()-stamp<=1.5:
+            raise ValueError('Fresh waiting-arm feedback required to confirm disabled servos')
+        if state.get('enabled') is not False or state.get('servo_active'):
+            raise ValueError('Waiting for arm servos to switch off')
+        result['disabled']=True
+    except Exception as exc:
+        result.update(status='unavailable',error=str(exc))
+    _live.bump()
+    return result
+
+
 def side_holder(side):
     """The opaque token currently holding `side`, or None if free."""
     if side not in SIDES:
@@ -682,16 +773,24 @@ def _watchdog_loop():
         with _arb_lock:
             for s in SIDES:
                 if _sides[s]["token"] is not None and _lease_secs_left_locked(s) <= 0.0:
-                    expired.append(s)
+                    expired.append((s, round((time.time()-_sides[s]['last_seen'])*1000, 1)))
                     _sides[s]["present"] = False
                     _sides[s]["token"] = None
-        for s in expired:
+        expiry_results = []
+        for s, heartbeat_age in expired:
             robot = _arm(s)
+            stop_error = None
             if robot is not None and robot.is_connected():
                 try:
                     robot.hold()      # smooth stop; keep servos enabled
-                except Exception:     # pragma: no cover - defensive
-                    pass
+                except Exception as exc:     # pragma: no cover - defensive
+                    stop_error = str(exc)
+            expiry_results.append((s, heartbeat_age, stop_error))
+        # Finish both safety actions before disk I/O for either team's record.
+        for s, heartbeat_age, stop_error in expiry_results:
+            _log_command('robot', s, 'lease_expired', {'heartbeat_age_ms':heartbeat_age,
+                         'lease_limit_ms':LEASE_SECS*1000}, ok=stop_error is None,
+                         error=stop_error or 'Player heartbeat lease expired')
         if expired:
             _live.bump()
 
@@ -725,6 +824,11 @@ def _arm_dict(side):
     """The arm sub-object for one side (works with no robot connected)."""
     robot = _arm(side)
     raw = DobotMG400._blank_state() if robot is None else robot.get_state()
+    stamp = raw.get("last_feedback")
+    age = (time.time() - stamp if type(stamp) in (int, float)
+           and math.isfinite(stamp) and stamp > 0 else None)
+    if age is not None and (not math.isfinite(age) or age < 0):
+        age = None
     return {
         "device": dict(_last_link.get(side) or {}),
         "connected": raw["connected"],
@@ -734,6 +838,10 @@ def _arm_dict(side):
         "joints": raw["joints"],
         "pose": raw["pose"],
         "feedback_at": raw.get("last_feedback", 0.0),
+        "feedback_ok": raw.get("feedback_ok") is True,
+        "feedback_age": age,
+        "motion_epoch": raw.get("motion_epoch"),
+        "motion_ready": raw.get("motion_ready", False),
         "servo_active": raw["servo_active"],
         "servo_error": raw["servo_error"],
         "error": raw.get("error", False),
@@ -770,6 +878,8 @@ def _state_dict():
             "enabled": _z_floor_enabled,
             "models": {s: (_z_coef[s] is not None) for s in SIDES},
         }
+        state['z_ceiling'] = {'value':_z_ceiling,'enabled':_z_ceiling_enabled}
+    state['z_limits'] = z_limits_snapshot()
     state["motion_settings"] = _motion_settings_snapshot()
     return state
 
@@ -794,6 +904,9 @@ def config():
         "lease_secs": LEASE_SECS,
         "z_floor": {"value": _z_floor, "enabled": _z_floor_enabled,
                     "default": DEFAULT_Z_FLOOR},
+        "z_ceiling": {"value": _z_ceiling, "enabled": _z_ceiling_enabled,
+                      "default": DEFAULT_Z_CEILING},
+        "z_limits": z_limits_snapshot(),
         "motion_settings": _motion_settings_snapshot(),
         "motion_setting_limits": {
             key: list(bounds) for key, bounds in MOTION_SETTING_LIMITS.items()
@@ -815,29 +928,59 @@ def events():
 
 @bp.route("/api/z-floor", methods=["GET", "POST"])
 def z_floor():
-    """Read or set the Cartesian Z soft floor (mm). GET is open; POST (set
-    value/enabled) is gamemaster-only and persisted."""
-    global _z_floor, _z_floor_enabled
+    return _z_limit_request('floor')
+
+
+@bp.route('/api/z-ceiling', methods=['GET','POST'])
+def z_ceiling():
+    return _z_limit_request('ceiling')
+
+
+@bp.route('/api/z-limits')
+def z_limits():
+    return jsonify(z_limits_snapshot())
+
+
+def _z_limit_request(bound):
+    global _z_floor, _z_floor_enabled, _z_ceiling, _z_ceiling_enabled
+    ceiling = bound == 'ceiling'
     if request.method == "GET":
         with _z_lock:
-            return _ok(value=_z_floor, enabled=_z_floor_enabled, default=DEFAULT_Z_FLOOR,
+            return _ok(value=_z_ceiling if ceiling else _z_floor,
+                       enabled=_z_ceiling_enabled if ceiling else _z_floor_enabled,
+                       default=DEFAULT_Z_CEILING if ceiling else DEFAULT_Z_FLOOR,
                        models={s: (_z_coef[s] is not None) for s in SIDES})
     if not _is_operator_request():
         return _fail("gamemaster required"), 403
-    data = request.json or {}
-    _log_incoming("z-floor", data)
-    with _z_lock:
-        if "value" in data:
-            try:
-                _z_floor = float(data["value"])
-            except (TypeError, ValueError):
-                return _fail("value must be a number")
-        if "enabled" in data:
-            _z_floor_enabled = bool(data["enabled"])
-        _save_z_floor()
-        out = {"value": _z_floor, "enabled": _z_floor_enabled}
+    data = request.get_json(silent=True)
+    if not isinstance(data,dict):return _fail('Z limit must be an object'),400
+    _log_incoming('z-'+bound, data)
+    # Serialize against both sides' target submission. Settle and revoke old
+    # movement before changing a limit, including a goal already being followed.
+    with ExitStack() as locks:
+        for side in SIDES:locks.enter_context(_arm_locks[side])
+        with _z_lock:
+            candidate={'z_floor':_z_floor,'enabled':_z_floor_enabled,
+                       'z_ceiling':_z_ceiling,'ceiling_enabled':_z_ceiling_enabled}
+        if 'value' in data:candidate['z_'+bound]=data['value']
+        if 'enabled' in data:candidate['ceiling_enabled' if ceiling else 'enabled']=data['enabled']
+        try:values=_validate_z_settings(candidate)
+        except ValueError as exc:return _fail(str(exc)),400
+        if values != (_z_floor,_z_floor_enabled,_z_ceiling,_z_ceiling_enabled):
+            for side in SIDES:
+                robot=_arm(side)
+                if robot is not None and robot.is_connected():
+                    stopped=stop_side(side)
+                    if stopped.get('stopped') is not True:
+                        return _fail('Could not confirm '+side+' stopped; Z limits were not changed'),409
+            try:_save_z_floor(candidate)
+            except OSError as exc:return _fail('Could not save Z limits: '+str(exc)),500
+            with _z_lock:
+                _z_floor,_z_floor_enabled,_z_ceiling,_z_ceiling_enabled=values
+        out = {'value':_z_ceiling if ceiling else _z_floor,
+               'enabled':_z_ceiling_enabled if ceiling else _z_floor_enabled}
     _live.bump()
-    return _ok(**out)
+    return _ok(**out,z_limits=z_limits_snapshot())
 
 
 @bp.route("/api/motion-settings", methods=["GET", "POST"])
@@ -891,6 +1034,7 @@ def _side_from(data):
 
 # ---- operator endpoints (no token) ----------------------------------------
 @bp.route("/api/connect", methods=["POST"])
+@_serialize_arm_control
 def connect():
     """Connect THAT side's arm (replacing any existing connection for it)."""
     data = request.json or {}
@@ -903,6 +1047,8 @@ def connect():
     local_ip = (data.get("local_ip") or DEFAULT_LINKS[side]["local_ip"]).strip()
     iface = (data.get("iface") or "").strip() or None  # optional override
     link = {"ip": ip, "local_ip": local_ip, "iface": iface}
+    with _arb_lock:
+        _sides[side].update(token=None, present=False, motion_epoch=None)
     with _arm_locks[side]:
         if _robots[side] is not None:
             _robots[side].close()
@@ -923,6 +1069,7 @@ def connect():
 
 
 @bp.route("/api/disconnect", methods=["POST"])
+@_serialize_arm_control
 def disconnect():
     """Disconnect that side's arm."""
     data = request.json or {}
@@ -931,6 +1078,8 @@ def disconnect():
     if side is None:
         _log_incoming("disconnect", data, ok=False, error="side must be 'purple' or 'green'")
         return _fail("side must be 'purple' or 'green'")
+    with _arb_lock:
+        _sides[side].update(token=None, present=False, motion_epoch=None)
     with _arm_locks[side]:
         if _robots[side] is not None:
             _robots[side].close()
@@ -965,9 +1114,9 @@ def clear_error():
 
 
 @bp.route("/api/enable", methods=["POST"])
+@_serialize_arm_control
 def enable():
-    """Enable that side's arm + start its follower in its current mode (default
-    "joint"). Idempotent."""
+    """Enable and synchronize without starting a servo stream or restoring targets."""
     data = request.json or {}
     _log_incoming("enable", data)
     side = _side_from(data)
@@ -978,8 +1127,11 @@ def enable():
     if robot is None or not robot.is_connected():
         _log_command("robot", side, "enable", {}, ok=False, error="Not connected")
         return _fail("Not connected")
-    with _arb_lock:
-        mode = _sides[side]["mode"] if _sides[side]["token"] is not None else "joint"
+    if data.get('token') is not None:
+        _, error = _check_token(data)
+        if error:
+            return _fail(error)
+    robot.reset_motion()
     try:
         robot.clear_error()
         _log_command("robot", side, "clear_error", {}, ok=True)
@@ -991,13 +1143,16 @@ def enable():
         _log_command("robot", side, "enable", {}, ok=False, error=str(e))
         return _fail(str(e), errid=e.errid)
     if errid == 0:
-        robot.start_servo(mode)
+        state = robot.wait_for_motion_feedback()
+        with _arb_lock:
+            _sides[side]['motion_epoch'] = state['motion_epoch']
         _apply_motion(robot)
-        _log_command("robot", side, "enable + start_servo", {"mode": mode}, ok=True)
+        _log_command("robot", side, "enable + synchronize", {}, ok=True)
     else:
         _log_command("robot", side, "enable", {"errid": errid, "resp": resp}, ok=False)
     _live.bump()
-    return jsonify({"ok": errid == 0, "errid": errid, "resp": resp, "side": side})
+    return jsonify({"ok": errid == 0, "errid": errid, "resp": resp, "side": side,
+                    "motion_epoch": robot.get_state()['motion_epoch']})
 
 
 @bp.route("/api/kick", methods=["POST"])
@@ -1049,6 +1204,7 @@ def _check_token(data):
 
 
 @bp.route("/api/acquire", methods=["POST"])
+@_serialize_arm_control
 def acquire():
     """Acquire THIS side's arm. Records the mode and mints a fresh token
     (invalidating any old one for that side). NEVER conflicts with the other side -
@@ -1064,18 +1220,24 @@ def acquire():
     if mode not in MODES:
         _log_incoming("acquire", data, ok=False, error="mode must be 'joint' or 'cartesian'")
         return _fail("mode must be 'joint' or 'cartesian'"), 400
+    robot = _arm(side)
+    if robot is None or not robot.is_connected():
+        return _fail('Not connected')
+    motion_epoch = robot.reset_motion()
     with _arb_lock:
         _token_counter += 1
         token = f"{side}-{_token_counter}"
         _sides[side]["token"] = token
         _sides[side]["mode"] = mode
+        _sides[side]["motion_epoch"] = motion_epoch
         _touch_locked(side)
     # A lease grants no movement. Only a fully validated move starts a follower.
     _live.bump()
-    return _ok(token=token, lease_secs=LEASE_SECS, side=side)
+    return _ok(token=token, lease_secs=LEASE_SECS, side=side, motion_epoch=motion_epoch)
 
 
 @bp.route("/api/release", methods=["POST"])
+@_serialize_arm_control
 def release():
     """Release this side's arm. Requires a valid (side, token)."""
     data = request.json or {}
@@ -1108,11 +1270,13 @@ def heartbeat():
     {ok:false, error:"stale token"}."""
     side, err = _check_token(request.json or {})
     if err:
+        _log_incoming('heartbeat_rejected', request.json or {}, ok=False, error=err)
         return _fail(err)
     return _ok(state=_state_dict())
 
 
 @bp.route("/api/move", methods=["POST"])
+@_serialize_arm_control
 def move():
     """Set this side's follower target after safety-clamping. Requires a valid
     (side, token), and that side's arm connected + enabled."""
@@ -1132,6 +1296,13 @@ def move():
     if not robot.get_state().get("enabled"):
         _log_command("robot", side, "move", {}, ok=False, error="Arm not enabled")
         return _fail("Arm not enabled")
+    state = robot.get_state()
+    with _arb_lock:
+        lease_epoch = _sides[side].get('motion_epoch')
+    motion_epoch = data.get('motion_epoch', lease_epoch)
+    if (type(motion_epoch) is not int or motion_epoch != lease_epoch
+            or motion_epoch != state.get('motion_epoch') or not state.get('motion_ready')):
+        return _fail('Arm position or feedback changed. Reconnect to synchronize controls.', code='motion_resync_required')
     mode = (data.get("mode") or "joint").lower()
     if mode not in MODES:
         _log_command("robot", side, "move", {"mode": mode}, ok=False, error="bad mode")
@@ -1154,7 +1325,8 @@ def move():
             guard = _server_cal2_guard(side)
         except (ValueError,AttributeError) as exc:
             return _fail(str(exc)),403
-        if guard is not None:
+        with _z_lock:check_ceiling = _z_ceiling_enabled
+        if guard is not None or check_ceiling:
             try:
                 target_joints = [j1, j2, j3, j4]
                 current_joints = [float(value) for value in robot.get_state()["joints"][:4]]
@@ -1165,6 +1337,7 @@ def move():
                         for index in range(4)
                     ) / 5.0))),
                 )
+                previous_z = float(robot.get_state()['pose'][2])
                 for sample_index in range(1, sample_count + 1):
                     amount = sample_index / sample_count
                     sample_joints = [
@@ -1173,7 +1346,10 @@ def move():
                         for index in range(4)
                     ]
                     predicted_pose = robot.positive_solution(*sample_joints)
-                    error = _validate_cal2_joint_pose(predicted_pose, guard)
+                    error = _ceiling_path_error(predicted_pose[2], previous_z)
+                    if not error and guard is not None:
+                        error = _validate_cal2_joint_pose(predicted_pose, guard)
+                    previous_z = predicted_pose[2]
                     if error:
                         error = (f"Auto PP Cal 2 blocked joint path at "
                                  f"{amount * 100:.0f}%: {error}")
@@ -1183,14 +1359,14 @@ def move():
                              "predicted_pose": predicted_pose},
                             ok=False, error=error,
                         )
-                        return _fail(error, predicted_pose=predicted_pose)
-            except (DobotError, KeyError, IndexError, TypeError, ValueError) as exc:
+                        return _fail(error, predicted_pose=predicted_pose, code='motion_limit')
+            except (DobotError, AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
                 error = f"could not verify joint target against Auto PP Cal 2: {exc}"
                 _log_command("robot", side, "joint_cal2_guard", {}, ok=False,
                              error=error)
                 return _fail(error)
-        _ensure_follower(robot, mode)
-        robot.set_target_joints(j1, j2, j3, j4)
+        _ensure_follower(robot, mode, motion_epoch)
+        robot.set_target_joints(j1, j2, j3, j4, expected_epoch=motion_epoch)
         clamped = {"j1": round(j1, 2), "j2": round(j2, 2),
                    "j3": round(j3, 2), "j4": round(j4, 2)}
         if znote:
@@ -1208,6 +1384,9 @@ def move():
         except (ValueError, TypeError, IndexError):
             return _fail("pose must be numeric")
         if not all(math.isfinite(v) for v in (x,y,z,r)): return _fail('finite pose required'),400
+        with _z_lock:ceiling, ceiling_enabled = _z_ceiling, _z_ceiling_enabled
+        if ceiling_enabled and z > ceiling:
+            return _fail(f'Z ceiling {ceiling:g} mm exceeded; choose a lower target',code='motion_limit'),403
         x, y, z, r = _clamp_pose(x, y, z, r)
         x, y, z, r, znote = _apply_pose_z_floor(x, y, z, r)
         try:
@@ -1218,8 +1397,8 @@ def move():
                 return _fail(error),403
         except (ValueError,AttributeError,KeyError,TypeError) as exc:
             return _fail(f'Cannot validate Cartesian path: {exc}'),403
-        _ensure_follower(robot, mode)
-        robot.set_target_pose(x, y, z, r)
+        _ensure_follower(robot, mode, motion_epoch)
+        robot.set_target_pose(x, y, z, r, expected_epoch=motion_epoch)
         clamped = {"x": round(x, 2), "y": round(y, 2),
                    "z": round(z, 2), "r": round(r, 2)}
         if znote:
@@ -1272,6 +1451,7 @@ def pump():
 
 
 @bp.route("/api/hold", methods=["POST"])
+@_serialize_arm_control
 def hold():
     """Smooth-stop this side's arm but keep its lease. Requires a valid (side,
     token)."""
@@ -1358,8 +1538,11 @@ def _server_cal2_guard(side):
         raise ValueError('Cal 2 safety owner unavailable')
     owner = _hub_ctx.get_prototype('auto-pickup-game')
     value = owner.calibration_safety_snapshot(side)
-    if not isinstance(value,dict) or value.get('contract') != 'hhh.cal2.safety' or type(value.get('version')) is not int or value['version'] != 1 or value.get('status') != 'ready':
+    if not isinstance(value,dict) or value.get('contract') != 'hhh.cal2.safety' or type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Validated Cal 2 safety limits unavailable')
+    if value.get('status') != 'ready':
+        reason = value.get('error')
+        raise ValueError('Cal 2 safety unavailable: ' + (reason if isinstance(reason,str) and reason else 'validated limits unavailable'))
     return value['guard']
 
 

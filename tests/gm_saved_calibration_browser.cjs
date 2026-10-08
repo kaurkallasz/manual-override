@@ -8,7 +8,7 @@ const origin='http://127.0.0.1:8117',base=origin+'/s/gamemaster/p/laser-tag-y';
   page.on('pageerror',e=>errors.push(e.message));
   page.on('request',r=>{if(r.method()==='POST')posts.push(r.url())});
   await page.request.post(origin+'/__test/saved-calibrations');
-  await page.request.post(origin+'/__test/camera',{data:{enabled:true,stale:false}});
+  await page.request.post(origin+'/__test/camera',{data:{enabled:true,stale:false,calibration_revision:'current-camera'}});
   // Preview must obtain the real camera even when the game is in virtual mode.
   await page.request.post(base+'/api/command',{data:{action:'set_virtual',virtual_play:true}});
   await page.goto(base+'/');await page.waitForFunction(()=>ui.state?.status==='ready');
@@ -18,6 +18,9 @@ const origin='http://127.0.0.1:8117',base=origin+'/s/gamemaster/p/laser-tag-y';
    await page.locator('[data-history-side]').selectOption(side);
    await page.waitForFunction(s=>document.querySelector(`[data-history-select] option[value="rig:${s}:2"]`),side);
    await page.locator('[data-history-select]').selectOption(`rig:${side}:2`);
+   assert.equal(await page.locator('[data-history-warning]').isVisible(),true);
+   assert.match(await page.locator('[data-history-warning]').textContent(),/less precise.*All control levels remain available/);
+   assert.equal(await page.locator('[data-history-apply]').isDisabled(),false);
    const before=posts.length;
    if(await page.locator('[data-history-preview]').getAttribute('aria-pressed')==='false')await page.locator('[data-history-preview]').click();
    try{await page.waitForSelector('#savedCalibrationOverlay:visible')}
@@ -38,12 +41,19 @@ const origin='http://127.0.0.1:8117',base=origin+'/s/gamemaster/p/laser-tag-y';
    const restored=await page.request.get(base+'/api/calibrations?side='+side).then(r=>r.json());
    assert.equal(restored.active_id,`rig:${side}:2`);assert.equal(restored.latest_id,`rig:${side}:3`);
    assert.equal(restored.selection,`rig:${side}:2`);
+   assert.equal(restored.rows.find(r=>r.active).camera_compatibility.status,'approximate');
+   assert.equal(await page.locator('[data-history-warning]').isVisible(),true);
    await page.locator('[data-history-select]').selectOption('latest');
    await page.locator('[data-history-apply]').click();
    await page.waitForFunction(()=>document.querySelector('[data-history-status]').textContent.startsWith('Calibration applied.'));
    const latest=await page.request.get(base+'/api/calibrations?side='+side).then(r=>r.json());
    assert.equal(latest.active_id,`rig:${side}:3`);assert.equal(latest.selection,'latest');
   }
+  await page.request.post(origin+'/__test/camera',{data:{calibration_revision:'fixture'}});
+  await page.locator('[data-history-refresh]').click();
+  await page.waitForSelector('[data-history-warning]',{state:'hidden'});
+  await page.locator('[data-history-apply]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-history-status]').textContent.startsWith('Calibration applied.'));
   // A failed current camera must never leave historical targets on a blank view.
   await page.request.post(origin+'/__test/camera',{data:{stale:true}});
   await page.waitForSelector('#savedCalibrationOverlay',{state:'hidden'});

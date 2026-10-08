@@ -76,6 +76,22 @@ class GatewayTests(unittest.TestCase):
     def test_bridge_and_player_auth_are_both_required(self):
         self.assertEqual(self.client.get('/state').status_code,401)
         self.assertEqual(self.client.get('/state',headers=self.headers).status_code,401)
+    def test_diagnostics_only_forward_authenticated_team_posts(self):
+        class Reply(io.BytesIO):
+            code=200
+            headers={'Content-Type':'application/json'}
+        def upstream(request,**kwargs):
+            self.assertTrue(request.full_url.endswith('/api/diagnostics?side=purple'))
+            self.assertEqual(json.loads(request.data),{'version':1,'event':'suspend'})
+            return Reply(b'{"ok":true}')
+        with patch.object(module,'build_opener') as make:
+            make.return_value.open.side_effect=upstream
+            client=module.create_app('fixture-bridge').test_client()
+            headers={'X-Mobile-Bridge':'fixture-bridge','X-Mobile-Team':'purple'}
+            self.assertEqual(client.post('/diagnostics',headers=headers,json={}).status_code,401)
+            headers['X-Mobile-Auth']='fixture-cookie'
+            self.assertEqual(client.get('/diagnostics',headers=headers).status_code,405)
+            self.assertTrue(client.post('/diagnostics',headers=headers,json={'version':1,'event':'suspend'}).json['ok'])
     def test_no_admin_robot_arbitrary_url_or_traversal_proxy(self):
         for path in ['/s/gamemaster/','/robot/connect','/https://example.com','/assets/../secret','/assets/a%3Fb']:
             self.assertIn(self.client.get(path,headers=self.headers).status_code,(400,404))

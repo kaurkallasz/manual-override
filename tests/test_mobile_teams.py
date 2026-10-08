@@ -113,6 +113,17 @@ class MobileTeamTests(unittest.TestCase):
         with patch.object(self.facade,'_game',side_effect=lambda:(None,copy.deepcopy(value))),patch.object(self.facade,'camera_view',return_value=dict(status='unavailable')):
             self.assertNotIn('tags',self.facade.mobile_snapshot('green')['mobile_camera'])
 
+    def test_raised_phase_omits_hidden_centres_from_live_and_cached_labels(self):
+        for side in ('green','purple'):
+            session={'id':'raised:'+side,'side':side,'stage':'perspective','epoch':'live','access_until':time.time()+30,
+                     'marker_positions':{str(m):{'camera':{'u':.2,'v':.3}} for m in (30,31,32,33,34,35)}}
+            owner=SimpleNamespace(calibration_session_snapshot=lambda:dict(contract='hhh.cal2.session',version=1,status='ready',
+                active_side=side,active_id=session['id'],epoch='live',sessions={session['id']:session}))
+            self.facade.hub_init(FakeContext({'auto-pickup-game':owner}))
+            value={'virtual_play':False,'journey':{'phase':'calibration','id':'raised','session_id':session['id'],'calibration_side':side,'active_side':side}}
+            with patch.object(self.facade,'_game',side_effect=lambda:(None,copy.deepcopy(value))),patch.object(self.facade,'camera_view',side_effect=lambda game:dict(status='ready',tags=[{'id':m,'u':.2,'v':.3} for m in (30,32,100)])):
+                self.assertEqual({t['id'] for t in self.facade.mobile_snapshot(side)['mobile_camera']['tags']},{31,33,34,35,100})
+
     def test_saved_calibrations_are_side_scoped_and_contract_checked(self):
         owner=SimpleNamespace(calibration_history=lambda side:dict(contract='hhh.cal2.history',version=1,status='ready',rows=[{'side':side}]))
         self.facade.hub_init(FakeContext({'auto-pickup-game':owner}))
