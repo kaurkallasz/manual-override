@@ -1,6 +1,6 @@
 # HHH Gamemaster development journal
 
-Last updated: 2026-10-09, consolidating the development work after `53bb9c8` through the October 8 Atom turret buff and the October 9 publication checks. Earlier entries preserve their original evidence and attribution, including test counts and deployment observations that apply only to their dated checkpoint. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
+Last updated: 2026-10-09, including checkpoint `19efd59`, the user's confirmation that returning to standalone Auto PP Cal 2 solved the Mobile LTZ calibration precision problem, and the calibration regression timeline and future baseline below. Earlier entries preserve their original evidence and attribution, including test counts and deployment observations that apply only to their dated checkpoint. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
 
 This journal explains how the repository reached its current design: what changed, what was learned, why the next decision followed, and whether the repository records the work as human-only or AI-assisted. The reconstruction is based on commit history and messages, the current README and specifications, implementation diffs, calibration files, and local Laser Tag X run and score logs.
 
@@ -30,7 +30,9 @@ The physical-game stack combines corrected ArUco camera observations, camera-to-
 
 The active tower-defence implementation is now the modular Photon stack: Level owns authored content, Board publishes physical observations, Game owns the simulation, Progress owns saved player progression, and Laser Tag Y presents the game. Laser Tag Z remains the rollback/reference implementation. Commit `cd00d97` records progression, row barriers, L4 companions, and artwork; `2ea92b5` checkpoints the shared mobile controls, streaming and turret aiming; `53bb9c8` checkpoints two-player progression and calibration.
 
-Green and Purple Mobile LTZ now share one frontend and the same authoritative Game through a restricted gateway. Both teams have Joint, Cartesian XYZ, Targeting and Cue progression, virtual practice, and calibrated physical controls through the existing relay. Calibration derives pickup/transport heights from the six ground captures, records four raised samples, supports offline completion, and lets the gamemaster explicitly associate a saved arm calibration with the current camera correction. Reconnect adopts measured robot position and requires a new gesture; stale sessions cannot replay old targets. Relay-owned floor/ceiling limits and the calibrated 220–439 mm reach envelope constrain physical motion.
+Green and Purple Mobile LTZ now share one frontend and the same authoritative Game through a restricted gateway. Both teams have Joint, Cartesian XYZ, Targeting and Cue progression, virtual practice, and calibrated physical controls through the existing relay. The mobile calibration lesson derives pickup/transport heights from the six ground captures, records four raised samples, supports offline completion, and lets the gamemaster explicitly associate a saved arm calibration with the current camera correction. Reconnect adopts measured robot position and requires a new gesture; stale sessions cannot replay old targets. Relay-owned floor/ceiling limits and the calibrated 220–439 mm reach envelope constrain physical motion.
+
+**Accepted calibration baseline, confirmed by the user on October 9:** the current calibration works. The previous calibration used by Mobile LTZ was not precise enough; returning to the standalone **Auto PP Cal 2** procedure solved the problem. Use that procedure and the working rig calibration as the baseline for future work. A mobile lesson's successful save/completion is not evidence of equivalent physical precision. The final entry records the changes that led to this divergence and distinguishes documented defects from causes that remain unproven.
 
 The October continuation makes physical cues reusable, retains acquired endpoints through temporary camera-map holds, supports pause and player intervention, detects a failed pickup, and adds a configurable Clear view action after placement. Fresh marker labels arrive independently of robot connection or renderer startup. Camera detections, cue acquisition and physical occupancy have separate versioned Board contracts: a visible label never grants motion permission. Mobile delivery and connection diagnostics make generation, transmission, camera holds and player input inspectable. Actual-arm graphics use timestamped measured positions, settled-position feedback and an erasing checked trajectory.
 
@@ -1192,6 +1194,7 @@ The August 29 reconstruction recorded a focused 84-test Laser Tag Z suite; later
 - Server game state and the current diagnostic run are process memory. JSONL files are durable evidence, but a server restart does not automatically resume the previous run.
 - Manual completion keeps an event running but intentionally weakens the claim that every transition was physically sensed; the diagnostic record must retain that distinction.
 - Calibration is installation-specific data. Updating it is a real system change and should be paired with the physical setup and a dated journal entry.
+- On October 9 the user confirmed that standalone Auto PP Cal 2 restored working precision after the Mobile LTZ calibration proved insufficient. Preserve this operating baseline. Future mobile capture changes must demonstrate physical equivalence before replacing it; this documentation decision does not itself change the existing lesson's commit behavior.
 - The current camera-authoritative rule depends on camera quality. It fails closed when corrected tracking or a valid spatial model is unavailable, and the gamemaster remains the recovery authority.
 - The earlier Laser Tag Z, Photon, mobile and two-player calibration work has Git checkpoints through `53bb9c8`. The October 9 entry records the next publication scope and verification; a Git checkpoint alone does not establish installation acceptance.
 - Laser Tag Z server simulation state is process memory. The external screen can reconnect to the current process, but a process restart does not resume an in-progress defence run.
@@ -3071,3 +3074,110 @@ repository-wide refactor or a hardware release.
 performed this consolidation, the test-fixture correction and publication
 checks. Attribution for earlier implementation remains as recorded in its
 original entry; this summary does not assign a new author to those changes.
+
+## 2026-10-09 — Confirm working PP Cal 2 calibration and trace the mobile regression
+
+**Physical result reported by the user:** the current calibration works. The
+previous calibration used on Mobile LTZ was not precise enough, and returning
+to **Auto PP Cal 2** solved the issue. This is the operator's confirmation from
+the physical setup, superseding the earlier lack of calibration acceptance for
+this setup. It is not a new automated measurement: no error in millimetres,
+per-arm comparison, exact switch time or repeated-pickup count was supplied.
+October 9 is the confirmation date, not an inferred date for the switch itself.
+It does not establish acceptance of unrelated Atom-buff or display-timing work.
+
+**Decision:** retain standalone Auto PP Cal 2 as the commissioning and recovery
+baseline for this installation and future calibration development. Here that
+means its complete procedure: six ground/robot correspondences at markers
+30–35, four raised-Atom perspective samples at 31/35/33/34, consistent corrected
+camera coordinates and team orientation, and explicit pickup/transport Z
+settings. Preserve the working model and its capture context. Mobile LTZ should
+consume that owner-held calibration; a future phone-based capture interface
+must reproduce the accepted procedure and demonstrate equivalent physical
+results before it is accepted as a replacement.
+
+### Timeline: how the workflows diverged
+
+Dates below come from the existing journal. Several changes were committed
+together in `53bb9c8` or `19efd59`, so their journal dates are more specific
+than the Git checkpoint dates.
+
+| Date | Recorded action | Consequence for calibration and strength of evidence |
+| --- | --- | --- |
+| August 5 | `7291f9d` introduced the corrected-camera stack and second-generation Auto PP calibration. The standalone workflow subsequently supplied six point captures, separate raised-tag compensation and explicit Z controls. | Established the procedure the user now reports works. This does not claim that the August calibration file is the current accepted file. |
+| September 22 | Mobile LTZ added physical controls through the existing calibrated controller and relay, checkpointed in `2ea92b5`. | A new presentation consumed the existing calibration. The record does not identify a replacement calibration solver at this step. |
+| October 1 | The progression implementation added a new Game-managed mobile capture/lesson, durable drafts, completion receipts and rig commits. The approved plan required reuse of Cal 2 and a separate supervised physical accuracy comparison. | The capture and acceptance workflow changed even though Auto Pickup remained the Cal 2 owner. Passing the fixture flow did not demonstrate physical equivalence to standalone commissioning. |
+| October 1 | The initial lesson passed ID-less Cal 2 targets into Playfield's ID-requiring API; it also copied the target template without standalone orientation handling. Later fixes adapted the template and rotated Purple's physical targets correctly. | These are documented integration defects, showing that reuse of the template did not initially preserve the complete procedure. Both were corrected; neither is established as the cause of the final precision complaint. |
+| October 1–2 | Mobile added cached ground-marker capture during tool occlusion and a phone crosshair for manually selecting the four raised centers, followed by drag/Fine tune controls. | The measurement interaction and timing differed from the standalone view. Scope/freshness and coordinate-transform tests were added, but actual touch/capture error was not measured. Any contribution to the final precision loss remains a hypothesis. |
+| October 2 | **Complete calibration** replaced mandatory guided arrival/pickup/placement completion with saved-measurement completion; the physical exercise became optional. | A structurally valid new rig could be installed and the lesson completed without demonstrating its physical positioning/pickup result. This is a documented loss of an acceptance step, not proof that every resulting model was inaccurate. |
+| October 2 | Mobile removed separate pickup/transport height captures. Pickup Z became the mean of six ground-capture Z values; transport Z became pickup +40 mm. Standalone Cal 2 retained explicit height controls. | A measured operator setting was replaced by a derived rule in the mobile workflow. This is a concrete behavioral divergence relevant to Z/clearance; the record does not prove it caused the reported error or explain any XY error. |
+| October 2 | Completion was allowed from saved evidence while the arm/camera were disconnected, including after restart. | This improved recovery, but a completion receipt could not provide a live accuracy check. Existing finite-geometry, identity and motion gates remained; offline completion itself is not evidence of a bad fit. |
+| October 6 | Saved-rig Apply was allowed to associate old measurements with a different current camera correction, retaining the original measurements and showing a precision warning. | Operational compatibility no longer implied that the old fit was measured under the current optical setup. The warning did not quantify the error. There is no evidence that this action caused the user's unsuccessful calibration. |
+| October 6–8 | Reach, marker acquisition, cue recovery and display behavior were repaired. On October 8, calibration ArUco images were restored after browser connection saturation left only number labels visible. | These changes addressed separate motion-availability, evidence and presentation problems. They must not be counted as a measured improvement in calibration fit. The projected-image defect was reproduced and fixed; its contribution to earlier captures is unproven. |
+| Confirmed October 9 | The user reports returning to standalone Auto PP Cal 2, with the current calibration now working. | This is the accepted operating result and the reason to retain PP Cal 2 as the future baseline. A controlled before/after comparison is still absent, so the precise failing sample or calculation cannot be named from this record. |
+
+### What went wrong, and what this establishes
+
+The record supports **workflow divergence and a physical acceptance gap**.
+The mobile implementation introduced its own capture experience and completion
+path, initially missed parts of the existing display/orientation procedure,
+then made the movement exercise optional and substituted calculated heights.
+Successful structural validation could install a replacement rig without an
+operator comparison against the working setup. The implementation work used
+synthetic camera positions and fake arms; those tests checked contracts,
+transforms and workflow, not whether the tool actually landed on the Atom.
+
+The original plan already said to measure all six ground positions, four outer
+raised positions and representative interior pickups on both arms, define a
+physical tolerance, and retain the previous calibration until validation.
+The gap was not a lack of written intent: the history contains no completed
+comparative physical acceptance record before the mobile result was used.
+**Inference:** advancing capture/UX changes without closing that acceptance gap
+allowed the precision regression to escape the otherwise extensive tests.
+
+Both the mobile lesson and standalone interface use the Cal 2 owner. Therefore
+the evidence does **not** justify saying that a new mathematical solver replaced
+Cal 2, that caching is inherently inaccurate, or that the derived Z values alone
+caused the problem. The observed failure and successful recovery are confirmed
+by the user; attributing them to one sample, transform, height rule or camera
+revision would require additional measurements.
+
+### Rules retained for future calibration work
+
+1. Use the complete standalone PP Cal 2 procedure as the reference. Reuse its
+   owner and mapping; do not create a second calibration authority in Mobile,
+   Board or the renderer.
+2. Keep a restorable copy of the working rig, its explicit heights, camera
+   correction/device, target layout and team orientation before a new capture
+   or migration. Treat a changed mobile model as a candidate until accepted.
+3. Preserve six ground captures, four raised samples and explicit height
+   commissioning. Any simplification, automatic height rule or changed optical
+   association needs a measured comparison before replacing the baseline.
+4. Accept changes using actual target arrival and repeated pickup/drop checks
+   at outer and interior positions, for each arm and orientation in use. Record
+   the tolerance and measured error in millimetres with the setup/revision;
+   passing unit tests, a green UI or a saved receipt cannot substitute for this.
+5. Keep capture completeness, model validity, lesson/progression completion and
+   operator-confirmed physical accuracy distinct. A camera/map hold, reach
+   refusal or cue/UI failure is a separate diagnosis from an inaccurate fit.
+
+These are the operating policy and constraints for subsequent development.
+This documentation update does not disable the existing mobile lesson, add a
+new acceptance gate to its code, change calibration values or command hardware.
+
+**Evidence:** the dated entries above;
+[`CONTROL_PROGRESSION_CALIBRATION_PLAN.md`](docs/CONTROL_PROGRESSION_CALIBRATION_PLAN.md)
+(six-point/perspective procedure and physical acceptance requirements);
+[`CONTROL_PROGRESSION_IMPLEMENTATION.md`](docs/CONTROL_PROGRESSION_IMPLEMENTATION.md)
+(mobile completion and orientation corrections);
+[`calibrate2.html`](shared/robot_controls/calibrate2.html)
+(standalone captures, parallax and explicit Z controls); and the user's report
+in this conversation. The operational policy is also recorded in
+[`Mobile LTZ's specification`](sandboxes/green/prototypes/mobile-ltz/SPECIFICATION.md).
+
+**Ownership:** the user supplied the physical result and directed continued use
+of PP Cal 2. OpenAI Codex reconstructed this timeline and wrote the documentation.
+Earlier AI implementation remains attributed in the original entries; no
+unrecorded cause or decision is assigned to the user. Validation for this update
+is a documentation/source consistency review and Git whitespace check; the
+earlier 666 Python/205 JavaScript results are not new tests of physical precision.

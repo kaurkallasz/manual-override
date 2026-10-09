@@ -1,5 +1,31 @@
 # Mobile control modes
 
+## Calibration operating baseline — 9 October 2026
+
+The user confirms that the previous calibration used by Mobile LTZ was not
+precise enough and that returning to standalone **Auto PP Cal 2** solved the
+problem. Use its complete commissioning procedure and the working rig as the
+baseline: six ground/robot captures, four raised-Atom perspective samples,
+consistent corrected-camera coordinates/orientation, and explicit pickup and
+transport heights. Mobile controls consume the existing owner's model.
+
+The mobile lesson described below remains implemented, including calculated
+heights and offline completion. Its successful save/completion establishes
+capture validity and progression state, not equivalent physical precision.
+This policy does not claim that a new runtime acceptance gate already exists.
+For future changes, preserve a restorable working calibration and require a
+recorded physical comparison before accepting a candidate as its replacement.
+Changes to capture interaction, height derivation or camera association must
+retain the standalone procedure or demonstrate equivalent physical results at
+outer and interior targets, for each arm/orientation in use. Do not add a
+second calibration model or relax motion checks to mask a precision failure.
+
+See the October 9 calibration regression timeline in
+[`DEVELOPMENT_JOURNAL.md`](../../../../DEVELOPMENT_JOURNAL.md) for the evidence,
+documented workflow changes and unresolved attribution of the precise cause.
+
+## Mode selection and movement
+
 The mobile control-path dialog selects Joint, unlocked Cartesian XYZ, Targeting, or Cue autonomy. Its
 availability combines the game-owned virtual test override with the current team’s saved
 progress when the override is absent. Server validation is final. A new connection defaults to the highest implemented
