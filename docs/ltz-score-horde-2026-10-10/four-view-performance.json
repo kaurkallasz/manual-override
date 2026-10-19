@@ -1,0 +1,529 @@
+{
+  "enemies": 1000,
+  "primaries": 16,
+  "companions": 12,
+  "seconds": 15,
+  "results": [
+    {
+      "name": "y-game",
+      "frames": 288,
+      "average_fps": 19.207345638159357,
+      "frame_p95_ms": 79.60000038146973,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/photon-level/assets/game-art/z-pixel-v2/normalized/structures/photon-detonator-upgraded-l5.png?v=716cb662af20c4896375135f1418cdb264e02579d30c630aadcf35333a7089cd",
+        "last_error": null,
+        "ready": true,
+        "base": "/s/gamemaster/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"ccaae991d78d021a14a11a2c24feb6328b690fb8dd286e90057661b1ea07c01b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 19,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.6000000476837158,
+          "towerMs": 0.3799999952316284,
+          "enemyMs": 0.7749999523162842,
+          "combatMs": 0.21000006198883056,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.8000001907348633,
+          "frameMs": 66.59999999999854,
+          "quality": "dense",
+          "fieldMs": 0.650000023841858,
+          "towerMs": 0.3950000047683716,
+          "enemyMs": 0.7800000429153442,
+          "combatMs": 0.17499995231628418,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.6599999904632569,
+          "towerMs": 0.40499999523162844,
+          "enemyMs": 0.7600000381469727,
+          "combatMs": 0.21500000953674317,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 66.60000000000036,
+          "quality": "dense",
+          "fieldMs": 0.7150000810623169,
+          "towerMs": 0.384999942779541,
+          "enemyMs": 0.7850000143051148,
+          "combatMs": 0.1799999713897705,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 20,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 66.69999999999891,
+          "quality": "dense",
+          "fieldMs": 0.7500000238418579,
+          "towerMs": 0.40999999046325686,
+          "enemyMs": 0.7850000858306885,
+          "combatMs": 0.19999992847442627,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 66.59999999999854,
+          "quality": "dense",
+          "fieldMs": 0.7300000429153443,
+          "towerMs": 0.42499992847442625,
+          "enemyMs": 0.7600001096725464,
+          "combatMs": 0.2399998903274536,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 20,
+          "drawMs": 2,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.7049999713897706,
+          "towerMs": 0.39000003337860106,
+          "enemyMs": 0.7700000524520874,
+          "combatMs": 0.23499996662139894,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.6549999713897705,
+          "towerMs": 0.40499999523162844,
+          "enemyMs": 0.7500000715255737,
+          "combatMs": 0.21499996185302733,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 20,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 50.10000000000218,
+          "quality": "dense",
+          "fieldMs": 0.6299999475479126,
+          "towerMs": 0.3599999904632568,
+          "enemyMs": 0.7549999952316284,
+          "combatMs": 0.2450000286102295,
+          "cacheBytes": 1423880
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 33.39999999999782,
+          "quality": "dense",
+          "fieldMs": 0.6736841703716078,
+          "towerMs": 0.3842105363544665,
+          "enemyMs": 0.7526315638893529,
+          "combatMs": 0.2421053083319413,
+          "cacheBytes": 1423880
+        }
+      ],
+      "overflow": false
+    },
+    {
+      "name": "y-screen",
+      "frames": 296,
+      "average_fps": 19.195356676111984,
+      "frame_p95_ms": 79.90000009536743,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/photon-level/assets/game-art/z-pixel-v2/normalized/structures/photon-detonator-upgraded-l5.png?v=716cb662af20c4896375135f1418cdb264e02579d30c630aadcf35333a7089cd",
+        "last_error": null,
+        "ready": true,
+        "base": "/s/gamemaster/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"ccaae991d78d021a14a11a2c24feb6328b690fb8dd286e90057661b1ea07c01b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 66.59999999999854,
+          "quality": "dense",
+          "fieldMs": 0.5949999809265136,
+          "towerMs": 0.3699999570846558,
+          "enemyMs": 0.7900000095367432,
+          "combatMs": 0.2450000286102295,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.8000001907348633,
+          "frameMs": 66.60000000000036,
+          "quality": "dense",
+          "fieldMs": 0.6150000333786011,
+          "towerMs": 0.3900000095367432,
+          "enemyMs": 0.7399999380111695,
+          "combatMs": 0.1950000286102295,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 83.39999999999964,
+          "quality": "dense",
+          "fieldMs": 0.6449999570846557,
+          "towerMs": 0.35500001907348633,
+          "enemyMs": 0.7799999475479126,
+          "combatMs": 0.22500007152557372,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 50,
+          "quality": "dense",
+          "fieldMs": 0.5900000333786011,
+          "towerMs": 0.3799999475479126,
+          "enemyMs": 0.7349999904632568,
+          "combatMs": 0.2200000047683716,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 20,
+          "drawMs": 2.1000003814697266,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.6650000095367432,
+          "towerMs": 0.3700000524520874,
+          "enemyMs": 0.76999990940094,
+          "combatMs": 0.1950000047683716,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.6499999523162842,
+          "towerMs": 0.39000003337860106,
+          "enemyMs": 0.7550000429153443,
+          "combatMs": 0.21000001430511475,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 20,
+          "drawMs": 2.200000286102295,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.7049999952316284,
+          "towerMs": 0.3900000095367432,
+          "enemyMs": 0.7849999904632569,
+          "combatMs": 0.20499999523162843,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.1999998092651367,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.7400000095367432,
+          "towerMs": 0.36499998569488523,
+          "enemyMs": 0.7849999666213989,
+          "combatMs": 0.20500001907348633,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 20,
+          "drawMs": 2.1999998092651367,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.7350000143051147,
+          "towerMs": 0.375,
+          "enemyMs": 0.7700000286102295,
+          "combatMs": 0.2049999475479126,
+          "cacheBytes": 1369672
+        },
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 33.400000000001455,
+          "quality": "dense",
+          "fieldMs": 0.6894737042878804,
+          "towerMs": 0.4000000451740466,
+          "enemyMs": 0.7578946414746737,
+          "combatMs": 0.20000008532875463,
+          "cacheBytes": 1369672
+        }
+      ],
+      "overflow": false
+    },
+    {
+      "name": "phone",
+      "frames": 304,
+      "average_fps": 19.212722246525022,
+      "frame_p95_ms": 79.59999990463257,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/mobile-ltz-api/api/assets/game-art/z-pixel-v2/normalized-seam-safe/roads/core-access-plaza.png?v=7f829805a6d9ecb8058c516060bff96b4c8c483cece837fcdea097b0ecb9f54f",
+        "last_error": null,
+        "ready": true,
+        "base": "/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"ccaae991d78d021a14a11a2c24feb6328b690fb8dd286e90057661b1ea07c01b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.6350000143051148,
+          "towerMs": 0.3799999952316284,
+          "enemyMs": 0.7549999713897705,
+          "combatMs": 0.21500000953674317,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.8000001907348633,
+          "frameMs": 66.69999999999891,
+          "quality": "dense",
+          "fieldMs": 0.6299999475479126,
+          "towerMs": 0.38000006675720216,
+          "enemyMs": 0.7249999523162842,
+          "combatMs": 0.21500008106231688,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.3999996185302734,
+          "frameMs": 50,
+          "quality": "dense",
+          "fieldMs": 0.6549999952316284,
+          "towerMs": 0.34999995231628417,
+          "enemyMs": 0.75,
+          "combatMs": 0.225,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 20,
+          "drawMs": 1.8999996185302734,
+          "frameMs": 66.69999999999891,
+          "quality": "dense",
+          "fieldMs": 0.6700000524520874,
+          "towerMs": 0.3799999952316284,
+          "enemyMs": 0.7599999904632568,
+          "combatMs": 0.24000000953674316,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.200000286102295,
+          "frameMs": 66.70000000000073,
+          "quality": "dense",
+          "fieldMs": 0.6400000572204589,
+          "towerMs": 0.3900000095367432,
+          "enemyMs": 0.7199999809265136,
+          "combatMs": 0.20999999046325685,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 20,
+          "drawMs": 2,
+          "frameMs": 66.79999999999927,
+          "quality": "dense",
+          "fieldMs": 0.7049999952316284,
+          "towerMs": 0.38500001430511477,
+          "enemyMs": 0.7550000190734864,
+          "combatMs": 0.20499999523162843,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 83.39999999999782,
+          "quality": "dense",
+          "fieldMs": 0.6349999666213989,
+          "towerMs": 0.3700000286102295,
+          "enemyMs": 0.7200000047683716,
+          "combatMs": 0.20500001907348633,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 20,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 50.10000000000218,
+          "quality": "dense",
+          "fieldMs": 0.6499999523162842,
+          "towerMs": 0.365000057220459,
+          "enemyMs": 0.7299999237060547,
+          "combatMs": 0.21000006198883056,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.8999996185302734,
+          "frameMs": 50,
+          "quality": "dense",
+          "fieldMs": 0.6368420500504343,
+          "towerMs": 0.4000000451740466,
+          "enemyMs": 0.715789468664872,
+          "combatMs": 0.21578946866487203,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 66.59999999999854,
+          "quality": "dense",
+          "fieldMs": 0.6789473734403911,
+          "towerMs": 0.3526315689086914,
+          "enemyMs": 0.7578947418614438,
+          "combatMs": 0.20526308762399773,
+          "cacheBytes": 1070152
+        }
+      ],
+      "overflow": false
+    },
+    {
+      "name": "tablet",
+      "frames": 305,
+      "average_fps": 18.911705972403176,
+      "frame_p95_ms": 102.60000038146973,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/mobile-ltz-api/api/assets/game-art/z-pixel-v2/normalized-seam-safe/roads/corner-wn.png?v=b4bc77e18daaefd8dc09612b7d47e47496716b4f74da1a6202865ca76f315ab2&side=purple",
+        "last_error": null,
+        "ready": true,
+        "base": "/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"ccaae991d78d021a14a11a2c24feb6328b690fb8dd286e90057661b1ea07c01b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 19,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.6450001239776612,
+          "towerMs": 0.39499990940093993,
+          "enemyMs": 0.7400000333786011,
+          "combatMs": 0.19999990463256836,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 99.89999999999964,
+          "quality": "dense",
+          "fieldMs": 0.6299999237060547,
+          "towerMs": 0.38000006675720216,
+          "enemyMs": 0.7499999523162841,
+          "combatMs": 0.21500005722045898,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 18,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 83.39999999999964,
+          "quality": "dense",
+          "fieldMs": 0.6157894385488409,
+          "towerMs": 0.3631579248528731,
+          "enemyMs": 0.7368420801664654,
+          "combatMs": 0.2210526466369629,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 20,
+          "drawMs": 2,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.6699999809265137,
+          "towerMs": 0.38500003814697265,
+          "enemyMs": 0.7199999809265136,
+          "combatMs": 0.20499999523162843,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 18,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 116.59999999999854,
+          "quality": "dense",
+          "fieldMs": 0.6388888623979356,
+          "towerMs": 0.40000004238552517,
+          "enemyMs": 0.7555555502573649,
+          "combatMs": 0.2222222222222222,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 18,
+          "drawMs": 2.1999998092651367,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.6722221904330783,
+          "towerMs": 0.35555553436279297,
+          "enemyMs": 0.7333333492279053,
+          "combatMs": 0.23333334922790527,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 20,
+          "drawMs": 2,
+          "frameMs": 83.39999999999964,
+          "quality": "dense",
+          "fieldMs": 0.6450000286102295,
+          "towerMs": 0.38999998569488525,
+          "enemyMs": 0.7700000047683716,
+          "combatMs": 0.2250000238418579,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.6950000047683715,
+          "towerMs": 0.3999999761581421,
+          "enemyMs": 0.7549999713897705,
+          "combatMs": 0.2200000524520874,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 83.40000000000146,
+          "quality": "dense",
+          "fieldMs": 0.6499999523162842,
+          "towerMs": 0.38000006675720216,
+          "enemyMs": 0.7499999284744263,
+          "combatMs": 0.21000008583068847,
+          "cacheBytes": 1070152
+        },
+        {
+          "fps": 19,
+          "drawMs": 2,
+          "frameMs": 83.29999999999927,
+          "quality": "dense",
+          "fieldMs": 0.6250000476837159,
+          "towerMs": 0.3799999952316284,
+          "enemyMs": 0.7399999618530273,
+          "combatMs": 0.20500001907348633,
+          "cacheBytes": 1070152
+        }
+      ],
+      "overflow": false
+    }
+  ],
+  "errors": []
+}

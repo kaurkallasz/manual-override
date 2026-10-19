@@ -16,4 +16,8 @@ vm.runInContext("feedback('Routine telemetry')",ctx);assert.equal(shown.textCont
 now+=7999;vm.runInContext("feedback('Connected')",ctx);assert.equal(shown.textContent,error.message);
 now+=2;vm.runInContext("feedback('Connected')",ctx);assert.equal(shown.textContent,'Connected');
 for(const bad of [{...error,code:undefined},{...error,arm:{...error.arm,connected:false}},{...error,arm:{...error.arm,session:'physical:other'}}])assert(!ctx.recoverMotionLimit(bad),'Do not retain a missing, foreign, or failed connection');
-console.log('PASS: boundary rejection clears movement goals without disconnecting; eight-second readable notice; genuine faults remain fail-closed');
+const missingAtom={...error,code:'target_unavailable',message:'Selected Atom moved. Select its current position and press Go again.'};
+ctx.pendingXYZ=true;ctx.xyzTarget={x:300,y:200,z:80,tag_id:100};
+assert(ctx.recoverMotionLimit(missingAtom));assert.equal(ctx.session,'physical:one');assert.equal(ctx.generation,3);assert.equal(ctx.pendingXYZ,false);assert.equal(ctx.xyzTarget.tag_id,undefined);assert.equal(shown.textContent,missingAtom.message);
+for(const bad of [{...missingAtom,arm:null},{...missingAtom,arm:{...error.arm,connected:false}},{...missingAtom,arm:{...error.arm,session:'physical:other'}}])assert(!ctx.recoverMotionLimit(bad));
+console.log('PASS: boundary and Atom rejection clear movement goals without disconnecting; eight-second readable notice; genuine faults remain fail-closed');

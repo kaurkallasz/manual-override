@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 import threading
 import time
+from shared import delay_trace as trace
+from shared.delay_evidence import clean as clean_evidence
 
 LOG_PATH = Path(__file__).with_name('data') / 'connection-events.jsonl'
 MAX_BYTES = 2 * 1024 * 1024
@@ -24,7 +26,7 @@ _numbers = {'game_age_ms', 'controller_game_age_ms', 'controller_age_ms', 'feedb
 _flags = {'hidden', 'focused', 'online', 'connected', 'enabled', 'feedback_ok',
           'motion_ready', 'feed_ready', 'paused', 'virtual', 'connection_ready',
           'calibration_loading', 'view_active', 'had_session'}
-_labels = {'phase', 'journey_phase', 'control_mode', 'status', 'action', 'code', 'safety_status', 'calibration_layer'}
+_labels = {'phase', 'journey_phase', 'control_mode', 'status', 'action', 'code', 'safety_status', 'calibration_layer', 'motion_invalidation'}
 
 
 def _text(value):
@@ -65,6 +67,12 @@ def clean_event(data):
             safe[key] = value
         elif key in ('game_error', 'robot_error'):
             safe[key] = _text(value)
+        elif trace.enabled() and key == 'mapping_gate' and isinstance(value, str) and _names.fullmatch(value):
+            safe[key] = value
+        elif trace.enabled() and key == 'servo_error':
+            safe[key] = _text(value)
+        elif trace.enabled() and key == 'board' and isinstance(value, dict):
+            safe[key] = clean_evidence(value)
     result['context'] = safe
     return result
 
@@ -95,6 +103,11 @@ def append(side, data):
         _seen[key] = True
         while len(_seen) > 4096:
             _seen.popitem(last=False)
+    if trace.enabled():
+        trigger = event['event'] in {'cue_motion_held', 'cue_command_failed', 'command_failed',
+            'motion_epoch_changed', 'robot_disconnected', 'feedback_stale', 'motion_not_ready', 'suspend'}
+        trace.evidence('connection.'+event['event'], {**event['context'], 'reason': event['reason']},
+                       side=side, incident=trigger)
     return True
 
 

@@ -1,6 +1,8 @@
 """Photon Game: authoritative, presentation-free tower-defence simulation."""
 
 from __future__ import annotations
+from shared import delay_trace as trace
+from shared.fixed_board import cue_layout
 
 import json
 import hashlib
@@ -14,11 +16,16 @@ from typing import Any
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from flask import Blueprint, jsonify, request, send_from_directory
+from flask import Blueprint, current_app, jsonify, request, send_from_directory
 
 import live
+import post_match
+from event_flow import starting_atoms
+
+from photon_game_runtime import rewards
 from photon_game_runtime import ContractLevelModel, DefenseEngine, SettingsStore
 from photon_game_runtime.engine import orc_schedule
+from photon_game_runtime import wave_timeline
 from photon_game_runtime.atom_buff import validated as _validated_occupancy, unavailable as _unavailable_occupancy
 from photon_game_runtime.settings import validate_settings, PRESETS
 from progress_link import ProgressLink
@@ -91,6 +98,18 @@ def _module(slug):
     return _hub_ctx.get_prototype(slug)
 
 
+def _check_enemy_renderer(settings):
+    if settings.get('breaker_attack_mode') != 'ranged':
+        return
+    renderer = _module('laser-tag-y')
+    reader = getattr(renderer, 'renderer_contract', None)
+    contract = reader() if callable(reader) else None
+    if (not isinstance(contract, dict) or contract.get('contract') != 'photon.renderer'
+            or type(contract.get('version')) is not int or contract['version'] != 1
+            or type(contract.get('enemy_combat_version')) is not int or contract['enemy_combat_version'] != 1):
+        raise GameError('Breaker archers require the matching Laser Tag Y renderer; update and refresh displays before starting')
+
+
 _journey = None
 _presets = None
 
@@ -101,13 +120,22 @@ def _result_committed(attempt):
 
 
 def _journey_tick():
-    if _journey:
-        _journey.tick()
+    # Progress invokes this outside its lock. Never wait behind an operator
+    # command that may itself be waiting for a result to finish saving.
+    if _journey and _command_lock.acquire(blocking=False):
+        try:
+            if _journey.snapshot().get('reset_stop_error'):
+                if not _settle_reset_stops():return
+            _journey.tick()
+            _auto_start_next()
+        finally:
+            _command_lock.release()
 
 
 _progress = ProgressLink(_module, lambda: _engine, _live.bump, Path(DATA_DIR) / 'pending-result.json', _result_committed, _journey_tick)
 
 
+@trace.traced('game.journey_snapshot')
 def journey_snapshot():
     value=_journey.snapshot() if _journey else {'contract':'photon.game.journey','version':1,'status':'unavailable','error':'not initialized'}
     if _module('auto-pickup-game'):
@@ -121,19 +149,27 @@ def journey_snapshot():
         except Exception as exc:
             value['calibration_display']={'contract':'hhh.playfield.display','version':1,'status':'unavailable','error':str(exc)}
             value.update(motion_blocked=True,motion_error=str(exc))
+    if value.get('reset_stop_error'):
+        value.update(motion_blocked=True,motion_error=value['reset_stop_error'])
+    if _saved_game_switch_error:
+        value.update(motion_blocked=True, motion_error=_saved_game_switch_error)
     return value
 
 
 def motion_policy(side):
-    """Practice and tutorial scopes supplement, never mutate, Progress's earned tier."""
+    """Player and calibration scopes use the single guarded motion path."""
     state = journey_snapshot()
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         engine = _engine
-    test = engine.virtual_test_control if engine else None
+    if engine is None:
+        return {'contract':'photon.game.motion','version':1,'status':'unavailable',
+                'blocked':True,'error':'Game controls are unavailable; wait for the level to load'}
+    with trace.locked(engine.lock, 'game.engine_lock'):
+        test, phase = engine.virtual_test_control, engine.phase
     active = state.get('active_side')
     if state.get('motion_blocked'):
         return {'contract':'photon.game.motion','version':1,'status':'ready','scope':'waiting','tier':0,
-                'blocked':True,'error':state.get('motion_error')}
+                'blocked':True,'error':state.get('motion_error') or 'Waiting for arm stop confirmation'}
     if active:
         owner = _module('auto-pickup-game')
         cal = owner.calibration_session_snapshot() if owner else {}
@@ -142,14 +178,96 @@ def motion_policy(side):
         session = cal.get('sessions',{}).get(state.get('session_id'),{})
         live = cal.get('active_side')==side and cal.get('active_id')==state.get('session_id') and session.get('epoch')==cal.get('epoch') and not session.get('paused') and session.get('access_until',0)>time.time()
         tier = 3 if session.get('stage') in ('tutorial','complete') else 2
+        error = ('The other player is completing calibration' if side!=active else
+                 'Calibration connection expired; reconnect to continue') if not live else None
         return {'contract':'photon.game.motion','version':1,'status':'ready','scope':'tutorial' if side==active else 'waiting',
-                'tier':tier if side==active else 0,'blocked':not live,'session_id':state.get('session_id')}
-    return {'contract':'photon.game.motion','version':1,'status':'ready',
-            'scope':'practice' if test is not None else 'player','tier':test,
-            'blocked':state.get('phase')=='calibration' or test is None and state.get('phase') in ('upgrades','ready')}
+                'tier':tier if side==active else 0,'blocked':not live,'error':error,'session_id':state.get('session_id')}
+    error = None
+    if state.get('phase')=='calibration':error='Waiting for the calibration turn'
+    elif state.get('phase') in ('results','ready'):error=(state.get('auto_start') or {}).get('error') or 'Waiting for both players to continue and the next level to start'
+    return {'contract':'photon.game.motion','version':1,'status':'ready','scope':'player','tier':None,
+            'blocked':error is not None,'error':error}
 
 
 def mobile_journey_command(side,value):
+    with _command_lock:
+        result=_mobile_journey_command(side,value)
+        if value.get('action') in ('ready','complete','finish'):
+            _auto_start_next()
+            result=_journey.snapshot()
+            error=(result.get('auto_start') or {}).get('error')
+            if error and value.get('action')=='ready':raise ValueError(error)
+        return result
+
+
+def _next_start_context(run_id,roster):
+    saved=roster['saved_games']['active']
+    return {'run_id':run_id,'event_id':roster['events']['active_id'],'game_id':saved['id'],'level':saved['level'],
+            'players':{side:{'id':p['id'],'tier':p['selected_control'],'levels':_copy(p['levels'])}
+                       for side,p in roster['roster'].items()}}
+
+
+def _auto_start_next():
+    """Both players authorized this continuation; all ordinary Start gates apply."""
+    state=_journey.snapshot() if _journey else {}
+    pending=state.get('auto_start')
+    if not pending or pending.get('error') or state['phase']!='ready':return
+    try:
+        roster=_progress.roster()
+        if _next_start_context(pending['run_id'],roster)!=pending:
+            raise ValueError('Players, event or equipment changed; both players must press Ready again')
+        _apply_command({'action':'start','event_id':pending['event_id']})
+    except Exception as exc:
+        # Do not repeatedly attempt a physical transition from the maintenance
+        # loop. Both phones show the failure and either can explicitly retry.
+        _journey.start_failed(f'Next level could not start: {exc}')
+
+
+def _continue_players(side,value,roster):
+    state=_journey.snapshot();run_id=value.get('run_id')
+    choice=value.get('choice','continue')
+    if choice not in ('continue','new','replay_level','replay_game'):raise ValueError('Choose a result action')
+    if state.get('reset_operation')=='result-new:'+str(run_id):return state
+    if state['phase']=='playing' and run_id and run_id==state.get('continued_from'):
+        return state  # A delayed duplicate cannot start or reset a second game.
+    if not state.get('run_id'):
+        if run_id or choice!='continue':raise ValueError('Level result changed; refresh before pressing Continue / Ready')
+        return _journey.ready(side)  # The first game still belongs to Game Master.
+    if not run_id or run_id!=state.get('run_id'):
+        raise ValueError('Level result changed; refresh before pressing Continue / Ready')
+    pending=state.get('auto_start')
+    if pending and state['phase']=='calibration':return state
+    attempt=_progress._check(_module('photon-progress').attempt_snapshot(run_id))['attempt']
+    context=_next_start_context(run_id,roster)
+    if pending and {k:v for k,v in pending.items() if k!='error'}==context:
+        _journey.queue_start(context)
+        return _journey.snapshot()
+    if (attempt['outcome'] not in ('won','overrun','operator_ended')
+            or attempt['event_id']!=context['event_id'] or attempt['game_id']!=context['game_id']):
+        raise ValueError('Wait for this pair’s level result to finish saving')
+    if choice=='continue' and attempt['outcome']=='won' and attempt['metadata'].get('contract_control_tier')==4:
+        raise ValueError('You Win! Game Over. Choose New game, Replay last level or Replay whole game.')
+    state=_journey.ready(side,choice)
+    teams={side:{**p,'tier':p['selected_control']} for side,p in roster['roster'].items()}
+    if not Journey.readiness(state,teams)['all_ready']:return state
+    if choice=='new':
+        _reset_event_game({'event_id':context['event_id'],'operation_id':'result-new:'+run_id,
+                           'reset_generation':state.get('reset_operation'),'run_id':_run_id,
+                           'game_id':context['game_id']})
+        return _journey.snapshot()
+    if choice in ('replay_level','replay_game'):
+        saved_game_command(side,{'action':choice,'event_id':context['event_id'],'run_id':run_id,
+                                 'operation_id':'result-'+choice+':'+run_id})
+        _journey.replay_result(run_id)
+        _journey.queue_start(_next_start_context(run_id,_progress.roster()))
+        return _journey.snapshot()
+    if state['phase']=='results' or _engine.phase!='setup':
+        _apply_command({'action':'next_match','event_id':context['event_id'],'run_id':run_id})
+    _journey.queue_start(context)
+    return _journey.snapshot()
+
+
+def _mobile_journey_command(side,value):
     if side not in ('green','purple') or _journey is None:
         raise ValueError('game journey unavailable')
     if value.get('action')=='complete':
@@ -163,7 +281,10 @@ def mobile_journey_command(side,value):
             raise ValueError('fresh Board placement evidence required')
         return _journey.finish(side,observation)
     if value.get('action')=='ready':
-        return _journey.ready(side)
+        roster=_progress.roster()
+        if not value.get('event_id') or value['event_id']!=roster['events']['active_id']:
+            raise ValueError('Event changed; refresh before getting ready')
+        return _continue_players(side,value,roster)
     if value.get('action')=='replay':
         if _engine and _engine.phase=='running':
             raise ValueError('finish the active game before replaying calibration')
@@ -177,12 +298,13 @@ def mobile_journey_command(side,value):
 def _set_input(name, *, status, error=None, **detail):
     global _revision
     value = {"status": status, "error": error, **detail}
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         if _inputs[name] != value:
             _inputs[name] = value
             _revision += 1
 
 
+@trace.traced('game.level_bundle')
 def _level_bundle():
     module = _module("photon-level")
     if module is None or not callable(getattr(module, "runtime_bundle", None)):
@@ -191,10 +313,10 @@ def _level_bundle():
         # The versioned fast read keeps health/art current without copying
         # the entire immutable runtime for every display frame of state.
         status_reader = getattr(module, "runtime_status", None)
-        with _lock:
+        with trace.locked(_lock, 'game.state_lock'):
             engine = _engine
         if engine is not None and callable(status_reader):
-            status = status_reader()
+            status = trace.call('level.runtime_status', status_reader)
             if (
                 not isinstance(status, dict)
                 or status.get("contract") != LEVEL_CONTRACT
@@ -207,13 +329,13 @@ def _level_bundle():
                 return None, "Photon Level runtime status is invalid"
             if status["status"] != "ready":
                 return None, str(status.get("error") or "Photon Level is not ready")
-            with engine.lock:
+            with trace.locked(engine.lock, 'game.engine_lock'):
                 unchanged = (engine.level.layout_revision == status["revision"]
                              and engine.level.runtime_version == status['version'])
                 frozen = engine.phase != "setup"
             if unchanged or frozen:
                 return status, None
-        value = module.runtime_bundle()
+        value = trace.call('level.runtime_bundle', module.runtime_bundle)
     except Exception as exc:
         return None, f"Photon Level failed: {exc}"
     if (
@@ -294,6 +416,7 @@ def _simple_level(runtime):
     }
 
 
+@trace.traced('game.set_presentation')
 def _set_presentation(value, error=None):
     """Validate Level's optional descriptor, then forward it without resolving art."""
     global _presentation
@@ -332,16 +455,17 @@ def _set_presentation(value, error=None):
          "error": error, "revision": "unavailable", "base": "", "assets": {}}
         if error else _copy(value)
     )
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         _presentation = output
         _set_input("presentation", status=output["status"], error=output.get("error"), revision=output["revision"])
 
 
+@trace.traced('game.install_level')
 def _install_level(bundle):
     global _engine, _level_projection, _revision, _history_sequence
     revision = bundle["revision"]
-    with _level_install_lock:
-        with _lock:
+    with trace.locked(_level_install_lock, 'game.level_install_lock'):
+        with trace.locked(_lock, 'game.state_lock'):
             engine = _engine
         if (engine is not None and engine.level.layout_revision == revision
                 and engine.level.runtime_version == bundle['version']):
@@ -349,7 +473,7 @@ def _install_level(bundle):
             _set_input("level", status="ready", revision=revision)
             return True
         if engine is not None:
-            with engine.lock:
+            with trace.locked(engine.lock, 'game.engine_lock'):
                 active = engine.phase != "setup"
             if active:
                 _set_input(
@@ -366,13 +490,13 @@ def _install_level(bundle):
             engine = DefenseEngine(bundle["runtime"], bundle["waves"])
             engine.set_wake(_engine_changed)
             engine.set_physical_source(_physical_observation)
-            with _lock:
+            with trace.locked(_lock, 'game.state_lock'):
                 _engine = engine
                 _history_sequence = 0
                 start_engine = _hub_ctx is not None
         else:
             engine.reload_level(next_level, bundle["waves"])
-        with _lock:
+        with trace.locked(_lock, 'game.state_lock'):
             _level_projection = projection
             _set_input("level", status="ready", revision=revision)
             _revision += 1
@@ -382,6 +506,7 @@ def _install_level(bundle):
     return True
 
 
+@trace.traced('game.sync_level')
 def _sync_level():
     bundle, error = _level_bundle()
     if error:
@@ -495,12 +620,27 @@ def _validated_stacking(value, sampled_at, source_epoch):
     return {**value, "relations": clean}
 
 
+@trace.traced('game.board_observation')
 def _board_observation(diagnostics=None):
     module = _module("photon-board")
     if module is None or not callable(getattr(module, "runtime_observation", None)):
         return None, "Photon Board is unavailable or disabled"
+    with trace.locked(_lock, 'game.state_lock'):
+        layout = ({key: _level_projection.get(key) for key in
+                   ('id', 'layout_revision', 'width', 'height', 'sockets', 'core')}
+                  if _level_projection else None)
+        run_id = _run_id
+    scope, fixed_ids = cue_layout({'level': layout, 'run_id': run_id}) if layout else (None, [])
+    if diagnostics is not None and scope is not None:
+        diagnostics['_layout_scope'] = scope
     try:
-        value = module.runtime_observation()
+        if scope is not None:
+            reader = getattr(module, 'game_observation', None)
+            if not callable(reader):
+                return None, 'Photon Board contract mismatch: game map API unavailable'
+            value = reader(scope=scope, fixed_ids=fixed_ids)
+        else:
+            value = module.runtime_observation()
     except Exception as exc:
         return None, f"Photon Board failed: {exc}"
     if (
@@ -511,6 +651,8 @@ def _board_observation(diagnostics=None):
         return None, f"Photon Board contract mismatch (expected {BOARD_CONTRACT} v{BOARD_VERSION})"
     if diagnostics is not None:
         diagnostics.update(_board_input_report(value))
+    if scope is not None and (value.get('layout_scope') != scope or value.get('fixed_ids') != sorted(fixed_ids)):
+        return None, 'Photon Board game map scope mismatch; waiting for a matching sample'
     if value.get("status") != "ready":
         errors = value.get("errors")
         detail = "; ".join(str(item) for item in errors) if isinstance(errors, list) else ""
@@ -614,12 +756,14 @@ def _board_observation(diagnostics=None):
 def _physical_observation():
     upstream = {}
     observation, error = _board_observation(upstream)
+    scope = upstream.pop('_layout_scope', None)
     occupancy_supported = False
     try:
         module = _module('photon-board')
         reader = getattr(module, 'occupancy_snapshot', None)
         occupancy_supported = callable(reader)
-        occupancy = _validated_occupancy(reader()) if callable(reader) else _unavailable_occupancy('Board occupancy unavailable')
+        occupancy = (_validated_occupancy(reader(scope=scope) if scope is not None else reader())
+                     if callable(reader) else _unavailable_occupancy('Board occupancy unavailable'))
     except Exception as exc:
         occupancy = _unavailable_occupancy(f'Board occupancy failed: {exc}')
     if occupancy_supported:
@@ -636,9 +780,10 @@ def _physical_observation():
     return {**_copy(observation), 'occupancy': occupancy}
 
 
+@trace.traced('game.append_history')
 def _append_history(kind, detail=None):
-    with _history_lock:
-        with _lock:
+    with trace.locked(_history_lock, 'game.history_lock'):
+        with trace.locked(_lock, 'game.state_lock'):
             run_id = _run_id
         entry = {
             "recorded_at": time.time(),
@@ -651,23 +796,24 @@ def _append_history(kind, detail=None):
             with open(LOG_PATH, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry, separators=(",", ":")) + "\n")
                 handle.flush()
-                os.fsync(handle.fileno())
-            with _lock:
+                trace.call('logging.history_fsync', os.fsync, handle.fileno())
+            with trace.locked(_lock, 'game.state_lock'):
                 _storage["history"] = {"status": "ready", "error": None}
         except OSError as exc:
-            with _lock:
+            with trace.locked(_lock, 'game.state_lock'):
                 _storage["history"] = {"status": "unavailable", "error": str(exc)}
 
 
+@trace.traced('game.persist_engine_events')
 def _persist_engine_events():
     global _history_sequence
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         engine = _engine
     if engine is None:
         return
-    with engine.lock:
+    with trace.locked(engine.lock, 'game.engine_lock'):
         events = _copy(engine.events)
-    with _history_lock:
+    with trace.locked(_history_lock, 'game.history_lock'):
         for event in events:
             sequence = int(event.get("sequence", 0))
             if sequence <= _history_sequence:
@@ -678,12 +824,13 @@ def _persist_engine_events():
 
 def _engine_changed():
     global _revision
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         _revision += 1
     _persist_engine_events()
     _live.bump()
 
 
+@trace.traced('game.configuration_snapshot')
 def _configuration_snapshot(engine):
     output = _settings.response()
     output.pop("ok", None)
@@ -692,12 +839,12 @@ def _configuration_snapshot(engine):
         "version": 1,
         "authored_wave_enemy_counts": [],
     })
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         _storage["settings"] = {
             "status": output["status"], "error": output.get("error"),
         }
     if engine is not None:
-        with engine.lock:
+        with trace.locked(engine.lock, 'game.engine_lock'):
             output["authored_wave_enemy_counts"] = [
                 sum(max(0, int(group.get("count", 0))) for group in wave.get("groups", []))
                 for wave in engine.wave_source
@@ -706,12 +853,13 @@ def _configuration_snapshot(engine):
     return output
 
 
+@trace.traced('game.public_snapshot')
 def _public_snapshot(*, compact_enemies=False):
     _sync_level()
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         engine = _engine
     configuration = _configuration_snapshot(engine)
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         inputs = _copy(_inputs)
         storage = _copy(_storage)
         level = _copy(_level_projection)
@@ -736,11 +884,22 @@ def _public_snapshot(*, compact_enemies=False):
             "inputs": inputs,
             "storage": storage,
             "configuration": configuration,
-            "progress": _progress.snapshot(),
+            "progress": trace.call('game.progress', _progress.snapshot),
             "level_presets": _presets.snapshot() if _presets else {'status':'unavailable'},
             "server_time": time.time(), "journey":journey_snapshot(),
         }
     simulation = engine.snapshot(compact_enemies=compact_enemies)
+    progress = trace.call('game.progress', _progress.snapshot)
+    next_match = trace.call('game.post_match_preview', post_match.preview, _presets,engine,(level or {}).get('name','photon-level'),_settings.snapshot())
+    next_loadouts = trace.call('game.post_match_loadouts', post_match.loadouts, _module,simulation['phase'])
+    journey = journey_snapshot()
+    journey['readiness'] = (Journey.readiness(journey,next_loadouts['teams']) if next_loadouts.get('status')=='ready'
+                            else {'status':'unavailable','error':next_loadouts.get('error','Player status unavailable')})
+    if simulation['phase'] == 'setup':
+        tier = simulation['virtual_test_control'] or max((p['tier'] for p in (next_loadouts or {}).get('teams',{}).values()), default=1)
+        selected = next((p for p in next_match.get('tiers',[]) if p['tier'] == tier), None)
+        if selected:
+            simulation['wave_timeline'] = wave_timeline.preview(selected['timings'])
     return {
         "contract": CONTRACT,
         "version": VERSION,
@@ -753,10 +912,13 @@ def _public_snapshot(*, compact_enemies=False):
         "inputs": inputs,
         "storage": storage,
         "configuration": configuration,
-        "progress": _progress.snapshot(),
-        "journey": journey_snapshot(),
+        "progress": trace.call('game.progress', _progress.snapshot),
+        "journey": journey,
         "level_presets": _presets.snapshot() if _presets else None,
         **simulation,
+        "next_match":next_match,
+        "result_save":post_match.save_state(progress,run_id,simulation["phase"]),
+        "next_loadouts":next_loadouts,
     }
 
 
@@ -785,27 +947,8 @@ def _mobile_saved_control(side='green'):
 
 
 def mobile_command(data):
-    """Validate practice-only team intents; all mutations remain Game-owned."""
-    if not isinstance(data, dict) or data.get('side', 'green') not in ('green', 'purple'):
-        raise ValueError('A valid mobile team is required.')
-    side = data.get('side', 'green')
-    with _command_lock:
-        engine, ready = _require_engine()
-        if not ready and data.get('action') not in ('stop', 'disconnect'):
-            raise ValueError('Level unavailable.')
-        progress_state=_progress.snapshot()
-        tier = _mobile_saved_control(side)
-        policy = motion_policy(side)
-        with engine.lock:
-            if policy.get('blocked') and data.get('action') not in ('stop','disconnect'):
-                raise ValueError('wait for the shared transition')
-            if progress_state.get('reward_enabled') and data.get('action') not in ('stop', 'disconnect'):
-                raise ValueError('Mobile simulation is practice only.')
-            if not tier and engine.virtual_test_control is None and data.get('action') not in ('stop','disconnect'):
-                raise ValueError('select a saved player or ask Gamemaster for a practice level')
-            result = engine.mobile_arms[side].command(data, engine, tier)
-    _live.bump()
-    return result
+    """Virtual robot gameplay was removed; physical controls use the guarded relay."""
+    raise ValueError('Virtual gameplay is unavailable; use the physical arm controls')
 
 
 def mobile_turret_aim(data):
@@ -817,7 +960,7 @@ def mobile_turret_aim(data):
         engine, ready = _require_engine()
         if not ready:
             raise ValueError('Level unavailable.')
-        with engine.lock:
+        with trace.locked(engine.lock, 'game.engine_lock'):
             if engine.paused or engine.phase not in ('setup', 'running'):
                 raise ValueError('Turret adjustment is unavailable while the game is paused or ended.')
             if data.get('run_id') != _run_id:
@@ -857,7 +1000,7 @@ def game_events(*, incremental=False):
 
 def _require_engine():
     _sync_level()
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         engine = _engine
         level_ready = _inputs["level"].get("status") == "ready"
     if engine is None:
@@ -872,6 +1015,200 @@ def apply_command(data):
         return _apply_command(data)
 
 
+_saved_game_switch_error = None
+
+
+def _arms_before_game_switch():
+    owner = _module('dobot-mg400-relay')
+    if owner is None or not callable(getattr(owner, 'arms_snapshot', None)):
+        raise ValueError('Arm connection status unavailable before changing games')
+    state = owner.arms_snapshot()
+    if (state.get('contract') != 'hhh.relay.arms' or type(state.get('version')) is not int
+            or state['version'] != 1 or state.get('status') != 'ready'
+            or type(state.get('observed_at')) not in (float, int)
+            or not -.25 <= time.time()-state['observed_at'] <= 1.5):
+        raise ValueError('Fresh arm connection status required before changing games')
+    for side in ('green', 'purple'):
+        arm = state.get('arms', {}).get(side, {})
+        if type(arm.get('connected')) is not bool:
+            raise ValueError('Both arm connection states are required')
+    return owner,state
+
+
+def _stop_for_saved_game(sides=None):
+    owner,state=_arms_before_game_switch()
+    for side in ('green','purple'):
+        required=side in sides if sides is not None else state['arms'][side]['connected']
+        if required:
+            stopped = owner.stop_side(side)
+            if (stopped.get('contract') != 'hhh.relay.stop' or type(stopped.get('version')) is not int
+                    or stopped['version'] != 1 or stopped.get('status') != 'ready' or stopped.get('stopped') is not True):
+                raise ValueError(f'Waiting for {side} to confirm the Reset stop' if sides is not None
+                                 else f'Waiting for {side} to stop before changing games')
+
+
+def _reset_stop_scope():
+    """Track actual motion obligations, not every disconnected controller."""
+    previous=_journey.snapshot()
+    sides=set(previous.get('reset_stop_sides') or ('green','purple')) if previous.get('reset_stop_error') else set()
+    if _engine.phase=='running':sides.update(('green','purple'))
+    try:
+        _,arms=_arms_before_game_switch()
+        sides.update(s for s,arm in arms['arms'].items() if arm['connected'])
+        if _module('auto-pickup-game'):
+            cal=_journey.call('auto-pickup-game','calibration_session_snapshot','hhh.cal2.session',1)
+            sides.update(cal.get('pending_stops',{}))
+            if cal.get('active_side'):sides.add(cal['active_side'])
+    except Exception:
+        # Unknown hardware state cannot erase a possible outstanding stop.
+        sides.update(('green','purple'))
+    return sorted(sides)
+
+
+def _settle_reset_stops():
+    state=_journey.snapshot()
+    # Older records did not identify the arms involved. Keep that obligation
+    # conservative until an explicit, evidenced recovery or successful stop.
+    sides=state.get('reset_stop_sides')
+    pending=list(sides if sides is not None else ('green','purple'))
+    error=None
+    for side in list(pending):
+        try:_stop_for_saved_game(sides=[side])
+        except Exception as exc:error=error or str(exc)
+        else:
+            pending.remove(side)
+            _journey.reset_stop(state['reset_stop_error'] if pending else None,sides=pending)
+    _journey.reset_stop(error if pending else None,sides=pending)
+    return not pending
+
+
+def saved_game_command(side, value):
+    """Authenticated player entrypoint, serialized with every game Start."""
+    global _run_id, _saved_game_switch_error
+    if side not in ('green', 'purple') or not isinstance(value, dict):
+        raise ValueError('valid side and saved game command required')
+    if not value.get('event_id'):raise ValueError('Event identity required; refresh this client')
+    with _command_lock, _journey.operation_lock:
+        engine, _ = _require_engine()
+        if engine.phase == 'running':
+            raise ValueError('finish the current match before saving or loading a game')
+        if _journey.snapshot()['phase'] == 'calibration':
+            raise ValueError('finish calibration before saving or loading a game')
+        _progress.flush()
+        owner = _module('photon-progress')
+        if owner is None or not callable(getattr(owner, 'saved_game_command', None)):
+            raise ValueError('Saved games unavailable')
+        _progress._check(owner.progress_snapshot())
+        # Validate the complete request before clearing a ready roster or shop UI.
+        _progress._check(owner.saved_game_preview(value))
+        if value['action'] in ('new', 'load', 'replay_level', 'replay_game'):
+            _saved_game_switch_error = 'Changing game. Waiting for arm stop confirmation.'
+            _live.bump()
+            try:
+                if not engine.virtual_play: _stop_for_saved_game()
+            except Exception as exc:
+                _saved_game_switch_error = str(exc)
+                raise
+            _journey.cancel()
+        try: result = _progress._check(owner.saved_game_command(value))
+        except Exception:
+            _saved_game_switch_error = None
+            raise
+        if value['action'] in ('new', 'load', 'replay_level', 'replay_game'):
+            virtual = engine.virtual_play
+            engine.reset()
+            engine.set_virtual_play(virtual)
+            engine.set_virtual_test_loadout(None, None)
+            _run_id = None
+            _progress.clear_finished()
+            _journey.reset_lobby()
+            if value['action']=='load':
+                _journey.restore_game_calibration(_progress.roster())
+            _saved_game_switch_error = None
+        _live.bump()
+        return result
+
+
+def event_command(value):
+    global _run_id,_saved_game_switch_error
+    with _command_lock,_journey.operation_lock:
+        engine,_=_require_engine()
+        if engine.phase=='running' or _journey.snapshot()['phase']=='calibration':raise ValueError('Finish the match and calibration before changing events')
+        _progress.flush()
+        owner=_module('photon-progress')
+        _progress._check(owner.event_preview(value))
+        _saved_game_switch_error='Changing event; waiting for arms to stop'
+        _live.bump()
+        try:
+            if not engine.virtual_play:_stop_for_saved_game()
+            _journey.cancel()
+            result=_progress._check(owner.event_command(value))
+            engine.reset();_run_id=None;_progress.clear_finished();_journey.reset_lobby()
+        except Exception as exc:
+            _saved_game_switch_error=str(exc);raise
+        _saved_game_switch_error=None;_live.bump()
+        return result
+
+
+def _reset_event_game(data):
+    """Return the current event to player selection, preserving its stored progress."""
+    global _run_id, _history_sequence, _revision, _saved_game_switch_error
+    roster=_progress.roster()
+    event_id=roster['events']['active_id']
+    if not event_id or data.get('event_id')!=event_id:
+        raise GameError('Select the active event and refresh before Reset')
+    operation=data.get('operation_id')
+    if not isinstance(operation,str) or not 1<=len(operation)<=160 or not all(c.isalnum() or c in '-_:.' for c in operation):
+        raise GameError('Reset operation ID required; refresh Game Master')
+    previous_reset=_journey.snapshot().get('reset_operation')
+    if previous_reset==operation:return
+    if ('reset_generation' not in data or data['reset_generation']!=previous_reset
+            or 'run_id' not in data or data['run_id']!=_run_id or 'game_id' not in data
+            or data['game_id']!=roster['saved_games']['active_id']):
+        raise GameError('Game changed; refresh before Reset')
+    owner=_module('photon-progress')
+    if not callable(getattr(owner,'event_command',None)):
+        raise GameError('Event player selection unavailable')
+    _saved_game_switch_error='Resetting game; waiting for arms to stop'
+    _live.bump()
+    try:
+        # Reset the UI even when hardware is offline; retain a durable motion
+        # inhibit until the normal stop path can confirm both arms are safe.
+        _journey.checkpoint_calibration(roster)
+        _journey.reset_stop('Reset requested; waiting for arm stop confirmation',sides=_reset_stop_scope())
+        _settle_reset_stops()
+        if _engine.phase=='running':_engine.pause(True)
+        # Abandon unfinished play without a forced turret purchase or level unlock.
+        # A result that already finished keeps its actual outcome and settlement.
+        _progress.flush(outcome='aborted')
+        _journey.cancel(defer_stop=True)
+        # Reselecting the same event atomically clears both selected players and
+        # its active pair, through Progress's existing public owner contract.
+        _progress._check(owner.event_command({'action':'select','event_id':event_id,'operation_id':operation}))
+        _engine.reset()
+        _engine.set_virtual_test_loadout(None,None)
+        _engine.configure_piece_codes(_settings.snapshot())
+        _progress.clear_finished()
+        _journey.reset_lobby(reset_operation=operation)
+        with trace.locked(_lock,'game.state_lock'):
+            _run_id=None;_history_sequence=0;_revision+=1
+        _sync_level()
+    except Exception as exc:
+        _saved_game_switch_error=str(exc)
+        _live.bump()
+        raise
+    _saved_game_switch_error=None
+    _live.bump()
+
+
+def _bind_starting_atoms(engine,roster,observation,requested):
+    saved=roster['saved_games']['active']
+    atoms=starting_atoms(engine,saved,observation,requested)
+    result=_progress._check(_module('photon-progress').bind_game_atoms({
+        'event_id':roster['events']['active_id'],'game_id':saved['id'],'atoms':atoms}))
+    return result['game']
+
+
 def _apply_command(data):
     """Apply one validated operator input and return the authoritative snapshot."""
     global _run_id, _history_sequence, _revision
@@ -883,7 +1220,7 @@ def _apply_command(data):
     if action not in {"configure", "reset_settings", 'level_preset'}:
         engine, level_ready = _require_engine()
     try:
-        if action in ('place', 'activate_core', 'loadout', 'aim', 'virtual_test_loadout','calibration_test') and engine is not None and engine.phase == 'running' and _progress.snapshot().get('reward_enabled'):
+        if action in ('place', 'activate_core', 'loadout', 'aim', 'virtual_test_loadout','calibration_test') and engine is not None and engine.phase == 'running' and trace.call('game.progress', _progress.snapshot).get('reward_enabled'):
             raise GameError('end the scored attempt before operator placement or loadout intervention')
         if action == "start":
             if engine.phase != 'setup':
@@ -900,50 +1237,46 @@ def _apply_command(data):
                 if journey.get('motion_blocked'):
                     raise GameError(journey.get('motion_error') or 'Waiting for arm stop confirmation')
                 _physical_observation()
-                with _lock:
+                with trace.locked(_lock, 'game.state_lock'):
                     board_error = _inputs["board"].get("error")
                     board_ready = _inputs["board"].get("status") == "ready"
                 if not board_ready:
                     raise GameError(board_error or "Photon Board is unavailable")
-            reward_enabled = data.get('reward_enabled', False)
-            if type(reward_enabled) is not bool:
-                raise GameError('reward_enabled must be true or false')
-            roster = None
-            try:
-                roster = _progress.roster()
-            except ValueError:
-                if reward_enabled or _module('photon-progress') is not None:
-                    raise
-            test_players = [p['id'] for p in (roster or {}).get('roster', {}).values() if p.get('is_test') is True]
-            # Progress independently enforces this rule using its owned IDs.
-            if test_players:
-                reward_enabled = False
-            if reward_enabled and (engine.virtual_test_loadout is not None or engine.virtual_test_control is not None):
-                raise GameError('disable test unlocks before starting a scored game')
-            if reward_enabled and virtual_play:
-                raise GameError('virtual play is practice and cannot award progress')
-            if reward_enabled and _inputs['board'].get('upstream', {}).get('source') == 'simulation':
-                raise GameError('simulated board input is practice and cannot award progress')
-            if reward_enabled and any(t.get('source') == 'virtual' for t in engine.placements.values()):
-                raise GameError('reset virtual placements before starting a scored physical game')
+            if data.get('reward_enabled',True) is not True or virtual_play:
+                raise GameError('Practice and virtual gameplay have been removed')
+            reward_enabled=True
+            roster=_progress.roster()
+            if not data.get('event_id') or data['event_id']!=roster['events']['active_id']:
+                raise GameError('Select an event and refresh before Start')
+            if _journey:
+                _journey.release_start()  # Recover this journey's unconsumed Start lock before rebinding.
+            if not roster['saved_games']['active_id']:
+                roster=_progress._check(_module('photon-progress').prepare_game())
+            if _inputs['board'].get('upstream',{}).get('source')=='simulation':
+                raise GameError('Event matches require physical camera input')
+            saved_game=roster['saved_games']['active']
+            engine.set_virtual_test_loadout(None,None)
             settings = _settings.snapshot()
             participants = [dict(player_id=p['id'], name=p['name'], side=side,
                                  control_tier=p['selected_control'], levels=p['levels'])
                             for side, p in sorted((roster or {}).get('roster', {}).items())]
-            tier = engine.virtual_test_control if not reward_enabled and engine.virtual_test_control is not None else max((p['control_tier'] for p in participants), default=1)
+            tier = saved_game['level']
             settings,preset = _presets.for_run((_level_projection or {}).get('name','photon-level'),tier,settings) if _presets else (settings,None)
+            engine.configure_piece_codes(settings)
+            saved_game=_bind_starting_atoms(engine,roster,_physical_observation(),data.get('starting_atoms',{}))
+            _check_enemy_renderer(settings)
             previews = [orc_schedule(settings, engine.wave_source, i) for i in range(1, 5)]
             if reward_enabled and any(b['total'] <= a['total'] for a, b in zip(previews, previews[1:])):
                 raise GameError('increase control-method percentages so each tier schedules more orcs')
             if reward_enabled and _presets:
                 family=_presets.family_for_map((_level_projection or {}).get('name','photon-level'),_settings.snapshot())
                 schedules=[orc_schedule(base,engine.wave_source,i+1) for i,(base,_) in enumerate(family)]
-                if any((p or {}).get('family')!='progression' for _,p in family) or any(b['total']<=a['total'] or b['wave_interval_s']>=a['wave_interval_s'] or b['release_rate_multiplier']<=a['release_rate_multiplier'] for a,b in zip(schedules,schedules[1:])):
-                    raise GameError('scored presets require more orcs, shorter wave gaps and faster release at each tier; use practice for custom tests')
+                if any((p or {}).get('family') not in ('progression','breaker-archer','ltz-horde-v1','event-progression-v1') for _,p in family) or any(b['total']<=a['total'] or b['wave_interval_s']>=a['wave_interval_s'] or b['release_rate_multiplier']<=a['release_rate_multiplier'] for a,b in zip(schedules,schedules[1:])):
+                    raise GameError('scored presets require more orcs, shorter wave gaps and faster release at each tier')
             if reward_enabled and _settings.response()['preset'] == 'training':
-                raise GameError('the Training preset is practice; select a scored game preset')
+                raise GameError('Select an event level preset')
             run_id = uuid.uuid4().hex
-            reservation_id = _journey.start(reward_enabled) if _journey else None
+            reservation_id = None
             if roster is not None:
                 metadata = {'campaign_id': 'ltz', 'level_id': (_level_projection or {}).get('name', 'photon-level'),
                             'level_revision': engine.level.layout_revision,
@@ -951,26 +1284,64 @@ def _apply_command(data):
                             'settings_hash': hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest(),
                             'settings': settings, 'contract_control_tier': tier,
                             'orc_schedule': previews[tier - 1], 'scoring_version': 1,
-                            'companion_policy': engine.snapshot()['companion_policy']}
+                            'enemy_combat_version': 1,
+                            'reward_rules': rewards.rules(settings,engine.wave_source,previews[tier-1]),
+                            'companion_policy': {**engine.snapshot()['companion_policy'], 'l4_turrets_per_socket': settings['l4_turrets_per_socket']}}
                 metadata['level_preset']=preset
-                if test_players:
-                    metadata['test_player_ids'] = test_players
-                if not reward_enabled:
-                    metadata['virtual_test_loadout'] = engine.snapshot()['virtual_test_loadout']
-                attempt = _progress.begin({'run_id': run_id, 'reward_enabled': reward_enabled,
-                                           'metadata': metadata, 'expected_roster': participants, 'reservation_id':reservation_id})
+                metadata['core_rule_version']=2  # Ring plus opposing-team stack; no kill gate.
+                metadata['event_id']=roster['events']['active_id']
+                try:
+                    reservation_id = _journey.start(reward_enabled) if _journey else None
+                    attempt = _progress.begin({'run_id': run_id, 'event_id':roster['events']['active_id'], 'reward_enabled': reward_enabled,
+                                               'metadata': metadata, 'expected_roster': participants, 'reservation_id':reservation_id,
+                                               'expected_game_id': (roster.get('saved_games') or {}).get('active_id')})
+                except Exception:
+                    if _journey and reservation_id:
+                        _journey.release_start(reservation_id)
+                    raise
                 reward_enabled = attempt['reward_enabled']
             engine.set_virtual_play(virtual_play)
-            with _lock:
+            with trace.locked(_lock, 'game.state_lock'):
                 _run_id = run_id
                 _history_sequence = 0
             try:
-                engine.start(settings, progression={p['side']: p for p in participants})
+                engine.start(settings, progression={p['side']: p for p in participants},reward_enabled=True,preset=preset,countdown_s=5.0,event_game=saved_game)
                 if _journey:
                     _journey.started(run_id if roster is not None else None, reward_enabled)
             except Exception:
                 _progress.flush(outcome='aborted')
                 raise
+        elif action in ('end_match','unlock_next_level','next_match'):
+            roster=_progress.roster()
+            if not data.get('event_id') or data['event_id']!=roster['events']['active_id']:raise GameError('Event changed; refresh first')
+            requested=data.get('run_id')
+            if not isinstance(requested,str):raise GameError('Match ID required')
+            owner=_module('photon-progress')
+            a=_progress._check(owner.attempt_snapshot(requested))['attempt']
+            if a['event_id']!=data['event_id'] or a['game_id']!=roster['saved_games']['active_id']:raise GameError('This match belongs to another saved pair or event')
+            if action=='end_match':
+                if a['outcome']=='operator_ended':return game_snapshot()
+                if requested==_run_id and engine.phase=='operator_ended':
+                    _progress.flush(outcome='operator_ended')
+                    return game_snapshot()
+                if requested!=_run_id or engine.phase!='running':raise GameError('The match has already ended')
+                _stop_for_saved_game()
+                engine.end_match()
+                _progress.flush(outcome='operator_ended')
+            elif action=='unlock_next_level':
+                if engine.phase=='running':raise GameError('End the match before advancing')
+                result=_progress._check(owner.advance_level(data))['attempt']
+                with _progress.lock:_progress._set(result=result)
+                if engine.phase=='setup':_journey.prepare_next()
+                _live.bump()
+            else:
+                if a['outcome']=='won' and a['metadata'].get('contract_control_tier')==4:
+                    raise GameError('You Win! Game Over. Choose a replay or New game from the results.')
+                if engine.phase=='running':raise GameError('End the match first')
+                if _journey.snapshot()['phase']=='calibration':raise GameError('Finish calibration first')
+                _stop_for_saved_game()
+                engine.reset();_run_id=None
+                _journey.prepare_next()
         elif action == 'level_preset':
             return _presets.command({**data,'action':data.get('preset_action','save'),'settings':PRESETS['balanced'] if data.get('preset_action')=='defaults' else data.get('settings')})
         elif action == 'journey_cancel':
@@ -986,9 +1357,9 @@ def _apply_command(data):
         elif action == 'calibration_apply':
             if engine.phase=='running':raise GameError('End the current game before applying a saved calibration')
             return _journey.apply_saved_calibration(data)
-        elif action == 'calibration_test':
+        elif action == 'calibration_setup':
             if engine.phase == 'running':
-                raise GameError('end the current practice game before calibration testing')
+                raise GameError('end the current match before calibration setup')
             engine.set_virtual_play(False)
             return _journey.manual(data)
         elif action == "pause":
@@ -1000,42 +1371,21 @@ def _apply_command(data):
                 raise GameError("game is not running")
             engine.pause(False)
         elif action == "reset":
-            _progress.flush(outcome='aborted')
-            engine.reset()
-            if _journey and _journey.snapshot().get('phase')=='playing' and _journey.snapshot().get('practice'):
-                _journey.result({'run_id':_journey.snapshot().get('run_id'),'reward_enabled':False})
-            engine.configure_piece_codes(_settings.snapshot())
-            if "virtual_play" in data:
-                engine.set_virtual_play(bool(data["virtual_play"]))
-            with _lock:
-                _run_id = None
-                _history_sequence = 0
-                _revision += 1
-            _sync_level()
-            _live.bump()
-        elif action == 'virtual_test_loadout':
-            if 'levels' not in data:
-                raise GameError('levels is required; use null to restore saved-player upgrades')
-            engine.set_virtual_test_loadout(data['levels'], data.get('control', ...))
-        elif action == "set_virtual":
-            if engine.phase == 'running':
-                raise GameError('finish the attempt before switching physical/virtual play')
-            engine.set_virtual_play(bool(data.get("virtual_play")))
-        elif action == "place":
-            socket_id = data.get("socket_id")
-            engine.place(
-                int(data["atom_tag_id"]),
-                str(socket_id) if socket_id not in (None, "") else None,
-                data.get("tower_type"),
-                source="virtual",
-                team=data.get("team"),
-            )
-        elif action == "activate_core":
-            engine.activate_core_tag(
-                int(data["atom_tag_id"]), source="virtual", team=data.get("team")
-            )
-        elif action == "loadout":
-            engine.set_loadout(int(data["atom_tag_id"]), str(data["tower_type"]))
+            _reset_event_game(data)
+        elif action in ('virtual_test_loadout','set_virtual','test_end_match','test_next_level','next_level','calibration_test','place','activate_core','loadout'):
+            raise GameError('This legacy practice command has been removed; refresh the client')
+        elif action in ('operator_atom', 'operator_turret', 'operator_core'):
+            if action in ('operator_atom', 'operator_core') and 'atom_tag_id' not in data:
+                raise GameError('Atom selection is required; use null to clear it')
+            saved=(_progress.roster().get('saved_games') or {}).get('active')
+            if saved and saved.get('atoms'):engine.event_game=saved
+            if _journey and _journey.snapshot().get('phase') == 'calibration':
+                raise GameError('Finish calibration before changing turret controls')
+            if not engine.virtual_play:
+                # Refresh cached Board evidence before validating manual priority.
+                engine.ingest_physical(_physical_observation())
+            engine.operator_turret_command(action, data.get('socket_id'),
+                data.get('atom_tag_id') if action in ('operator_atom', 'operator_core') else data.get('activation'))
         elif action == "aim":
             engine.set_tower_aim(
                 int(data["atom_tag_id"]),
@@ -1057,7 +1407,7 @@ def _apply_command(data):
                     "settings validation failed",
                     fields=errors,
                 )
-            with _lock:
+            with trace.locked(_lock, 'game.state_lock'):
                 _storage["settings"] = {"status": "ready", "error": None}
                 _revision += 1
             if _engine is not None and _engine.phase == "setup":
@@ -1067,7 +1417,7 @@ def _apply_command(data):
             })
         elif action == "reset_settings":
             response = _settings.reset_defaults()
-            with _lock:
+            with trace.locked(_lock, 'game.state_lock'):
                 _storage["settings"] = {"status": "ready", "error": None}
                 _revision += 1
             if _engine is not None and _engine.phase == "setup":
@@ -1082,7 +1432,7 @@ def _apply_command(data):
             raise
         raise GameError(str(exc)) from exc
     except OSError as exc:
-        with _lock:
+        with trace.locked(_lock, 'game.state_lock'):
             _storage["settings"] = {
                 "status": "unavailable", "error": str(_settings.error or exc),
             }
@@ -1094,11 +1444,12 @@ def _apply_command(data):
 
 
 def hub_init(ctx):
-    global _hub_ctx, _journey, _presets
+    global _hub_ctx, _journey, _presets, _saved_game_switch_error
+    _saved_game_switch_error = None
     _hub_ctx = ctx
     _journey = Journey(Path(LOG_PATH).parent/'journey.json',_module,_live.bump,lambda side:[code for code,owner in (_engine.atom_owners if _engine else {}).items() if owner==side])
     _presets = Presets(Path(LOG_PATH).parent/'level-presets.json')
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         _storage["settings"] = {
             "status": "unavailable" if _settings.error else "ready",
             "error": _settings.error,
@@ -1107,7 +1458,7 @@ def hub_init(ctx):
     _sync_level()
     if _level_projection:
         _presets.ensure_map(_level_projection.get('name','photon-level'),_settings.snapshot())
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         engine = _engine
     if engine is not None:
         engine.set_wake(_engine_changed)
@@ -1117,7 +1468,7 @@ def hub_init(ctx):
 
 def hub_stop():
     global _hub_ctx, _engine, _level_projection, _presentation, _journey, _presets
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         engine = _engine
     if engine is not None:
         engine.stop_background()
@@ -1128,7 +1479,7 @@ def hub_stop():
             # The durable outbox is replayed before recovery on the next start.
             pass
     _progress.stop()
-    with _lock:
+    with trace.locked(_lock, 'game.state_lock'):
         _engine = None
         _level_projection = None
         _presentation = {}
@@ -1173,6 +1524,42 @@ def command_api():
         return jsonify({"ok": True, "output": apply_command(request.get_json(silent=True))})
     except GameError as exc:
         return jsonify({"ok": False, "error": str(exc), "errors": exc.fields}), 400
+    except Exception:
+        current_app.logger.exception('Unexpected Photon Game command failure')
+        return jsonify(ok=False, error='Server error while processing the command. Check the live game status and server log before retrying.'), 500
+
+
+@bp.route('/api/saved-game', methods=['POST'])
+def saved_game_api():
+    side = request.args.get('side')
+    roles = request.environ.get('hhh.roles') or set()
+    if side not in ('green', 'purple') or not ({side, 'gamemaster'} & set(roles)):
+        return jsonify(ok=False, error='Player side required'), 403
+    origin = request.headers.get('Origin')
+    if origin and origin.rstrip('/') != request.host_url.rstrip('/'):
+        return jsonify(ok=False, error='Same-origin request required'), 403
+    try: return jsonify(saved_game_command(side, request.get_json(silent=True)))
+    except (ValueError, TypeError, KeyError) as exc: return jsonify(ok=False, error=str(exc)), 400
+
+
+@bp.route('/api/economy', methods=['GET','POST'])
+def economy_api():
+    denied=_operator_only()
+    if denied:return denied
+    try:return jsonify(post_match.economy(_module,request.get_json(silent=True) if request.method=='POST' else None))
+    except (ValueError,KeyError,TypeError) as exc:return jsonify({'ok':False,'error':str(exc)}),400
+
+@bp.route('/api/event',methods=['GET','POST'])
+def event_api():
+    denied=_operator_only()
+    if denied:return denied
+    try:return jsonify(event_command(request.get_json(silent=True)) if request.method=='POST' else _progress.roster())
+    except (ValueError,TypeError,KeyError) as exc:return jsonify(ok=False,error=str(exc)),400
+
+
+@bp.route('/economy-settings.js')
+def economy_settings_script():
+    return send_from_directory(HERE,'economy-settings.js')
 
 
 @bp.route('/api/orc-preview', methods=['POST'])
@@ -1187,19 +1574,27 @@ def orc_preview_api():
     if errors:
         return jsonify({'ok': False, 'errors': errors, 'error': 'settings validation failed'}), 400
     engine, ready = _require_engine()
-    with engine.lock:
+    with trace.locked(engine.lock, 'game.engine_lock'):
         previews = [orc_schedule(settings, engine.wave_source, tier) for tier in range(1, 5)]
     return jsonify({'ok': True, 'previews': previews})
 
 
 def _orc_events():
     def snapshot():
-        with _lock:
-            engine = _engine
+        with trace.locked(_lock, 'game.state_lock'):
+            engine,run_id = _engine,_run_id
         if engine is None:
             return {'contract':'photon.game.preview','version':1,'status':'unavailable','ok': False, 'error': 'Photon Level unavailable', 'previews': [],'virtual_test_control':None}
-        with engine.lock:
+        progress = _progress.snapshot()
+        with trace.locked(engine.lock, 'game.engine_lock'):
+            terminal = None
+            if engine.phase in ('won','overrun','operator_ended'):
+                terminal = {'run_id':run_id,'phase':engine.phase,'contract_control_tier':engine.contract_control_tier,
+                            'kills':engine.kills,'sim_time':engine.sim_time,'match_score':engine.rewards.snapshot(),
+                            'kill_heatmap':engine.rewards.heatmap.snapshot(),
+                            'result_save':post_match.save_state(progress,run_id,engine.phase)}
             return {'contract':'photon.game.preview','version':1,'status':'ready','ok': True,
-                    'virtual_test_control':engine.virtual_test_control,
-                    'previews': [orc_schedule(_settings.snapshot(), engine.wave_source, tier) for tier in range(1, 5)]}
+                    'virtual_test_control':engine.virtual_test_control,'journey':_journey.snapshot() if _journey else None,
+                    'terminal_result':terminal,
+                    'previews': trace.call('game.post_match_preview', post_match.preview, _presets,engine,(_level_projection or {}).get('name','photon-level'),_settings.snapshot()).get('tiers',[])}
     return _live.stream(snapshot, interval=15)

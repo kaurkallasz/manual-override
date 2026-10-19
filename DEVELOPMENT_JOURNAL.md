@@ -1,6 +1,6 @@
 # HHH Gamemaster development journal
 
-Last updated: 2026-10-09, including checkpoint `19efd59`, the user's confirmation that returning to standalone Auto PP Cal 2 solved the Mobile LTZ calibration precision problem, and the calibration regression timeline and future baseline below. Earlier entries preserve their original evidence and attribution, including test counts and deployment observations that apply only to their dated checkpoint. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
+Last updated: 2026-10-12, including the October 10–12 gameplay, camera, relay, performance and diagnostic work, and the recorded physical win at 21:07 Tallinn time after the fixed-board correction. The latest Git checkpoint is `d7d4165`, following implementation checkpoint `19efd59`; the subsequent work remains uncommitted. Earlier entries preserve their original evidence and attribution, including test counts and deployment observations that apply only to their dated checkpoint. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
 
 This journal explains how the repository reached its current design: what changed, what was learned, why the next decision followed, and whether the repository records the work as human-only or AI-assisted. The reconstruction is based on commit history and messages, the current README and specifications, implementation diffs, calibration files, and local Laser Tag X run and score logs.
 
@@ -24,7 +24,7 @@ Other human participants appear in gameplay score logs, but the repository does 
 
 HHH Gamemaster is a single Python/Flask hub serving three password-gated sandboxes: `gamemaster`, `green`, and `purple`. Machines remain modular prototypes, but authentication, discovery, routing, setup import/export, and cross-sandbox access live in the shared hub.
 
-During normal play, the gamemaster relay exclusively owns two Dobot MG400 arms. Each team receives a separately leased, server-enforced side; a watchdog stops an abandoned arm. Because both robots retain the same factory IP, each arm's sockets are pinned to a dedicated USB Ethernet interface.
+During normal play, the gamemaster relay exclusively owns two Dobot MG400 arms. Each team receives a separately leased, server-enforced side; a watchdog stops an abandoned arm. Because both robots retain the same factory IP, each arm's sockets are pinned to a dedicated USB Ethernet interface. The relay now runs each connected arm's existing driver in its own worker process to isolate feedback and following from hub stalls. Player adapters consume measured feedback over the existing relay SSE path; leases, motion generations, freshness checks and explicit reconnect remain authoritative.
 
 The physical-game stack combines corrected ArUco camera observations, camera-to-robot calibration, relay pose and pump state, Atom impact sensors, shared playfield rendering, and per-team automation. Laser Tag X remains the mature two-arm cooperative placement game: it has browser-side high-frequency fusion, coarse server state, append-only diagnostics and scores, recovery from visible board state, and operator escape hatches.
 
@@ -32,13 +32,19 @@ The active tower-defence implementation is now the modular Photon stack: Level o
 
 Green and Purple Mobile LTZ now share one frontend and the same authoritative Game through a restricted gateway. Both teams have Joint, Cartesian XYZ, Targeting and Cue progression, virtual practice, and calibrated physical controls through the existing relay. The mobile calibration lesson derives pickup/transport heights from the six ground captures, records four raised samples, supports offline completion, and lets the gamemaster explicitly associate a saved arm calibration with the current camera correction. Reconnect adopts measured robot position and requires a new gesture; stale sessions cannot replay old targets. Relay-owned floor/ceiling limits and the calibrated 220–439 mm reach envelope constrain physical motion.
 
-**Accepted calibration baseline, confirmed by the user on October 9:** the current calibration works. The previous calibration used by Mobile LTZ was not precise enough; returning to the standalone **Auto PP Cal 2** procedure solved the problem. Use that procedure and the working rig calibration as the baseline for future work. A mobile lesson's successful save/completion is not evidence of equivalent physical precision. The final entry records the changes that led to this divergence and distinguishes documented defects from causes that remain unproven.
+**Accepted calibration baseline, confirmed by the user on October 9:** the current calibration works. The previous calibration used by Mobile LTZ was not precise enough; returning to the standalone **Auto PP Cal 2** procedure solved the problem. Use that procedure and the working rig calibration as the baseline for future work. A mobile lesson's successful save/completion is not evidence of equivalent physical precision. The October 9 calibration-regression entry records the changes that led to this divergence and distinguishes documented defects from causes that remain unproven.
 
 The October continuation makes physical cues reusable, retains acquired endpoints through temporary camera-map holds, supports pause and player intervention, detects a failed pickup, and adds a configurable Clear view action after placement. Fresh marker labels arrive independently of robot connection or renderer startup. Camera detections, cue acquisition and physical occupancy have separate versioned Board contracts: a visible label never grants motion permission. Mobile delivery and connection diagnostics make generation, transmission, camera holds and player input inspectable. Actual-arm graphics use timestamped measured positions, settled-position feedback and an erasing checked trajectory.
 
 Game now accepts camera-observed opposing-Atom cover to finish an armed core and owns the persistent Atom turret bonus: a confirmed occupied turret has a green halo, twice the health capacity and twice the weapon damage. Removing the Atom preserves health percentage; a confirmed return heals once. Camera dropouts do not manufacture a return or healing. L4 companions, upgrades, row barriers and both Y displays retain their existing ownership boundaries.
 
-This is a source checkpoint, with fresh automated verification recorded in the October 9 entry below. The latest Atom-buff entry records isolated browser/performance validation and a pending planned hub restart and physical placement/hold/pickup/return check. Earlier successful restarts do not prove that the final source is active now. This journal update does not establish a new live-hardware or hosted-phone release.
+The October 10–11 continuation adds ranged Breaker archers, shared score/shop and weighted rewards, saved upgrade prices, Game Master test shops and credit grants, immediate practice-intensity changes, and a wave timeline. The horde preset remains a candidate: isolated traces reached 1,000 living enemies, but the combined dense-rendering/20 Hz engine target and supervised human balance are not fully qualified. MCAM1 adds an independently owned auxiliary camera and optional player inset without changing the calibrated game camera.
+
+On October 12, native iPhone evidence confirmed WebContent memory termination. Renderer cleanup, physical-mode renderer teardown and software-backed camera canvases reduced avoidable allocations; the user restarted the normal hub and both permanent player bundles were verified. A temporary-fix session was observed connected and stable for 383 seconds. The saved native verification still lists post-restart iPhone Connect confirmation as pending; the later Green game does not identify its device.
+
+Delay Analysis now records whole-session summaries with bounded incident detail and a 650 MiB detail cap. The first measured optimization publishes validated artwork outside gameplay reads. The fixed-board correction then separates immutable learned geometry and labels from live sightings, occupancy and motion permission through `photon.board.cue-targets` v2. In the latest recorded physical run, `06f2627b732f49d9ba0f52fddd689fc2`, Green completed eleven socket placements, the ring and the core stack, and won with no recorded mid-play mapping holds, target invalidations or disconnects. The previous run recorded 65 hold events. Recorded v2 browser evidence confirms the correction was active for this game, superseding the implementation entry's pending-deployment status for that run.
+
+This is a documentation reconciliation, not a new software release or fresh test run. The current checkpoint includes a successful physical game as well as isolated tests, with their limits recorded separately below. Remaining work includes moving-Atom visibility/reacquisition after placement, repeated physical play, native iPhone confirmation after restart, and dense horde qualification. Further progress-publication optimization is a recommendation, not an implemented step.
 
 Across both games, the most important physical-play rule is that the **stable corrected-camera result is board truth**. A robot operation says what was intended and supplies transaction receipts; it helps attribute or diagnose the result, but it cannot replace or overrule a uniquely observed physical placement. Laser Tag Z adds a second distinction: physical observation activates gameplay state, while only the defence engine owns combat, topology, health, and objective state.
 
@@ -1159,6 +1165,12 @@ User-directed implementation by OpenAI Codex; uncommitted working-tree change.
 21. **A presentation may receive geometry without owning the level.** A small display projection lets Canvas draw and hit-test authoritative state while TMJ parsing, editing, revision control, and authored files remain in the Level module.
 22. **Project source once; compose it at the edge.** Level converts editor-specific alignment into stable visual transforms, Game transports those values without interpretation, Art resolves stable IDs, and Y remains a presentation rather than a second level parser.
 23. **Put the form with the operator and the rules with the authority.** Y may present every tuning control, but Game publishes the schema, validates intent, freezes run settings, and owns persistence.
+24. **Keep learned geometry separate from live evidence.** Fixed coordinates and display labels can survive occlusion within a run and camera epoch. Fresh tracking, moving-Atom acquisition, occupancy and robot feedback still decide whether motion is allowed.
+25. **Isolate a bad observation without hiding real board movement.** One malformed marker must not shrink the whole usable board. Coherent movement of separated markers still invalidates the map and requires relearning.
+26. **Test the production lifecycle, including its loader.** Fake-arm worker tests missed helper removal by the real sandbox loader; a production-loader smoke exposed the spawn failure. Process isolation does not eliminate downstream delivery or freshness limits.
+27. **Browser object counts are not native device memory.** Desktop allocation probes found real waste, but only native iPhone evidence identified the remaining WebContent memory termination and camera rendering path.
+28. **Remove measured work from shared reads before widening deadlines.** Artwork validation belongs at publication, not in gameplay snapshots. Compare recorded runs afterward while retaining workload and coverage caveats.
+29. **Separate active control from lifecycle timing.** Feedback age after normal release and hidden-page scheduling are not active robot stalls. Atom reacquisition waits also need their visibility and player-intervention context.
 
 ## Human and AI contribution record
 
@@ -1180,7 +1192,11 @@ The following commits explicitly record AI co-authorship:
 
 The remaining commits through `9d22a3a` are authored by Kaspar without an AI trailer. Their correct label is **human-recorded; AI involvement not evidenced**, not “definitely human-only.” Commit `561b4e4` is a special case: it lacks an AI trailer, but the journal committed in that change explicitly records OpenAI Codex's implementation and verification role for the crane controls and arm overlays. That narrower file-level provenance should be retained without rewriting the Git trailer record.
 
-At the August 29 reconstruction, the Laser Tag Z changes after `9d22a3a` were uncommitted. Subsequent checkpoints include `d8ffbdf`, the September modular extraction commits, `279b715`, and `cd00d97`; the earlier working-tree status is historical, not the current release boundary. Commit `cd00d97` records Kaspar Kallas as author and committer without an AI trailer. Earlier journal entries retain their narrower recorded AI provenance. The mobile continuation after `cd00d97` remains uncommitted, so its implementation ownership is not inferred from file style or the current assistant. OpenAI Codex reviewed evidence, ran the checks listed below, and wrote this September 22 continuation at the user's request.
+At the August 29 reconstruction, the Laser Tag Z changes after `9d22a3a` were uncommitted. Subsequent checkpoints include `d8ffbdf`, the September modular extraction commits, `279b715`, `cd00d97`, mobile checkpoint `2ea92b5`, two-player checkpoint `53bb9c8`, physical-cue checkpoint `19efd59`, and calibration-journal checkpoint `d7d4165`. Earlier statements that those continuations were uncommitted describe their original recording dates. The last three commits record Kaspar Kallas as author and committer without AI trailers; earlier entries retain their narrower recorded AI provenance.
+
+The September 22 continuation explicitly records that OpenAI Codex reviewed evidence, ran its listed checks and wrote that journal update at the user's request. That remains evidence of the documented contribution, not blanket attribution for all files in that checkpoint.
+
+The October 10–12 continuation remains uncommitted at this reconciliation. Attribute its human requests and AI implementation only where the dated entries or source reports record them. Missing attribution is not supplied from file style or from the assistant currently editing the journal. OpenAI Codex performed this October 12 documentation/source/evidence review at the user's request; reported implementation test results remain historical results, not checks rerun by this update.
 
 ## Evidence of physical iteration
 
@@ -1190,24 +1206,27 @@ The August 29 reconstruction recorded a focused 84-test Laser Tag Z suite; later
 
 ## Known trade-offs and unfinished edges
 
-- The browser owns high-frequency fusion state. Reload recovery can reconstruct activated targets and finale state, but not every per-tag sequence index, frozen pose, or historical binding.
-- Server game state and the current diagnostic run are process memory. JSONL files are durable evidence, but a server restart does not automatically resume the previous run.
+- Laser Tag X's browser owns its high-frequency fusion state. Reload recovery can reconstruct activated targets and finale state, but not every per-tag sequence index, frozen pose, or historical binding. Photon Game instead owns the tower-defence simulation server-side.
+- In-progress gameplay state is process memory; a server restart does not automatically resume the previous run. Delay Analysis now persists summary checkpoints and incident detail and reopens them with recording off. This diagnostic recovery does not resume gameplay.
 - Manual completion keeps an event running but intentionally weakens the claim that every transition was physically sensed; the diagnostic record must retain that distinction.
 - Calibration is installation-specific data. Updating it is a real system change and should be paired with the physical setup and a dated journal entry.
 - On October 9 the user confirmed that standalone Auto PP Cal 2 restored working precision after the Mobile LTZ calibration proved insufficient. Preserve this operating baseline. Future mobile capture changes must demonstrate physical equivalence before replacing it; this documentation decision does not itself change the existing lesson's commit behavior.
 - The current camera-authoritative rule depends on camera quality. It fails closed when corrected tracking or a valid spatial model is unavailable, and the gamemaster remains the recovery authority.
-- The earlier Laser Tag Z, Photon, mobile and two-player calibration work has Git checkpoints through `53bb9c8`. The October 9 entry records the next publication scope and verification; a Git checkpoint alone does not establish installation acceptance.
+- Git checkpoints now extend through `19efd59` and `d7d4165`. October 10–12 changes remain in the working tree. Neither a commit nor a successful individual game establishes acceptance of every installation feature.
 - Laser Tag Z server simulation state is process memory. The external screen can reconnect to the current process, but a process restart does not resume an in-progress defence run.
 - Ordinary force-field links preserve activation history while the objective ring is spatial and order-independent. This is intentional, but diagnostics and the connection contract must continue to make the distinction visible.
 - The deterministic ring solver explores spatial subsets from sixteen down to eight. Current pruning and tests keep the authored sixteen-socket level tractable; a materially larger socket set would require a new performance decision.
 - Phase 4 deliberately retains Laser Tag Z's legacy map/parser as a read-only rollback fixture. It is duplicate code, not a second mutable authority, and should be removed only after a live installation trial confirms Photon Level startup, editing, restart, and in-run revision deferral.
 - Phase 5 deliberately retains Z's direct Webcam/Calibration/Relay reader only for standalone operation when Photon Board is absent or disabled. Remove it only after a live trial confirms corrected marker freshness, arm-state propagation, pump-off gating, and Board failure diagnostics.
 - Phase 6 deliberately retains the proven simulation in both Laser Tag Z and Photon Game. Photon Game is the new modular owner used by Y; remove Z's rollback copy only after production presentation parity and a complete live game prove the new Level → Board → Game chain.
-- Phase 8 completed the deterministic authority cleanup after direct Z parity. Z remains unchanged as the requested rollback/reference implementation. A full physical Game → Y trial is still needed to prove camera-derived Board placement, all four weapons, ring/core completion, failure handling, and external display continuity before declaring an installation release.
+- Phase 8 completed the deterministic authority cleanup after direct Z parity. Z remains the requested rollback/reference implementation. The October 12 run supplies physical evidence for Board placement, ring completion and the core-stack win. It does not independently qualify every weapon, failure path, both teams, native phone behavior or external display continuity.
 - The former Level/Art normalized-image duplication is resolved: Level owns one shared authored content package for Tiled editing and runtime delivery, and Game forwards its versioned asset descriptor to Y.
 - Mobile virtual geometry deliberately reaches the full map and is not calibrated physical MG400 geometry. Virtual practice does not award permanent progression; cues do not resume automatically after session loss.
 - Hosted delivery and physical-camera alignment require installation checks beyond isolated fixtures. Bounded enemy guidance cannot reconstruct unseen collisions or arbitrarily long network outages; measured arm playback does not predict beyond received positions. Changed Python modules and frozen mobile bundles require a main-hub restart, which must account for the in-memory game run. The shared no-store controller and bridge can load on a player-page refresh when their backend contracts are already active.
 - Atom occupancy, camera-map quarantine/recovery, core cover and physical arm display timing have deterministic coverage, but final installation acceptance still requires supervised camera/projector and robot checks. Browser stress results in the October 8 entry describe that machine and replay, not physical camera latency or a sustained hardware game.
+- The October 12 fixed-board run recorded no mid-play holds or disconnects, but one moving-Atom acquisition took 8.003 seconds and included a player waypoint move. Its exact optical cause is unproven. Saved diagnostics do not include video or every rendered label, so they cannot certify zero visual flicker.
+- Dense horde performance and human balance remain open. The improved single-display benchmark does not replace the earlier four-view and engine-budget measurements. The permanent iPhone bundle's post-restart Connect check is also still pending in the native evidence.
+- Use the normal hub launcher for future activation. A prior restart from the Codex subprocess left robot access failing with `No route to host`; do not infer current reachability from an interface listing or HTTP readiness. This documentation update does not restart services or start diagnostic recording.
 
 ## How to record the next decision
 
@@ -3181,3 +3200,809 @@ Earlier AI implementation remains attributed in the original entries; no
 unrecorded cause or decision is assigned to the user. Validation for this update
 is a documentation/source consistency review and Git whitespace check; the
 earlier 666 Python/205 JavaScript results are not new tests of physical precision.
+
+## 2026-10-10 — Validate cue endpoints within the independently verified board region
+
+- The reported #48 hold exposed an edge-marker recovery deadlock: the former policy required the other anchors' hull to contain every disputed marker, so a leftmost suspect could disable all cue targets. Read-only inspection later found the same global hold on #40 despite 15 matched camera markers. An offline replay using captured board positions reproduced the #48 hold; the original conflicting #48 frame was not retained.
+- The camera owner now publishes the fresh independent-anchor hull with a `partial` status when a marker is disputed. A suspect outside that region no longer vetoes the region itself. Quarantined markers still have no acquisition coordinates in `tags`. Older controllers reject `partial` and therefore remain held until refreshed. No reference markers were added and no calibration values were changed by this task.
+- The existing physical controller validates each new and retained endpoint against that hull in corrected-camera coordinates, accounting for either camera orientation. Region loss during hover/descent uses the existing hold path, retaining the acquired pose and pump state. Fresh SSE region/quarantine updates revoke authority before the acquisition poll. Expired, malformed, undersized or inadequately supported regions fail closed; confirmed map/layout/calibration changes, occupancy, robot feedback, pickup-failure and reach/path rules remain enforced. Play explains the selected endpoint's dispute/region restriction separately from reach.
+- Validation: 104 JavaScript and 109 Python tests passed, plus Green and Purple fake-relay bridge smoke suites. The real Python owner → JS cue-runner regression starts and finishes an interior 100 → 49 cue through over a minute of disputed/hidden edge #48, then blocks a new approach to #48. Other cases exercise all four approach/descent holds and same-pose recovery with hidden endpoints, unchanged suction, stale/malformed regions, rotated views for both teams, SSE revocation and snapshot isolation. JS syntax and whitespace checks passed. No test commanded physical motion.
+- Activated after the game naturally reached `overrun`, twice checking both pumps off and connected Green freshly idle/stationary. Saved the ended-game state privately at `/tmp/cue-region-ended-game.json`; replaced only verified workspace hub PID 60466 with PID 62544 using the existing Miniconda interpreter. Both teams serve the exact tested mobile bundle (SHA-256 prefix `5082e4569527cfda`), controller (`1e7466c0aa9bdc06`) and bridge (`73403ac5fb01022f`). Green build `a8fe9823e45447eb8541d9de684686fa`, Purple `f3b6588d686644929fbcd5f5b44c035d`. Camera/cue maps ready with 17 tags, game setup, both arms disconnected/disabled/pump off, no startup traceback/module-load failure. Refresh the player pages and reconnect. A physical pickup with the new policy has not been exercised by this task.
+
+## 2026-10-10 — Approved ranged Breaker archer implementation
+
+- Implemented the user's approved tower-first, shield-blocked archer plan. Photon Game owns stop/draw/recover state, straight authoritative arrow flights, target installation identity, shared companion damage, shield sweeps, pause/reset and last-arrow terminal rules. Ranged breakers no longer deal contact damage. Accepted center stacks capture health and neutralize hostile arrows.
+- Added seven editable settings, frozen run snapshots and four opt-in **Breaker archer candidate** presets while preserving old preset records/selections and melee behavior. Matching renderer capability is required at ranged Start. New class release/kill and combat aggregates persist through the existing terminal pipeline; the separate weighted-credit/shop plan was not implemented.
+- Generated a transparent red-accented bow/quiver atlas with the built-in ImageGen tool, retaining the exact prompt/hash in Level-owned provenance. Added a small Y-owned presentation helper to the shared revalidated renderer bundle. Corrected Mobile's compact projection to retain archer pose state; offline export includes identical atlas bytes and the complete helper bundle.
+- Validation: 205 Photon regression tests plus 51 ranged/delivery/preset/motion/Atom/export tests passed, along with JavaScript renderer smoke tests and module-isolation/whitespace checks. Real isolated Y and landscape phone/tablet pages loaded all 89 assets without page errors. Both two-display 1,000-enemy rendering replays remained above 30 FPS (median 60).
+- Measured limits: the 1,000-enemy/28-body engine fixture misses the 20 Hz budget in both melee and ranged modes. The approved initial 12-damage archer candidate also changed the seeded tier-1 partial-defense trace from a win to a defeat; full L4 survived but lost 17 towers. These are synthetic traces, not human balance evidence. Existing live preset selections were not changed by this task; no production restart, hosted publication or hardware command was performed. Candidate tuning and idle deployment remain outstanding.
+- Reproducible scripts, measurements, screenshots, activation/rollback steps and the six-run comparison are recorded in [the implementation report](docs/LTZ_RANGED_BREAKER_REPORT_2026-10-10.md). OpenAI Codex implemented and verified this change under the user's approval; the separately ongoing calibration/cue changes were preserved.
+
+## 2026-10-10 — Pick up a live Atom while its underlying marker is covered
+
+- The user reported #100 waiting for verified-region coverage and confirmed that it was on top of #40. Read-only live evidence showed #100 visible, stable and acquirable at approximately (0.386, 0.267), while #40 was quarantined for conflicting marker geometry. Fourteen to fifteen other anchors verified the map, but their centre-to-centre hull excluded #100. Applying that ground-marker hull to the independently measured moving Atom created the pickup deadlock.
+- The existing controller now accepts an owner-qualified 100–199 observation outside the hull when it has at least three evidence samples and its latest sighting is at most 750 ms old. Fresh independent board verification, the saved raised-tag Cal 2 transform, reach/path limits and all existing motion guards remain required. Fixed/cached endpoints still obey the hull, and a disputed fixed marker cannot start a new approach.
+- Only after calibration/reach validation, the controller retains the moving-tag acquisition through gripper occlusion. Its private, non-JSON certificate is tied to the operation object, map epoch/scope, calibration revision, camera view, intervention generation and exact tag coordinates. It cannot authorize the next row or survive changed mapping/coordinates. Inconsistent recent sightings display confirmation guidance instead of asking to uncover the ground marker.
+- Validation: 122 JavaScript and 36 Python tests passed, plus both teams' fake-relay bridge smoke suites. New regressions replay the reported #100/#40 geometry on both arms and camera orientations, complete pickup/drop through occlusion, and reject stale/unqualified evidence, invalid mapping, altered acquisitions, missing raised calibration and unsafe reach. Full controller script parsing and whitespace checks passed. A separate offline replay of the live API's actual saved calibration revision 6 accepted #100 at robot XY (420.748, 4.300) mm within the existing envelope. No physical movement was commanded.
+- Both live LTX controller routes already serve the exact tested HTML, SHA-256 `24a56ac4f7355b3f9dcb29e2d4a1e5bbbec921772d9abbe86aec94a2dc58a5f3`, with no-store headers. No hub restart or calibration changes were needed. An already-open Mobile LTZ page must stop its old cue and refresh before Play loads this fix. Physical pickup verification remains for the player. OpenAI Codex implemented this correction at the user's request.
+
+## 2026-10-10 — Activate Breaker archers for the current map
+
+- At the user's request, loaded **Breaker archer candidate** through Photon Game's public command API for all four control tiers on `z_pixel_first_map_01`: Joint revision 9, XYZ revision 10, Targeting revision 11 and Cue revision 12. Read back and verified all four selections with `breaker_attack_mode=ranged`; preset-store revision is 16.
+- The running match `085fe2d1960947de977a666174d4e035` retains its frozen melee settings. Selected archer revisions apply at the next Start. No match reset, restart or robot command was issued. The local server had already exposed the archer renderer and assets. OpenAI Codex performed this settings activation; the earlier implementation report's unselected-production status is superseded for this local map.
+
+
+### 2026-10-10 — Atom marker reveal and turret power-down
+
+**Human decision; AI-assisted implementation:** implement the requested sustained
+green Atom pulse, doubled health/damage, full health on accepted placement/return,
+and green power-down when the underlying turret ArUco becomes visible again.
+
+Board now debounces both a known cover and its reveal across three fresh frames
+spanning at least 0.15 seconds. Revealing that exact anchor confirms departure
+even when the Atom disappears or hovers at the same XY. Game rejects cached
+placement overlap that contradicts occupancy, preventing an exposed marker from
+consuming a return or repeatedly healing. Existing 2× arithmetic, health-percentage
+conversion on removal, and one refill per accepted visit remain authoritative.
+
+Both Y displays show the doubled health rows during deployment. A presentation
+clock keeps the green pulse moving during setup/pause; removal suspends gameplay
+bonuses immediately and contracts/fades the halo over 0.6 seconds. Returns cancel
+the fade, repeated snapshots cannot restart it, and reset/replacement/destruction
+clear old glow history. Both HTML entry points now request renderer revision 19.
+A pre-existing duplicate `ready` declaration in the operator HUD was renamed to
+`readyTeams` so the page parses and browser verification can run.
+
+**Verification:** 18 Atom Board/Game tests, the Atom renderer transition checks,
+and the existing deployment renderer pass. An isolated real-browser fixture
+verified both pages with 16 turrets and 12 companions, doubled capacity/damage,
+lift, return/full heal, transfer and reconnect, with no browser errors. Screenshots
+were visually inspected at `../output/atom-power-down-2026-10-10/`. Broader suites
+found four pre-existing economy/score/client-build assertions; all four were
+reproduced with the engine saved before this task.
+
+**Live boundary:** read-only authenticated hub snapshots confirmed the existing
+buff fields are present, but reported no active occupancy during inspection. The
+active physical game was not reset or restarted. Loading the changed Python
+modules requires the next hub restart, followed by refreshing both displays and
+a physical placement/hold/lift/return check. Automated fixtures do not establish
+physical camera/projector timing.
+
+### 2026-10-10 — Archer visibility and previous-match crowd audit
+
+Found the open external Y display still running renderer v17; refreshed it to
+v19, and verified the operator's embedded view already used v19. This fixes
+old hammer art/no arrows against the newer ranged Game feed without restarting
+the live game. Current presets first release archers in wave 3 at 8:10.
+
+Run 9b96bb28543146a3bdf6f0d9121be15d recorded 47 archers, zero archer kills,
+4,740 arrows and 9,362.6 core damage. Added an offline crowd reconstruction tool;
+both Atom-occupancy assumptions reproduced a stationary firing crowd with 44
+archers targeting the core and no sampled road-blocked melee enemies. Small
+collision footprints versus normal sprite size explain visible overlap. This
+is conditional reconstruction; original positions were not persisted. Combat
+rules and balance remain unchanged. See the detailed archer/crowding audit.
+
+Strengthened the browser regression to verify actual archer atlas draw calls
+on visible canvases, not just combat metadata. All four real Y/mobile layouts
+passed, with no JavaScript or asset errors. Ranged unit/delivery tests: 24 passed;
+atlas/pose/arrow renderer checks passed. The export fixture now includes its
+existing shared UI dependency. Screenshots: ../output/archer-visibility-2026-10-10/.
+
+## 2026-10-10 — LTZ score, economy and horde candidate
+
+Implemented the approved shared score/shop, weighted rewards, saved health bonus, configurable staged price catalogs, durable receipts/recovery, selected-preset previews and offline balance reporting. Landscape browser checks and 256 Python checks pass. Actual combat candidates reached 106/350/650/1,000 living enemies; Cue survived all 4,092 with 28 defense bodies and 186.8 seconds at 900+. Both victory paths preserve the intended reward tradeoff. The >30 FPS / 20 Hz dense performance target is not fully qualified; the new horde family remains opt-in, current archer selections and migrated prices are preserved. Final candidate revision needs a normal hub restart because the live process retains earlier helper modules. Details and measured evidence: `docs/LTZ_SCORE_AND_HORDE_IMPLEMENTATION_2026-10-10.md`.
+
+
+## 2026-10-11 — Game Master test shops and credit grants
+
+Added End match → shop for active/paused built-in test-player matches, an
+untimed practice shop, and Next level / Replay level 4. Next level prepares
+the battlefield with purchased per-player loadouts; ordinary Start and motion
+checks remain in force. Test attempts never contribute earned currency, kills,
+wins or mastery. Game Master grants work for every saved player and are
+recorded separately from earned totals in the transactional ledger, backup
+validation and offline wallet report. Grant retries and test transitions are
+idempotent. Normal players keep the three-win progression and 30-second shop.
+
+Validation: 195 Python checks, including save-failure recovery, role/contract
+guards, stale commands, duplicate grants, mixed real/test rosters and backup
+preview/restart. Chrome verified the complete operator → shop → next-match
+flow at 667×320 and 1024×768: each test player received 2,000 credits, bought
+L2 machine gun for 250, entered tier 2 with that loadout, and retained zero
+earned/scored totals. Browser evidence: docs/ltz-gamemaster-2026-10-11/.
+The live hub was read-only checked in setup/lobby; its new admin endpoint is
+not loaded until a normal hub restart. Live players, credits and games were
+not changed by the isolated tests.
+
+## 2026-10-11 — Atom buff and marker flicker
+
+Live camera frames aged 108–461 ms while occupancy expired at 350 ms. Raised
+Board's grace to 900 ms and made both the publisher and Game validator use the
+same policy. Confirmed cover/reveal and source-loss handling remain in force.
+Added a shared one-second, timestamp-bounded label cache for Green, Purple and
+Game Master; Mobile also preserves unrelated fixed labels during partial cue
+maps. Size rejection and robot movement authorization are unchanged.
+
+Validation: 80 Python checks, 14 JavaScript checks, buff renderer tests, both
+startup browser checks and all three repeated-dropout browser checks passed.
+Reloaded the live hub only after the match ended and the arms were idle; 35
+subsequent camera snapshots were ready with no errors and the new policy.
+Loaded updated Game Master/Green views and refreshed the external screen.
+Physical buff hold/lift behavior still needs observation in the next match;
+automated checks cover its state transitions. Details:
+`docs/LTZ_MARKER_STABILITY_2026-10-11.md`.
+
+## 2026-10-11 — Immediate saved intensity for Game Master unlocks
+
+Applying L2 XYZ, L3 Targeting or L4 Cue now resolves that map/tier's saved
+preset and retimes remaining practice spawns immediately. Already released
+and deferred enemies and completed groups stay intact; pending counts and
+release clocks change without catch-up bursts. Added the selected and active
+intensity readout. Practice results allow a changed spawn budget while keeping
+frozen credit weights and earning no saved progress; scored schedules retain
+their strict limits.
+
+Validation: 199 Python checks plus browser switches through L2/L3/L4 in setup
+and during one running match. Reloaded the idle live hub through its project
+virtual environment and refreshed Game Master; camera tracking is ready.
+Details: `docs/LTZ_PRACTICE_INTENSITY_2026-10-11.md`.
+
+## 2026-10-11 — Top-edge wave timeline
+
+Added a top-center playfield timeline opposite match credits and mirrored it
+above Game Master's camera. Game publishes actual and upcoming release windows,
+elapsed simulation time and deferred pressure; windows follow immediate
+practice intensity changes and preserve completed history. The display shows
+durations, active waves, the next countdown and a playhead that respects pause
+and disconnection. Calibration hides the overlay.
+
+Validation: 69 Python tests, 4 JavaScript tests and four real-page browser
+cases at two viewport sizes passed. Visually checked the current map's marker
+clearance. Reloaded the idle live hub, confirmed camera/timeline ready and
+refreshed both views. Details: `docs/LTZ_WAVE_TIMELINE_2026-10-11.md`.
+
+## 2026-10-11 — Operator Start and dismissible shopping
+
+Removed player Ready and shop-deadline gates from Game Master's Start. Start
+from setup closes shopping at the current tier; Next level now sits beside
+Start and prepares either a regular roster or the next test tier immediately.
+Readiness remains visible and checks current profile identity/revision.
+Selected profiles, calibrated motion, fresh Board data and durable saves retain
+their existing validation.
+
+Fixed Mobile Journey's close button reopening a mandatory shop on every render.
+Dismissal now lasts for that player/journey phase, with a Done shopping · Ready
+button that reports advisory readiness. New results reopen their own shop.
+
+Validation: 70 Python tests, Green/Purple calibration rendering and a browser
+flow covering Start with neither player ready, persistent shop dismissal and
+reopening on both sizes, Next level with Purple not ready, and direct Start
+from a saved practice shop. Loaded the idle live hub and confirmed both operator
+buttons enabled with both players not ready. Cleared Green's shop; it remains
+closed. Screenshots: workspace `output/operator-start-2026-10-11/`.
+
+
+## 2026-10-11 — Add MCAM1 as an independent auxiliary camera
+
+**Evidence and decision, reconciled October 12:** the [MCAM1 README](sandboxes/gamemaster/prototypes/mcam1/README.md) and [shared Mobile LTZ documentation](shared/mobile_ltz/README.md) record the Camera Studio port into a Gamemaster-owned module. The hub owns native capture and USB serial controls; authenticated browsers consume HTTP/SSE. Existing Webcam perception and calibration retain their separate ownership. Versioned still/control/detection contracts expose the optional feed without granting its AI detections any gameplay authority.
+
+Green and Purple receive an optional half-resolution inset through the existing mobile delivery path. It uses the already-running MCAM1 preview; missing or stale input remains unavailable. The operator module also supports sensor settings, stills, recordings and a firmware utility with explicit target selection.
+
+**Recorded verification:** on October 11 the connected OV3660 camera passed all three video modes, settings readback, dashboard preview, PNG/WebM download and concurrent operation with the 3840×2160 game camera. Short capture samples measured roughly 28–30 FPS at 480×320; these are capture rates, not end-to-end latency. The later firmware-utility checkpoint records 24 hardware-free tests and browser target-selection checks. Firmware flashing was mocked; no physical firmware write was performed by those checks.
+
+**Attribution and boundary:** these reports establish the implementation and observations but do not explicitly identify the original decision owner or AI contributor. OpenAI Codex added this retrospective entry during the requested journal update. The work is uncommitted after `d7d4165`.
+
+## 2026-10-11 — Reduce mobile delivery and rendering overhead
+
+**Trigger and decision:** [the performance report](docs/LTZ_FPS_OPTIMIZATION_2026-10-11.md) found that a changing shop timestamp was causing full mobile snapshots, alongside full-resolution camera delivery and repeated hidden/layout rendering work. Progress now travels in incremental updates; reconnect and map changes still receive complete state. One bounded 1920×1080 preview preserves the full-resolution camera coordinate system. Hidden joint views skip drawing, MCAM1 layout follows actual layout changes, and bounded raster caches remove repeated barrier/effect work without changing simulation rules or motion freshness limits.
+
+**Recorded measurements:** the captured packet shrank from 133,809 to 95,311 bytes before the SSE envelope. In isolated Chrome replays with 4× CPU slowdown, the main display's minimum/median FPS changed from 27/30 to 32/36; the player replay changed from 31/39 to 39/53. The report records 108 mobile, 22 camera and seven performance Python checks, plus JavaScript and camera/turret browser checks. The player fixture used a fake unavailable arm and synthetic full snapshots, so it does not establish connected-arm, Wi-Fi or native iPhone performance. The later Safari entries document problems this desktop replay did not detect.
+
+**Attribution and boundary:** the report does not explicitly identify the original decision owner or AI contributor. Its activation status was restart pending at that checkpoint; subsequent dated deployment and run evidence must be consulted rather than treating that statement as current. This retrospective entry adds no new performance run or deployment.
+
+## 2026-10-11 — Isolate relay feedback from hub stalls and verify the real loader
+
+**Evidence:** [the Green connection investigation](docs/LTZ_GREEN_CONNECTION_2026-10-11.md) distinguishes motion-generation invalidations, stale delivery, deliberate page-away stops and physical socket loss. A connected/enabled relay snapshot is not proof that feedback stayed fresh throughout a match.
+
+**Decision and sequence:** first make feedback/epoch publication atomic, deliver timestamped feedback to both player adapters over the existing 100 ms relay SSE path, and keep disk-backed monitor reads outside the lease lock. Later recorded stops still identified driver feedback starvation. A fake-arm process-pause reproduction then motivated one relay-owned worker per connected arm, retaining the existing driver, socket pinning, leases, path validation and 250 ms driver freshness deadline. Movement and pump-on requests expire instead of replaying; worker or parent loss stops control and requires explicit reconnect.
+
+The first production activation exposed a separate startup defect: the sandbox loader removes prototype helpers from `sys.modules`, so Python spawn could not pickle the old worker entrypoint/driver. Worker startup now uses the stable `runpy.run_path` entrypoint and imports the driver inside the child. Connection errors preserve the underlying diagnosis, and failed starts clean up their pipes/process.
+
+**Recorded verification:** the final startup correction passed 13 worker, 14 reconnect, nine feedback and four Cartesian boundary tests, including the production sandbox loader under the live Conda runtime. Earlier process tests exercised hub pauses, stale targets, slow commands, parent loss and child crash with fake arms. Loopback SSE retained approximately 105 ms maximum measured feedback age despite 900 ms heartbeat reply delays. These are software-path checks; the later October 12 physical game provides separate evidence of sustained operation.
+
+**Attribution and boundary:** the report explicitly records human approval for the earlier relay activation, but does not name an implementation contributor. It also records that the final loader correction still required a restart at that point. These statuses remain historical; this reconciliation neither restarts the hub nor reconnects hardware. Subsequent code remains uncommitted after `d7d4165`.
+
+## 2026-10-12 — Sustained Delay Analysis and decision evidence
+
+The previous capture reached 64 MiB in 49 seconds, primarily from individual lock records. Approved diagnostic update keeps whole-capture counts/totals/maxima and approximate 5% histogram percentiles, aggregates sub-millisecond locks, and saves bounded detail around incidents (10 seconds before, five after). The detail cap now warns while summary recording continues. Atomic summaries are checkpointed every five seconds and after stop; the latest summary and saved incident windows reopen after restart with recording off. Default duration is until manually stopped, with timed options retained.
+
+Board evidence includes size-check rejections, pending/quarantined markers and verified anchor/hull information. Controller hold events include the exact browser board evidence; worker failure evidence includes underlying error type/text, process health and heartbeat age. Diagnostic payloads are allowlisted/redacted and only augmented while recording. No movement validation or driver control behavior changed.
+
+Validation: 124 Python regression tests passed before the final checkpoint-error case was added; all 27 focused recorder/connection tests then passed. 87 JavaScript tests and both team bridge smoke tests passed. Browser fixture verified desktop/390px layouts, injected stall, incident board evidence, recording start/stop acknowledgement, no periodic uploads after stop, retained/exported results and visible detail-cap warnings, with zero game commands. Thirty simulated minutes verified 162,002 records, full-session statistics and historical incident recovery after restart. Fixture benchmark: median snapshot overhead +2.21 ms; p95 difference -0.23 ms (noise, not a performance improvement claim), no dropped records in that benchmark.
+
+Loaded into the live GameMaster after confirming the previous game was won and recording was off. Preserved the previous raw capture. Refreshed the existing separate Delay Analysis window.
+
+Live verification: recording started and stopped from the existing separate window. Approximately 54,000 timings over 30 seconds, zero drops, approximately 34,000 sub-millisecond lock records aggregated, one marked incident using approximately 3 MiB. Confirmed recording off, queue drained, final summary persisted, camera frames still fresh, and the original 49-second capture still present. Player pages should be refreshed before the next game for the new controller evidence fields.
+
+
+## 2026-10-12 — Retained practice shop blocked Green setup movement
+
+Live connection events at 15:03:42–15:03:55 local showed Green connected/enabled with fresh feedback and motion readiness, while Game was `setup`, Cue test controls were granted, and Journey retained the previous run 59fc8de39b45415a8e13ea2c6218e9c3 in `upgrades` with `practice_shop=true`. Relay rejected movement with the generic shared-transition message. The phone/controller independently allowed the GM test tier. This was a permission mismatch, not an arm disconnect.
+
+Game now distinguishes setup positioning under an explicit GM test tier from the finished-match shop hold. The saved shop, purchases and advancement receipt remain intact. Calibration ownership, pending stop confirmation, tier restrictions and setup without a test grant remain guarded. Mobile projects the same validated `photon.game.motion` v1 policy used by Relay; the phone and embedded controller require its explicit permission and surface specific block reasons. Calibration recovery can still connect without granting motion.
+
+Validation: 91 Python regressions, 23 focused JavaScript tests, physical routing smoke, both team bridge smoke tests, and both team browser calibration/relock/reconnect tests passed. New regression covers actual saved shop, reset, Journey reload, both arms, all four GM tiers, virtual/physical modes, retained progression, successful Next level afterward, finished-shop rejection and calibration/stop inhibition. Tests use temporary stores and fake hardware.
+
+Loaded into the idle live GameMaster. Saved active diagnostic capture bce7774cdaac475f89f8d38d755c160d (2,228,248 timings), restarted the hub, restored the exact pre-restart GM test control/loadout, and resumed recording as 5b0ee82072ad414aaad7dd97786dffd9. Both live motion policies now report ready/practice/tier 4/blocked false; saved shop is retained and camera is ready. No arm enable, acquisition or movement was sent.
+
+Post-deployment physical check: restoring Green feedback sockets through the existing relay operator connect endpoint returned `[Errno 65] No route to host` twice. The existing en14 / 192.168.1.51 interface and scoped route to 192.168.1.6 are active. This prevents physical movement validation; it is separate from the now-unblocked game policy. No safety check was bypassed.
+
+
+## 2026-10-12 — Larger Delay Analysis detail budget
+
+Raised the requested per-capture detail cap from 64 MiB to 650 MiB (681,574,400 bytes). The window now displays the active server's advertised limit instead of a hardcoded value; the footer refers to that display. Start/Stop, bounded queues, last-three-capture retention and summaries continuing after detail exhaustion are unchanged. The recorded Green game's 64 MiB in about 113 seconds extrapolates to about 19 minutes at this larger cap, not guaranteed 30-minute detail coverage.
+
+Validation: all 20 recorder tests passed. Isolated browser verification passed with 3,039 timings, eight dropped samples, no JavaScript errors or game commands, recording start/stop acknowledgement, no uploads after stop, saved export and cap warning. A substituted 128 MiB API response also verified that the displayed cap follows server data.
+
+Deployment: updated files are saved; the running hub still advertises 64 MiB. Recording was off at verification. No live restart was performed because the previous restart from the Codex process left the arm unreachable; load this change through the normal hub launch process. A new capture after that restart will use 650 MiB.
+
+Previous Green-only game analysis evidence is retained at output/game-analysis-2026-10-12/green-8f490429-evidence.json. It separates hidden-page stops, an actual driver connection loss with unknown cause, a feedback-delivery freshness timeout, camera-map holds and observed operation delays. Later detailed incident traces were absent after the old 64 MiB cap, so full causal attribution remains limited.
+
+## 2026-10-12 — iPhone Safari player crash / memory lifecycle
+
+Investigated the reported reload loop and Safari's repeated-problem error. The
+shared renderer started 89 image loads at once and retained 14 large source
+atlases after converting them to smaller runtime sprites. Canvas-cache eviction
+only dropped JS references; renderer teardown retained decoded images and canvas
+backing stores. These are concrete memory-pressure defects consistent with the
+reported symptom, not a confirmed device-level crash diagnosis. WebKit documents
+decoded image and compositing memory contributing to device memory limits:
+https://webkit.org/blog/6425/memory-debugging-with-web-inspector/ .
+
+Bounded decoding to four loads; cache converted sprites instead of their source
+atlases; explicitly release canvases on eviction, replacement and teardown;
+cancel obsolete queued/inflight artwork and clean up failed conversions; preserve
+the old complete presentation until its replacement commits. Destroyed renderers
+ignore late state. Added explicit per-frame JPEG source release in the mobile
+camera path. No artwork content, simulation or robot behavior was changed.
+
+Isolated Chromium comparison: retained decoded-image dimensions represent
+132,194,792 bytes before and 44,079,360 after (~67% lower); atlas retention 14 to
+zero; simultaneous requests 89 to four. Map PNG hashes match. Eighty cache
+replacement cycles with 256 burning/electrified enemies retained 20,155,812 canvas
+bytes; all probed renderer image/canvas storage became zero on destroy, without
+relying on GC. These probes deliberately retain JS objects and measure dimensions,
+not total browser RAM or native GPU allocations. No physical iPhone is attached.
+Evidence: output/safari-memory-2026-10-12/results.json.
+
+Validation: 12 renderer/video Node scripts, 19 tracking/turret tests, 29 Python
+client-build/export/team/content tests; real browser artwork and lifecycle checks,
+both teams' restored player pages, and both teams' camera/aim/four-layout tests
+passed. Updated stale test harnesses for cancellation and existing shared UI
+dependencies. All game/camera tests used isolated fixtures and fake hardware.
+
+Read-only check of the running hub returned the updated renderer (HTTP 200,
+cache revalidation), so refreshing player pages loads the primary memory fix.
+No live restart, match reset or robot command was issued. The extra camera-source
+cleanup is frozen into mobile.js at the next normal main-hub launch; no hosting
+upload is needed. The user should retest on the affected iPhone.
+
+
+## 2026-10-12 — iPhone Safari follow-up: hidden physical-mode renderer
+
+The user reproduced the reload/crash on a connected iPhone after the initial
+atlas/cache fix. QuickTime showed Safari's repeated-problem page. With the
+user's permission, enabled Mac Safari developer tools; the user enabled iPhone
+Web Inspector. Remote inspection confirmed a crashed webpage, without a
+JavaScript exception identifying the cause. The user also reproduced it on the
+direct Mobile LTZ URL, excluding the dashboard as a necessary trigger. Desktop
+Safari currently works. The live camera publishes a 3840×2160 coordinate space
+with a bounded preview. No WebKit crash report or conclusive iOS memory trace
+was obtained, so the crash's exact cause remains unconfirmed.
+
+Physical play was still creating the full simulation renderer and loading all
+its artwork while CSS hid its canvases behind camera video. Mobile LTZ now owns
+that renderer only in virtual play. Physical startup does not allocate it;
+mode changes destroy/recreate it, release hidden map/game/arm backing stores,
+and preserve the shared geometry helpers used for turret aiming. Page teardown
+also prevents an in-flight renderer script from recreating a closed view.
+Removed permanent will-change promotion from the 4K camera world; source camera
+coordinates, perspective projection, and robot command checks are unchanged.
+
+Added an isolated WebKit/Chromium regression covering both teams, 4K camera
+metadata/1080p JPEGs, repeated physical/virtual switches, late completion after
+pagehide, and pageshow restoration. Physical mode retained zero hidden-renderer
+buffers and requested no simulation artwork. Virtual probes measured 44,079,360
+image bytes, 15,491,072 offscreen canvas bytes and 19,537,920 display canvas bytes
+(75.4 MiB combined); every hidden renderer buffer released when switching back.
+These measurements deliberately retain object references and measure dimensions,
+not native iPhone RSS/GPU memory. Evidence is in
+output/safari-memory-2026-10-12/camera-webkit.json.
+
+A proposed read-only diagnostic LAN proxy was rejected by automatic approval
+review because it would forward authenticated content/cookies through another
+port. It was not created or run; continued using isolated fake-hardware tests.
+The Mac Xcode devicectl diagnostic command was unavailable because its required
+CoreDevice component is not installed; no diagnostic package was installed.
+The updated mobile bundle still needs the user's normal hub restart and an
+actual iPhone retest. No live game restart or robot command was issued here.
+
+Final verification: the new WebKit lifecycle regression passes for both teams,
+including the late-completion guard; Chromium passed the same mode-switch tests.
+Both teams' full turret/camera/gesture/four-layout browser checks passed after
+the final change. Also passed 23 tracking/continuity/motion-policy checks,
+physical-control and camera-decoder smoke tests, 5 client-build/export tests,
+and the renderer allocation regression. The running hub still returns the old
+mobile bundle (syncRenderer and pageActive guard both absent), so these final
+mobile changes are not deployed until the pending normal restart.
+
+## 2026-10-12 — Native iPhone Safari camera-memory diagnosis
+
+The earlier renderer changes were present in the live bundle, but the actual
+phone still reloaded on Connect and later during initial loading. Read only
+Safari/WebKit and memory-termination logs from the already trusted USB iPhone
+using a temporary PyPI pymobiledevice3 environment. No device settings changed.
+The kernel recorded WebContent exceeding a 1536 MB soft memory limit and killed
+it at 2,245,986 KB; WebKit reported a 14 MB JS heap and 1973 MB physical footprint
+immediately before termination. The system itself was healthy. A minimal
+relevant log extract is saved in
+output/safari-memory-2026-10-12/iphone-native-memory-before.log.
+
+An aligned-state selector applied double SVG drop shadows to full-camera guide
+paths as well as small bullseyes. Restricted the glow to the bullseye groups and
+added a 3840×2160, DPR 3, connected/aligned regression. The old CSS failed that
+assertion in WebKit; the corrected CSS passed WebKit and Chromium. Temporary
+application of that correction alone still crashed the phone.
+
+Native isolation also ruled out a simple decoder-disposal fix: disabling all
+CSS filters or substituting closable ImageBitmaps still reached the memory
+limit. The ImageBitmap experiment was reverted. The camera-disabled page stayed
+responsive; the camera canvas's accelerated rendering path was implicated.
+Requesting a software-backed 2D context (willReadFrequently:true, alpha:false)
+kept the main feed and full overlays responsive, then also the inset feed.
+Applied those context options to both cameras, retaining persistent canvases,
+bounded preview dimensions, decoded-frame release and existing freshness gates.
+
+Validation so far: main camera lifecycle tests pass in WebKit and Chromium for
+both teams; MCAM1 passes six layouts, three sizes, stale/error/disabled handling
+and recovery for both teams; camera decoder smoke and four frozen-client build
+tests pass. MCAM1's test now resets its virtual-play fixture explicitly so it can
+run after the physical-camera tests. The iPhone temporary correction has stayed
+responsive for several minutes, with both feeds updating and no new native
+memory-warning/kill records. A real Connect check awaits an active practice
+round: the current round ended and its shop covers the control. No live robot
+motion was issued. The saved frozen-bundle changes require the normal hub
+launcher restart; the earlier Codex-launched restart broke robot reachability,
+so no live hub restart was performed here.
+
+Native verification update: the user confirmed the phone remains open with the
+real arm connected. Inspector verified connected=true, phase=running after
+383 seconds (both cameras enabled for 325 seconds); both contexts report
+willReadFrequently=true. Requested a normal-launcher hub restart to verify the
+permanent frozen bundle.
+
+Final isolated verification: the updated WebKit calibration/relock/Connect test
+passes for Green and Purple, including fresh movement after reconnect and no
+stale target replay. git diff --check passes. Stopped the fake-hardware fixture
+after verification; the live hub was never restarted by this task.
+
+Deployment update: the user restarted the hub normally. Both Green and Purple
+now serve the permanent camera contexts (builds 2e0b9a73b383403a9c6bd1527552afca
+and 1ebc03224afa45e3bb8e594c06bd1dab). Replaced the temporary diagnostic stylesheet
+URL with the normal Green player URL. The restarted page has no injected fix
+style, has a fresh camera frame, and reports willReadFrequently=true on its main
+canvas. Final post-restart Connect confirmation is pending.
+
+
+## 2026-10-12 — Delay optimization step 1: publish artwork outside gameplay reads
+
+Implemented only the approved first optimization. Photon Level validates its asset manifest once at startup, on layout publication, and on explicit artwork refresh. runtime_status(), runtime_bundle(), presentation_assets(), and published asset allowlist checks now read isolated copies without scanning or hashing files. Removed the 250 ms read-triggered cache, whose timestamp preceded its own potentially slow validation. A separate writer lock serializes refresh/layout operations and coalesces overlapping refreshes; filesystem work does not hold the gameplay publication lock. Geometry and its artwork become visible together. Editor filesystem checks also run outside that lock.
+
+The existing Artwork page now has Refresh artwork; its operator-only POST /api/assets/refresh and public refresh_presentation_assets() function validate file edits. Direct file edits require this explicit refresh or a normal hub restart. Ordinary manifest reads no longer detect file changes implicitly. Missing files, refresh errors and source errors remain explicit; callers cannot mutate the stored publication. No background scan, new dependency, robot change, timeout change or later optimization step was introduced.
+
+Validation: all 94 focused publication, performance, content, editor, module-isolation, Photon framework, mobile and ranged-delivery regression tests passed. The new contention test holds an asset scan for two seconds while twelve real mobile/level reads complete before the scan finishes, each below 500 ms. Other cases cover concurrent refresh coalescing, atomic geometry/art publication, missing/changed files and recovery, editor contention, authorization and isolated return values. Isolated Chromium UI verification passed refresh, failure display, retry recovery and no duplicate cards, with zero JavaScript errors. git diff --check passed.
+
+The saved changes require the normal hub launcher restart. Do not restart through the earlier Codex subprocess method that caused robot reachability trouble. After restart, start a fresh Delay Analysis capture before the user's game; recording remains user-controlled with its 650 MiB cap. Await that game and analysis before implementing step 2.
+
+
+## 2026-10-12 — Fixed-board mapping and display contract, game-test checkpoint
+
+Implemented only the approved mapping/display step after recorded run d8eb447c52ab4e9b9423401a62fc07f0. Photon Board now publishes cue-targets v2: confirmed fixed coordinates and corners stay immutable for the current run/layout/camera epoch, while live sightings, occupancy and diagnostics update separately. New IDs qualify independently and join without waiting for every marker. Invalid projected geometry never removes a learned target or shrinks the usable board. A valid positional contradiction holds only the affected endpoint, retaining its acquired pose. Two separated markers agreeing on a translation/rotation/scale trigger an immediate board hold; repeated stable evidence establishes a new epoch and relearns actual detections. This retains detection of the real first #40 relocation caused by the browser banner. Camera/sampler freshness, calibrated reach, occupied destinations, moving-Atom acquisition and robot feedback gates still fail closed.
+
+Green, Purple and Gamemaster use the same run-scoped Board map for fixed labels. Display-only fixed_tags survive occlusion and feed outages without granting motion; new games, layouts and camera epochs clear old memory. Core #38 and 100-series Atoms have independent geometry/size validation instead of being compared with flat socket sizes. Moving Atom display has a bounded one-second grace and expires. Fresh SSE mapping supersedes stale acquisition polls; newer unavailability revokes motion even with an unchanged camera frame. A late reader no longer filters out fixed targets another display already learned.
+
+Delay Analysis keeps its existing on/off control and 650 MiB limit. While enabled, mapping holds include the actual gate, selected evidence source, camera/sampler/poll ages, epoch and affected marker IDs. No recording setting, robot connection or live hub process was changed.
+
+Validation: 283 Python tests passed, then 50 focused tests passed including two additional cases (285 distinct). 137 JavaScript tests passed, followed by the cue suite with an additional conflict-recovery case (138 distinct). Arm-bridge smoke passed. Isolated Chromium checks passed for Green, Purple and Gamemaster: labels stayed stable under repeated missed detections and geometry rejection, late #55 joined, fixed labels survived total occlusion, moving labels expired, and no robot commands or JavaScript errors occurred. Screenshots and results are in output/fixed-board-contract-2026-10-12/. All fixtures use fake hardware.
+
+Saved Python changes and frozen mobile bundles require a restart through the normal hub launcher, then refresh Gamemaster and both player pages. The live hub was not restarted through Codex. Next checkpoint is the user's new game with Delay Analysis enabled; analyze that capture before implementing another optimization step.
+
+## 2026-10-12 — Record the physical game after artwork and fixed-board corrections
+
+**Evidence:** saved analyses and retained event records for [run `d8eb447c52ab4e9b9423401a62fc07f0`](output/game-analysis-2026-10-12/d8eb447c/analysis.json) and [run `06f2627b732f49d9ba0f52fddd689fc2`](output/game-analysis-2026-10-12/06f2627b/analysis.json). Times below are Europe/Tallinn. This entry reconciles existing captures; it does not represent another game or new measurements.
+
+**Why the mapping correction followed artwork publication:** the first run's 20:03–20:16 capture showed no runtime asset-validation scans, confirming the measured artwork bottleneck had been removed. Green still recorded 65 motion-hold events: 61 mapping and four region holds, despite connected/enabled feedback throughout those holds. The count is deduplicated and is not an exact physical-stop count. Saved evidence and offline reproductions identified stale polled-map vetoes, hull shrinkage affecting unrelated endpoints, fixed-coordinate drift, and a mixed-size display filter rejecting the larger core and some Atom observations. The first approach to #40 included a genuine banner-induced board relocation; its correct movement detection was preserved, not classified as a false positive.
+
+The fixed-board implementation above addressed those distinct failures before further server optimization. Its recorded automated checkpoint was 285 distinct Python and 138 distinct JavaScript cases, plus fake-hardware bridge and three-view browser checks; [the validation record](output/fixed-board-contract-2026-10-12/validation.json) retains the original counts and pending-deployment status.
+
+**Observed physical follow-up:** the next run began at 20:58:50 and won at approximately 21:07:06. Capture `75dba61db8f34f8a9d1ceb023b91257a` covers 20:59:14–21:07:28, beginning about 24 seconds after run start and before the refreshed browser connected. Green used build `b7f61c221b5c482dbcd27a89cdb87cfe`; its v2 mapping-gate/source/age fields establish that the corrected mapping path was active. This supersedes the previous entry's restart-pending status for this observed run without asserting every deployment was updated.
+
+| Recorded observation | Before fixed-board correction | After fixed-board correction |
+| --- | ---: | ---: |
+| Mid-play motion-hold events | 65 | 0 |
+| Target invalidation events | 4, including genuine map change and player intervention | 0 |
+| Mid-play disconnect events | 0 | 0 |
+| Physical socket placements | 13 | 11 |
+| Result | Won | Won; ring and 100/102 core stack confirmed |
+| Whole-capture Green snapshot p95 | approximately 311 ms | approximately 129 ms |
+
+The later capture received 1,875,872 timings and dropped 2,501 (0.1331%). Its approximately 80 MiB of retained incident detail did not hit the 650 MiB cap. All 517 retained Board decision samples and 74 browser Board snapshots were ready. Unrelated geometry quarantine no longer blocked the recorded acquisitions; the saved core #38 and Atom #100 filter checks recorded no rejections. These are repeated diagnostic samples, not continuous video or a count of visible flickers.
+
+The 294 relay entries contain no errors; all three recorded robot hold commands occur at normal win/release. The maximum recorded driver feedback gap was approximately 138 ms. No retained operation span reached 1,500 ms. Whole-capture snapshot p95 improved, and runtime asset scans remained absent, but the games differ in duration and workload; this is evidence for the checkpoint, not a guaranteed latency ceiling or proof that all improvement came from one change.
+
+**Remaining issue and next decision:** twelve moving-Atom acquisition cycles had a median wait of about 0.372 seconds. One wait lasted 8.003 seconds after placement on #47 and included a user-requested waypoint move before source #100 was acquired for #54. Fixed-board authority remained ready. Occlusion or qualification delay is plausible, but the retained data cannot establish the exact optical cause or divide the entire wait into causes.
+
+Future investigation should record the moving Atom's age, distinct qualifying samples, rejection reason and clear-view/waypoint state. Timing reports should also distinguish active control from startup, hidden pages and normal after-win release: the later capture's feedback ages above 1,500 ms occurred after the win, not during cue playback. Repeated player-progress reads remain a possible next server optimization. These are recommendations from the analysis; no additional optimization or acquisition-policy change is implemented by this journal update.
+
+**Owner and verification for this update:** the user requested that the development log be updated. OpenAI Codex reconciled repository history, specifications, reports and retained event evidence, including the recorded `core_tag_detonation` win. Earlier implementation attribution remains with its original entries; no unrecorded owner is assigned. Only documentation/source consistency and whitespace checks were performed for this update. No application tests, hardware trial, service restart, recording change, Git commit or hosted publication was performed here.
+
+## 2026-10-13 — Gamemaster fixed-marker styling flicker
+
+The active physical game reproduced a presentation regression: all 17 fixed labels remained present, but Board's 350 ms `visible` cutoff switched the 30/40/50-series overlays together between bright/solid and dashed/cached. Six of 18 read-only browser samples showed every fixed label cached. The v2 fixed-board display branch had bypassed the existing one-second display grace, and the monitor rebuilt the SVG on every event/watchdog check.
+
+Gamemaster now measures fixed-label display grace from the original `last_seen` timestamp. Repeated packets cannot renew it; unavailable/stale mapping revokes bright styling while retaining fixed positions. Rendering skips identical SVG appearances, including visible-to-recent transitions. Board evidence, acquisition rules, gameplay and robot control are unchanged.
+
+Three new regression cases failed before the correction. All 12 focused JavaScript and 27 Python checks pass, covering continuity, expiry, stale inputs, epochs, camera/stream lifecycle and operator controls. Reloaded only the active gamemaster iframe during gameplay, without restarting the hub or issuing a game/robot command. Across 100 subsequent read-only browser samples, every sample retained 17 fixed labels, none hid the overlay, and none switched the whole group to cached. Individual obscured labels still correctly showed cached. This is a short live observation, not a controlled camera replay. Details: output/gamemaster-marker-flicker-2026-10-13/validation.json.
+
+## 2026-10-17 — L1/L2 calibration mismatch and linked saved games
+
+- Implemented the requested L1/L2 exception for a saved calibration from another
+  camera correction. The owner resolves trusted Game/Progress policy, keeps all
+  arm identity, feedback, lease and physical bounds checks, and publishes an
+  approximate-positioning warning. L3/L4 retain the current-association requirement.
+- Added Progress schema 4 linked games, atomic pair load, idempotent New/Save/Load,
+  Start-time pair locking, fresh L1 progression and per-game win counts. Wallets,
+  purchases and lifetime history remain in the existing player ledger. Old saves
+  never roll back money or purchases. Late durable results update the original
+  game's progression, credit once and preserve a newly selected game's progress.
+- Phone player panel exposes New game · L1, Load linked players and Save game with
+  both balances and upgrade previews. Individual selection is blocked after Start
+  in both phone and Score UI and at the server. Save/Load restores between-match
+  progress only; no unfinished battlefield or robot command is resumed.
+- New/Load is serialized with Start, validates selection before mutation, stops
+  and settles connected arms through the existing Relay, clears stale journey
+  receipts/lessons, and clears pending phone gestures. Failed stop keeps the
+  original selection and blocks movement until retry.
+- Verification: 177 targeted Python tests passed across linked games (8), calibration
+  safety (5), Progress (17), LTZ suites (60), Journey (37), saved calibration (24),
+  motion transitions (4), client builds (4), API monitor (17), and export (1). Both
+  fake-arm bridge smokes passed. Real Chrome at phone width passed New/Save/Load,
+  linked-pair lock, purchase/balance preservation and reload, for both phone routes.
+  Screenshots: output/linked-games-2026-10-17/{green,purple}-phone.png.
+- A SQLite backup of the live database was migrated in a temporary directory.
+  Every existing player record was identical afterward; all player balances
+  reconciled with their ledgers. New L1 and Load retained both wallets/upgrades.
+- Activated only the verified port-8000 hub after its match was overrun, both pumps
+  were off and measured joints stationary. Disconnected both arms through Relay,
+  replaced PID 89871 with PID 92634 using the same Miniconda interpreter, and left
+  the unrelated port-8011 hub untouched. The database migration created its
+  pre-v4 backup and a Previous game preserving the former pair/tier selection.
+- Prepared a fresh L1 game without starting a match. Live verification: Green kk
+  retains 1,849 credits and Machine Gun L2 (other upgrades L1); Test player Purple
+  retains 1,214 credits and all upgrades L1. Both served JS bundles match the tested
+  source (SHA-256 prefix b0df156573b3), no startup tracebacks. Phones must refresh
+  and reconnect. Green's camera mismatch passes the new tier policy; its separate
+  arm identity check awaits reconnection after the restart. No physical movement
+  was used for validation.
+
+## 2026-10-18 — Ready display and failed Start recovery
+
+- Investigated the reported shared ready/calibration transition error. The idle
+  live game retained one unconsumed Start reservation and no active lesson or
+  attempt. Both Ready acknowledgements referred to profile revision 1 while fresh
+  game preparation had advanced the unchanged L1 profiles to revision 2. The
+  original failure that left the reservation was not established.
+- Game now reserves immediately before beginning an attempt, releases its own
+  reservation after begin/journey-save failures, and recovers the same persisted
+  reservation before retry setup. The Progress owner exposes a scoped release
+  that cannot release calibration rows or unlock an active attempt.
+- Game projects semantic readiness from the confirmed pair, control tier and
+  loadout. Bookkeeping revisions do not revoke Ready; changed pairs/controls/
+  upgrades do. Existing ID/revision acknowledgements remain compatible. Both
+  phones and the Game Master use the same projection. The operator sees separate
+  Green/Purple cards plus the remaining Start blocker or “Both players ready”.
+- Verification: 118 focused Python tests and 100 JS checks passed. The real Chrome
+  event progression scenario passed both phone Ready actions, independent live
+  GM indicators, successful Start, settlement/debt, next level and save/load, with
+  no browser exceptions. Screenshot:
+  output/event-progression-2026-10-17/both-players-ready.png.
+- Reloaded only the verified idle port-8000 hub with both arms disconnected. Live
+  verification shows Kaur and Kaur2 both Ready, still L1 with zero credits and all
+  upgrades L1, the Testing event and its existing linked save retained. No match
+  was started and no robot motion was used for validation. A post-reload checker
+  initially read credits from the public roster instead of each player's view;
+  corrected read-only verification confirmed both player records afterward.
+
+
+## 2026-10-18 — Start HTTP 500 under the production module loader
+
+- Reproduced the reported 500 through Laser Tag Y's real command endpoint after
+  removing imported prototype helpers as the hub does. Start's late import of
+  `photon_game_runtime.event_rules.combat_target` raised `ModuleNotFoundError`.
+  Earlier fake-hardware fixtures retained helpers in Python's import cache and
+  missed this production-only failure. The previous reservation cleanup exposed
+  this underlying failure instead of leaving the retry blocked.
+- Moved that helper import to module initialization. Both command endpoints now
+  log unexpected tracebacks and return a readable JSON 500 response. The GM
+  client also handles non-JSON errors without displaying raw HTML.
+- Added regression coverage for helper cleanup, unexpected begin failures,
+  reservation cleanup and successful retry. Browser fixture can now purge helper
+  imports like the hub. The full event browser flow uses that option and checks
+  a simulated HTML 500, successful retry, both players Ready, match settlement,
+  credits/upgrades, next level and save/load. All 53 focused Python tests and the
+  browser scenario passed.
+- Reloaded the verified idle port-8000 hub with both arms disconnected. Compared
+  both selected player records, credits, upgrade levels, revisions, active event,
+  linked save and Ready acknowledgements before/after; all were preserved. No live
+  match was started and no physical motion was used for validation.
+
+## 2026-10-18 — Ring-only center activation
+
+- Diagnosed the reported match from read-only Game/Board snapshots: the eight-turret
+  ring completed at 75.164 seconds, but the 101-kill gate blocked the center while
+  the first wave was scheduled for 300 seconds. Atom 102 had valid core evidence.
+  Reproducing that evidence also showed rejected placements were marked consumed,
+  so reaching the old kill target did not retry the resting Atom.
+- Implemented the approved rule: a completed ring unlocks the center for eligible
+  100-series Atoms at all levels, independent of kills. Removed quota checks from
+  engine, operator availability and result settlement. Physical evidence is now
+  consumed only after successful acceptance; phase, stability, Atom eligibility,
+  ring and opposing-team guards remain. Manual shortcuts use the same rules.
+- Phone objectives, GM mission text, battlefield overlay, briefing and score page
+  now describe ring completion followed by the opposing-team stack. Kills remain
+  counted/scored. Zero-kill wins retain the existing stack bonus and advance both
+  controls/force fields exactly once. New attempts freeze core-rule version 2;
+  event peer comparisons exclude attempts under the earlier kill-gated rule.
+- Updated the balance simulator to stack immediately after ring completion.
+  Current selected L1 traces finish at 57.4 seconds for T1/T2/T4 fast placement and
+  162.6 seconds for slower T1 placement, with zero kills and 285 credits. No wave
+  pacing, health, prices or bonus settings were changed. The previous combat-gated
+  balance table is explicitly superseded.
+- Verification: 126 focused Python tests, 100 JavaScript checks, and three Chrome
+  scenarios passed: ring/core zero-kill completion, event progression/save/load,
+  and animated level results. Actual Board tracker evidence covers both stacking
+  orders at L1–L4; real event APIs cover manual retries, durable bonus/statistics,
+  progression and duplicate settlement. Screenshots in output/ring-core-2026-10-18
+  were visually checked. git diff --check passed.
+- Additional historical suites test_operator_core, test_operator_turrets and
+  test_ltz_economy are not green: 47 tests produced six failures and 26 errors.
+  Their fixtures lack required event/Progress context and retain obsolete manual
+  purchase, repeat-heal and same-Atom-retry expectations. These results are not
+  counted in the passing focused suite; their broad migration is outside this fix.
+- User explicitly approved stopping the active match and reloading. Paused it,
+  revoked controller leases, confirmed the connected Green arm settled from fresh
+  joint feedback, and disconnected both relay links. Waited for cumulative kill
+  earnings to be banked before restarting only the verified port-8000 hub.
+- Live verification: the old attempt recovered as interrupted; no forced End-match
+  purchase was applied. Both player IDs/names, credits, upgrade levels, control
+  tiers, lifetime score, wins, selected event and linked save were preserved.
+  The hub (PID 7557) now serves the ring-only rule and updated phone objectives.
+  Returned to ready/setup without starting a new match. Players must refresh the
+  GM/phone pages and reconnect before playing. Private activation receipt:
+  /tmp/ring-core-activation-20261018.json.
+
+## 2026-10-18 — Fixed gamefield counters for both player orientations
+
+- Replaced the variable-width score label/burst window on both Y views with a
+  fixed 880 × 72 px panel (viewport-capped on small screens). It shows only raw
+  kills and earned-credit numbers, with accessible labels. Green's upright pair
+  and Purple's 180-degree rotated copy sit side by side. The shorter arrangement
+  keeps the lower ArUco markers visible; screenshots verified that placement.
+- Extended the existing bounded score animator with optional kill-number outputs
+  and mirrored nodes. All four numbers share one frame loop; kills and credits
+  count up together, while saved bonuses affect only credits. Fixed numeric slots
+  never resize for extra digits, and long values shrink within their allotted width.
+  Existing phone labels/bursts, duplicate/stale protection, reconnect baselines and
+  reduced-motion behavior remain supported.
+- Validation: score-feedback and artwork-recovery checks passed. Chrome verified
+  projector and GM at 1920/1366 px: identical mirrored totals, 180-degree rotation,
+  unchanged window dimensions through six-digit values and saved bonuses, no
+  clipped numbers, and no browser exceptions. Updated the renderer mock to support
+  the existing results container's replaceChildren call. Screenshots and measured
+  bounds are in output/gamefield-counter-2026-10-18. git diff --check passed.
+- Read-only live verification confirmed both HTML pages and shared CSS/JS exactly
+  match the tested files. No hub restart or live game/hardware action was required.
+  Refresh the gamefield/Game Master pages to load the new presentation.
+
+### Counter placement correction
+
+- Corrected the surface distinction requested by the user: the Game Master window
+  keeps one upright counter, with its upside-down copy removed. On the external
+  projected playfield, Green's counter is anchored to the bottom edge and Purple's
+  rotated copy to the top edge. Both are children of the field stage, so they stay
+  on the board rather than following the browser viewport. The top copy sits to
+  the right of the wave timeline; the lower counter retains its centered position.
+- Counters remain fixed at 440 × 72 px on the checked projector sizes, with a
+  smaller-screen width cap. Numeric animation and saved-bonus handling are unchanged.
+- Chrome checks passed on GM/projector at 1920 and 1366 px: single upright GM
+  counter, correct field parents and edge offsets, Purple rotation, synchronized
+  values, stable dimensions, timeline clearance, and calibration hiding. Score
+  feedback and artwork recovery checks passed. Visually verified the corrected
+  projector screenshot in output/gamefield-counter-2026-10-18/corrected.
+
+### Kill-only playfield and mirrored wave strip
+
+- The projected field now shows only animated kills, with Green's fixed 220 × 72 px
+  panel at the bottom left and Purple's rotated copy at the top right. Removed
+  the credit-number elements from this surface; score accounting is unchanged.
+- Added a 180-degree rotated wave strip at the bottom right, so it is at the top
+  from Purple's viewpoint. Both timeline presenters receive the same snapshots,
+  freeze on stream disconnect and hide for calibration. Their layout clears the
+  counters and ArUco markers at both checked resolutions.
+- Validation: seven timeline unit tests, score-feedback checks, artwork recovery,
+  and the existing Chrome layout suite passed (projector/GM at 1920 and 1366 px).
+  Verified stable counter bounds through digit growth and saved bonuses, absent
+  field credits, matched mirrored labels/playheads, and no browser exceptions.
+- Refreshed the actual projector tab without restarting the hub or stopping the
+  match. Confirmed matching live wave/countdown text, 180-degree Purple rotation,
+  matching kill totals and Green's 8 px left inset. Visual evidence is saved in
+  output/gamefield-counter-2026-10-18/kill-only/live-projector.jpg.
+
+### Centered counters in the remaining edge space
+
+- Centered each field kill panel between its adjacent wave strip and the outer
+  field edge. Shared CSS widths calculate both offsets as the field resizes;
+  panel dimensions and Purple's 180-degree rotation remain the same.
+- Refreshed the live projector and measured exact center alignment on both sides:
+  Green panel/gap centers at x=456 and Purple panel/gap centers at x=1464.
+  Both showed 315 kills. Visually checked the field, and git diff --check passed.
+  Updated the existing browser assertions to expect centering rather than the
+  previous 8 px edge inset. Screenshot: kill-only/centered-live-projector.jpg.
+
+### Level statistics stay on the player screens
+
+- Removed the projector's level-results container, receipt rendering, unused shop
+  script and dedicated overlay styles. At level end, its battlefield, kill counters
+  and wave strips remain visible. Phone/score-page results and saved statistics
+  continue using the existing result flow.
+- The isolated level-results browser check passed: a saved win left the field
+  unobscured with both 900-kill counters, while both players retained their animated
+  counts, comparisons, history and turret unlocks. Reduced motion, durable event
+  results and browser error checks passed. Artwork recovery and git diff --check
+  also passed. Screenshots: output/level-results-2026-10-18/projector.png and
+  green-counts.png.
+- Refreshed the live projector without stopping the current match; verified that
+  it has no result overlay elements or results-rendering script.
+
+### Both players Continue into the next level automatically
+
+- Connected the two player Continue / Ready acknowledgements to the existing
+  next-match preparation and guarded Start. The first game still starts through
+  Game Master. Later attempts use the saved pair/Atoms, current earned equipment,
+  and the shared five-second countdown. No additional reward or purchase occurs.
+- Ready requests carry the finished run and event. Commands serialize with GM
+  actions, and delayed/concurrent duplicates cannot reset or start twice. A saved
+  continuation captures the pair, next level and loadouts; required Green/Purple
+  calibration finishes before automatic Start. Cancellation clears that intent.
+- Camera/stop/save failures fail closed. Start failures appear on both phone
+  panels with an explicit retry; the maintenance loop does not keep retrying.
+  Changed event/pair/loadouts invalidate the previous agreement.
+- Validation: 60 focused Python checks passed, covering continuation, concurrent
+  retries, stale requests, saved progress, failed stop/camera/save, calibration,
+  restart state, cancellation, event progression and mobile publication. The real
+  two-phone browser test passed: first Continue waited, second began L2 with the
+  five-second countdown. Visually checked green-auto-continue.png in
+  output/level-results-2026-10-18. JS syntax and git diff --check passed.
+- A broader 58-test run also exercised legacy suites: test_linked_games produced
+  eight errors from pre-event fixtures/removed practice starts; the old
+  test_mission_countdown operator fixture failed because its Start lacks the
+  current event/physical setup. Those nine failures are not included in the
+  passing focused set and were not changed by this work.
+- Live activation is pending: the current match is running with both arms enabled;
+  loading Python and the frozen phone bundles requires a hub restart.
+
+### Game Master Reset returns both players to name selection
+
+- Reset now stops connected arms, banks validated earnings from an abandoned
+  attempt, clears both player selections and the active pair, and opens a fresh
+  name prompt in the same event. It cancels readiness, calibration and pending
+  automatic continuation. It preserves saved pairs, wallets, turret purchases and
+  completed event results; Reset never forces an upgrade or level unlock.
+- Commands include event/run/pair identity, a retry ID and the previous reset
+  receipt. Concurrent duplicates and older reset generations cannot clear a new
+  selection or restart a new match. Old Continue requests are rejected after Reset.
+  Stop/save failures retain recoverable state and block motion until successful retry.
+- Choosing an existing name now prepares L1 controls and force field immediately,
+  preventing a previous L3 calibration from reopening in a new game. Saved pair
+  progression remains intact and explicit Load restores it. Phone Reset clears
+  browsing state, name drafts and scroll position, including an already empty lobby.
+- Validation: 68 focused Python tests passed (test_event_reset, test_player_continue,
+  test_start_readiness, test_event_game, test_level_results, test_event_progression,
+  test_mobile_calibration_safety, test_mobile_client_build). The isolated browser
+  flow clicked the actual GM Reset button and verified both editable name prompts,
+  cleared drafts/countdown/results, the unchanged event and retained completed
+  results. It also verified the two-player automatic L2 continuation. No browser
+  exceptions. Visually checked green-reset-name-selection.png and
+  purple-reset-name-selection.png in output/level-results-2026-10-18.
+- Browser assertions now wait for connected DOM nodes and final phone snapshots;
+  early reads encountered transient detached animation nodes and mixed snapshots.
+  The visual check also caught and fixed the results panel's retained scroll offset.
+- Live reload remains pending. The match subsequently finished as overrun and its
+  result saved. The reload script verified the local port-8000 process and revoked
+  relay control leases, but did not restart/disconnect because Green's last measured
+  feedback was about 22 minutes old despite being labelled connected. Asked whether
+  the physical Green arm is powered off. No live Reset/End match was issued and no
+  stored player/event data was deleted.
+
+
+## 2026-10-18 — Keep confirmed fixed targets eligible during a game
+
+- Human request: explain why Atom 100 did not activate marker 48, then apply a
+  fix that preserves the existing detection system. AI-assisted implementation.
+- Read-only evidence from run `2309ecd23d7f4849a6639429be1ec57d` showed a fresh 100
+  detection and no 100→48 relationship. Marker 48's last observed time was
+  22:58:42 Tallinn. Placement and occupancy used a separate 120-second fixed-marker
+  cache even though the existing scoped CueTargets map retained 48. That expiry
+  explains why the later placement could not qualify; the original release moment
+  cannot be reconstructed because detailed delay recording was off.
+- Game now registers its run/layout through Board's public scoped runtime API.
+  Board gives placement and occupancy the same confirmed CueTargets coordinates;
+  hidden fixed positions do not expire within that scope, and readers do not renew
+  last_seen. The active map is pinned, independent of browser presence. Ordinary
+  Game reads remain cached and do not wait behind camera sampling.
+- Preserved activation distance/dwell, current Atom/camera evidence, arm/pump gates,
+  target ordering, Atom stacking, ownership and engine rules. Unscoped/simulation
+  behavior retains its original policy. Position conflicts, coherent board movement,
+  camera changes and new game/layout scopes still reject or invalidate coordinates.
+  Bad fixed-marker geometry cannot imply uncovering. Occupancy and map learning
+  stay camera-only during relay loss; cue acquisition retains its prior readiness
+  gate. Diagnostics identify missing/disputed targets and blocked Atom evidence.
+- Validation: 192 targeted tests passed, including 16 new sampler-to-engine
+  regressions and the diagnostics DOM smoke check. They cover 100→48 after ten
+  minutes hidden, rejection of the old 100-near-47 false positive, all existing
+  camera/arm gates, no phantom replenishment, cover/return and core stacking,
+  malformed maps, and run/camera/board/layout invalidation. The broader 48-test
+  framework suite still has three failures and four errors, also reproduced with
+  the saved pre-change source; these concern earlier event API, removed virtual
+  gameplay and Progress/reset fixture changes.
+- Live status: match ended as overrun. Source is applied but the port-8000 hub has
+  not been restarted. Green reports disconnected; Purple's feedback is stale.
+  Asked whether both physical arms are powered off before reloading. No robot
+  command, live reset or end-match action was issued for this fix.
+
+## 2026-10-19 — Cue pickup from a two-Atom stack
+
+- Implemented the user's approved plan for physical Cue: remember successful
+  100-series-on-100-series releases and use the selected arm's stack offset for
+  the upper Atom's next pickup. A confirmed board release restores ordinary
+  pickup height. Memory survives rows, Clear view, pause/resume and later Play
+  runs in the same controller/game, with scope reset and camera revalidation.
+- Board's existing cue projection now includes its cached, timestamp-preserving
+  `photon.board.stacking` v1 evidence. Fresh camera relationships recognize stacks
+  created by the other player; missing, stale, contradictory and ambiguous
+  evidence cannot grant new height authority. The controller still acquires XY
+  from the camera. Failed pickup preserves the prior stack, interrupted carrying
+  becomes uncertain, and only an operation-scoped release receipt at the checked
+  destination commits the new level. Later blow/return failure does not undo an
+  already confirmed release.
+- Pickup, preflight and pre-suction verification agree on the elevated height.
+  The operation also raises travel/override clearance using the existing saved
+  offset (31.5 mm by default), while retaining Z/reach limits. Two-height camera
+  correction extends the raised-plane homography using sample height; normal
+  one-Atom TPS calibration and saved calibration values are unchanged. Known
+  taller stacks and picking a supporting lower Atom are refused.
+- Validation: 148 JavaScript tests passed across cue recovery/selection/startup,
+  calibration motion/boundaries and height controls; 100 Python tests passed
+  across cue targets, core stacking, Board tracking and client assembly. Both
+  teams' fake-relay bridge smoke tests passed. New cases run the complete
+  stack → elevated pickup → board placement → normal pickup sequence for both
+  arms and orientations, including same-queue Clear view, separate Play runs,
+  pause/resume, failed pickup, rejected/mispositioned release receipts, camera
+  epoch/outage recovery and Z-limit rejection. A tilted pinhole-camera fixture
+  verifies the two-height perspective calculation. Whole-controller syntax and
+  changed-file whitespace checks passed.
+- No physical movement, live-hub restart or calibration write was performed.
+  Restart the hub to load Board's additive evidence, then refresh both player
+  pages. The saved current Green/Purple perspective samples also passed the new
+  model's offline validation; physical accuracy still needs a supervised pickup.

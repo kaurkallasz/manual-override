@@ -23,7 +23,15 @@ const output = process.env.PHOTON_PERF_OUTPUT || '/tmp/photon-browser-performanc
         let file = path.resolve(root, 'sandboxes/gamemaster/prototypes', relative);
         if (relative === 'laser-tag-y/game') file = path.join(file, '../index.html');
         if (relative === 'laser-tag-y/screen') file += '.html';
+        if (/^laser-tag-y\/(shop\.(js|css)|score-feedback\.js|marker-presence\.js|wave-timeline\.(js|css))$/.test(relative)) {
+          file = path.join(root, 'shared/ltz_ui', path.basename(relative));
+        }
         if (relative === 'laser-tag-y/tower-defence-view.js' && alternateRenderer) file = alternateRenderer;
+        if (relative === 'laser-tag-y/tower-defence-view.js' && !alternateRenderer) {
+          const owner = path.dirname(file);
+          return route.fulfill({contentType:'application/javascript',body:
+            fs.readFileSync(path.join(owner,'breaker-renderer.js'),'utf8')+'\n'+fs.readFileSync(file,'utf8')});
+        }
         if (pathname === '/theme.css') return route.fulfill({body: '', contentType: 'text/css'});
         if (!file.startsWith(root + path.sep) && file !== alternateRenderer) return route.abort();
         if (fs.existsSync(file) && fs.statSync(file).isFile()) return route.fulfill({path: file});
@@ -59,11 +67,16 @@ const output = process.env.PHOTON_PERF_OUTPUT || '/tmp/photon-browser-performanc
               const state = structuredClone(fixture);
               state.sim_time += ++tick * .1; state.runtime_time += tick * .1;
               for (const enemy of state.enemies) {
-                enemy.x += Math.sin(tick * .03 + enemy.id) * 18;
+                if (!['aim','recover'].includes(enemy.combat?.state)) enemy.x += Math.sin(tick * .03 + enemy.id) * 18;
+                if (enemy.combat) for (const key of ['started_at','release_at','last_shot_at','next_shot_at']) {
+                  if (Number.isFinite(enemy.combat[key])) enemy.combat[key] += tick*.1;
+                }
                 if (enemy.burn_until) enemy.burn_until = state.sim_time + 1;
                 if (enemy.electrocuted_until) enemy.electrocuted_until = state.sim_time + 1;
               }
               for (const tower of [...state.towers, ...(state.companions || [])]) tower.last_fire_at = state.sim_time;
+              for (const arrow of state.enemy_arrows || []) {arrow.launch_at += tick*.1;arrow.impact_at += tick*.1;}
+              for (const impact of state.enemy_arrow_impacts || []) impact.at += tick*.1;
               if (fixture.__rowTransitions) {
                 const mask = Math.floor(tick / 20) % 16;
                 state.row_topology_revision = Math.floor(tick / 20);
@@ -94,6 +107,10 @@ const output = process.env.PHOTON_PERF_OUTPUT || '/tmp/photon-browser-performanc
       await page.goto(`http://photon.test/s/gamemaster/p/laser-tag-y/${i === 0 ? 'game' : 'screen'}`);
       await page.waitForFunction(() => window.__metrics.assets?.requested > 0 && window.__metrics.assets.pending === 0, {timeout: 60000});
       await page.waitForTimeout(3000);
+      if (process.env.PHOTON_PERF_CPU) {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send('Emulation.setCPUThrottlingRate', {rate: Number(process.env.PHOTON_PERF_CPU)});
+      }
       pages.push(page);
     }
     for (const page of pages) await page.evaluate(() => {
@@ -111,7 +128,7 @@ const output = process.env.PHOTON_PERF_OUTPUT || '/tmp/photon-browser-performanc
       const quantile = (values, fraction) => [...values].sort((a,b) => a-b)[Math.min(values.length - 1, Math.floor(values.length * fraction))];
       const intervals = m.frames.slice(1).map((at, i) => at - m.frames[i]);
       const fps = m.fps.filter(value => value != null);
-      return {samples: fps.length, minFps: Math.min(...fps), medianFps: quantile(fps,.5), maxFps: Math.max(...fps), belowTarget: fps.filter(fps => fps <= 30).length, intervalP95: quantile(intervals,.95), intervalP99: quantile(intervals,.99), longTasks: m.longTasks.length, assets: m.assets, passes: m.passes.slice(-5), heapBytes: performance.memory?.usedJSHeapSize};
+      return {samples: fps.length, minFps: Math.min(...fps), medianFps: quantile(fps,.5), maxFps: Math.max(...fps), belowTarget: fps.filter(fps => fps < 30).length, intervalP95: quantile(intervals,.95), intervalP99: quantile(intervals,.99), longTasks: m.longTasks.length, assets: m.assets, passes: m.passes.slice(-5), heapBytes: performance.memory?.usedJSHeapSize};
     })));
     await pages[0].screenshot({path: output.replace(/\.json$/, '.png')});
     fs.writeFileSync(output, JSON.stringify({seconds, views, alternateRenderer, results, errors}, null, 2));

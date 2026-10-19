@@ -2,10 +2,10 @@
 const assert=require('node:assert/strict');
 const {TurretOverlay}=require('../shared/mobile_ltz/turret-overlay.js');
 let now=100,wall=100000,nextURL=0,decodeGate=null;
-const urls=new Set(),revoked=[];
+const urls=new Set(),revoked=[],decoders=[];
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject};};
 class MockImage{
- constructor(){this.hidden=false;this.complete=false;this.naturalWidth=0;this.id='';this.alt='';}
+ constructor(){this.hidden=false;this.complete=false;this.naturalWidth=0;this.id='';this.alt='';decoders.push(this);}
  set src(v){this._src=v;this.complete=false;this.naturalWidth=0;}
  get src(){return this._src;}
  async decode(){if(decodeGate)await decodeGate.promise;this.complete=true;this.naturalWidth=1280;this.naturalHeight=720;}
@@ -15,7 +15,7 @@ class MockImage{
 const displayed={hidden:true,id:'playfieldVideo',_width:0,_height:0,resizes:0,draws:[],
  get width(){return this._width;},set width(v){this._width=v;this.resizes++;},
  get height(){return this._height;},set height(v){this._height=v;this.resizes++;},
- getContext(){return {drawImage:image=>{assert(image.complete&&image.naturalWidth,'Only paint fully decoded frames');this.draws.push(image.src);}};},
+ getContext(type,options){assert.equal(type,'2d');assert.deepEqual(options,{alpha:false,willReadFrequently:true});return {drawImage:image=>{assert(image.complete&&image.naturalWidth,'Only paint fully decoded frames');this.draws.push(image.src);}};},
 };
 Object.defineProperty(globalThis,'performance',{value:{now:()=>now}});
 Date.now=()=>wall;
@@ -25,9 +25,9 @@ URL.revokeObjectURL=u=>{assert(urls.delete(u),'URL revoked once');revoked.push(u
 const app={dataset:{}};
 globalThis.document={hidden:false,getElementById:id=>{assert.equal(id,'app');return app;}};
 const state={virtual_play:false,phase:'running',mobile_camera:{status:'ready',frame_at:wall/1000}};
-let notifications=0;
+let notifications=0;const fps=[];
 const overlay=Object.assign(Object.create(TurretOverlay.prototype),{
- o:{state:()=>state,fresh:()=>true,frameURL:()=>'/frame',videoChanged:()=>notifications++},
+ o:{state:()=>state,fresh:()=>true,frameURL:()=>'/frame',videoChanged:()=>notifications++,onFps:value=>fps.push(value)},
  image:displayed,imageAt:0,frameRequest:null,frameNext:0,draw:()=>{},
 });
 const ok=()=>({ok:true,headers:{get:()=> 'image/jpeg'},blob:async()=>({})});
@@ -36,6 +36,7 @@ const advance=ms=>{now+=ms;wall+=ms;state.mobile_camera.frame_at=wall/1000;};
 const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
 (async()=>{
  await overlay.video();assert(overlay.cameraReady());assert.equal(urls.size,0);
+ assert.ok(decoders.every(image=>!image.src),'A painted JPEG releases its source decoder before GC');
  const first=displayed,firstURL=first.draws.at(-1);
  advance(160);decodeGate=deferred();const loading=overlay.video();await flush();
  assert.equal(displayed,first);assert.equal(displayed.draws.at(-1),firstURL);assert(overlay.cameraReady(),'Pending decode must not disable aiming or blink');
@@ -63,5 +64,17 @@ const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
  assert.equal(overlay.frameRequest,null);assert.equal(urls.size,0);
  decodeGate=null;advance(160);await overlay.video();assert(overlay.cameraReady());
  overlay.stopVideo();assert.equal(urls.size,0);assert(notifications>0);
- console.log('PASS: persistent canvas, no inter-frame clears, transient failures, fail-closed expiry, cancellation, recovery and URL cleanup');
+ assert.equal(fps.at(-1),null,'Stopping video clears the FPS sample');
+ fps.length=0;
+ for(let i=0;i<5;i++){await overlay.video();advance(200);}
+ globalThis.fetch=async()=>{throw Error('Dropped frame');};
+ await overlay.video();assert.equal(fps.at(-1),5,'FPS counts completed paints over elapsed time');
+ advance(1000);await overlay.video();assert.equal(fps.at(-1),0,'A stalled camera reports zero FPS');
+ overlay.stopVideo();assert.equal(fps.at(-1),null);
+ state.virtual_play=true;const samples=fps.length;
+ await overlay.video();assert.equal(fps.length,samples,'Inactive camera does not clear virtual FPS');
+ state.virtual_play=false;globalThis.fetch=async()=>ok();
+ await overlay.video();advance(1000);await overlay.video();assert.equal(fps.at(-1),1,'Resume starts a fresh sample');
+ document.hidden=true;await overlay.video();assert.equal(fps.at(-1),null,'Hidden page resets camera FPS');
+ console.log('PASS: camera FPS sampling, stalls, mode/visibility resets, persistent canvas, cancellation, recovery and URL cleanup');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,4 +1,5 @@
 """Green's touch-first mobile LTZ presentation; gameplay lives in Photon Game."""
+from shared.mobile_ltz.bundle import assemble, CLIENT_FILES
 from pathlib import Path
 import re
 import uuid
@@ -18,11 +19,7 @@ def hub_init(ctx):
     global _client, _ctx
     _ctx = ctx
     # Freeze one complete UI per launch. A refresh cannot mix generations.
-    files = {name: (HERE / name).read_text() for name in CLIENT_FILES}
-    # Keep the established hosted file contract: deployed PHP relays may only
-    # allow these six filenames. New helpers travel inside mobile.js.
-    files['mobile.js'] = (HERE / 'operation-id.js').read_text() + '\n' + (HERE / 'journey.js').read_text() + '\n' + (HERE / 'joint-rig.js').read_text() + '\n' + (HERE / 'turret-overlay.js').read_text() + '\n' + (HERE / 'physical-arm.js').read_text() + '\n' + files['mobile.js']
-    files['mobile.js'] = (HERE / 'connection-log.js').read_text() + '\n' + files['mobile.js']
+    files = assemble(HERE)
     _client = {'build': uuid.uuid4().hex, 'files': files}
 
 

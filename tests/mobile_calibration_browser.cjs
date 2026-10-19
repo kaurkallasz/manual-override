@@ -78,7 +78,7 @@ assert(['individual','both','earned'].includes(scope));
    assert.equal(await page.evaluate(()=>Object.values(state.mobile_calibration.draft.points).find(p=>p.marker===30).camera_cached),true,'Occluded capture uses cached optics and live pose');
    await gm.request.post(origin+'/__test/camera',{data:{hidden_markers:[]}});
    await page.waitForSelector('[data-parallax="31"]');
-   assert.equal(await page.locator('[data-capture]').count(),0,'Four raised references replace the six arm capture buttons');
+   assert.equal(await page.locator('[data-capture]:visible').count(),0,'Six saved arm points stay folded while the four raised references are shown');
    assert.equal(await page.locator('[data-parallax]:visible').count(),4,'All four raised references remain accessible while folded');
    await page.waitForFunction(()=>document.querySelectorAll('#markerLabels .markerNumber').length===4);
    assert.deepEqual((await page.locator('#markerLabels .markerNumber').allTextContents()).sort(),['#31','#33','#34','#35']);

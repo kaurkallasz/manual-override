@@ -71,6 +71,7 @@ camera.destroy();assert.equal(image.src,null);
         root = Path(__file__).resolve().parents[1]
         page = (root / "sandboxes/gamemaster/prototypes/laser-tag-y/index.html").read_text()
         source = "function createArucoMonitor" + page.split("function createArucoMonitor", 1)[1].split("const arucoMonitor=", 1)[0]
+        source = (root / "shared/ltz_ui/marker-presence.js").read_text() + source
         chip_source = "function detectionChip" + page.split("function detectionChip", 1)[1].split("function renderControls", 1)[0]
         script = r"""
 const assert=require('node:assert/strict');
@@ -99,6 +100,17 @@ b=button();detectionChip(b,41,false);assert.equal(b.remembered,true);assert.matc
 b=button();detectionChip(b,55,false);assert.equal(b.children[0].textContent,'Not seen');
 b=button();detectionChip(b,40,true);assert.equal(b.children.length,0);
 monitor.setEnabled(true);assert.equal(result.ready,true);
+// Missing one or two camera detections does not flash the outline or chip.
+send(payload([tag(40),tag(100)]));const seen=time;
+for(const gap of [.2,.5,.8]){
+ time=seen+gap;send(payload([]));
+ assert.equal(result.tags.find(t=>t.id===100).recent,true);
+ assert.equal(result.tags.find(t=>t.id===100).visible,false,'Recent display is not current camera evidence');
+ assert(overlay.children.every(n=>n.attrs['stroke-dasharray']!=='5 4'));
+ const chip=button();ui.aruco=result;detectionChip(chip,100,false);assert.equal(chip.detected,true);
+}
+time=seen+1.01;send(payload([]));assert(!result.tags.some(t=>t.id===100));
+assert.equal(result.tags.find(t=>t.id===40).cached,true);
 // Retained coordinates cannot remain green after a lost or stale stream.
 monitor.disconnect();assert.equal(result.ready,false);assert.equal(result.tags.length,0);assert.equal(overlay.hasAttribute('hidden'),true);
 send();assert.equal(result.tags[0].visible,true);time+=1.6;monitor.check();assert.equal(result.ready,false);assert.equal(overlay.children.length,0);
@@ -128,6 +140,7 @@ monitor.destroy();assert.equal(overlay.hasAttribute('hidden'),true);
         root = Path(__file__).resolve().parents[1]
         page = (root / "sandboxes/gamemaster/prototypes/laser-tag-y/index.html").read_text()
         source = "function createArucoMonitor" + page.split("function createArucoMonitor", 1)[1].split("const arucoMonitor=", 1)[0]
+        source = (root / "shared/ltz_ui/marker-presence.js").read_text() + source
         script = r"""
 const assert=require('node:assert/strict');
 let time=100,saved=null,result,writes=0,calibration=false;

@@ -14,17 +14,11 @@
   </div>
   <header><div class="identity"><i></i><span id="teamName">Green</span><span class="divider">/</span><button id="levelsOpen" aria-haspopup="dialog">Joint <span class="muted">⌄</span></button></div>
     <div class="telemetry">
-      <div class="facts"><span>Wave <b id="wave">—</b></span><span>Core <b id="core">—</b></span><span>Score <b id="score">0</b></span><span class="fps" title="Game frames drawn per second">FPS <b id="fps">—</b></span></div>
-      <div class="diagnostics" aria-label="Movement performance">
-        <span title="Received game updates per second over the last five seconds">Updates <b id="updateHz">—</b>/s</span>
-        <span title="Time since the latest received game update, not network ping">Age <b id="updateAge">—</b>ms</span>
-        <span title="Percentage of moving frames using prediction during the last sample">Pred <b id="prediction">—</b>%</span>
-        <span title="Current adaptive playback buffer">Buffer <b id="bufferMs">—</b>ms</span>
-        <span title="Longest interval between drawn frames in the last sample; amber indicates an interval above 34 ms">Peak <b id="framePeak">—</b>ms</span>
-      </div>
+      <div class="facts"><span>Wave <b id="wave">—</b></span><span>Core <b id="core">—</b></span><span class="mobileMatchScore"><small id="scoreLabel">Match credits</small> <b id="score">0</b><small id="scoreBurst" class="ltzScoreBurst" aria-live="polite"></small></span><span class="fps" title="Displayed camera or game frames per second">FPS <b id="fps">—</b></span></div>
     </div>
     <div class="viewButtons"><button id="rotateView" type="button" aria-label="Rotate playfield 180 degrees" aria-pressed="false">↻ 180°</button><button id="expand" aria-label="Expand view">⤢ <span>Expand</span></button></div>
   </header>
+  <div id="coreObjective" role="status" hidden></div>
   <aside class="connectionControls"><div class="connectionButtons"><button id="connect" class="glass primary" disabled><span class="connectIcon">◉</span> Connect</button><button id="enableArm" class="glass" hidden>Enable</button><button id="stop" class="glass stop"><span>■</span> Stop</button></div><div class="playerLog" aria-label="Player status log"><div class="mode"><span id="mode">Waiting</span><span id="connection">Offline</span></div><div id="cameraStatus" role="status" aria-live="polite" hidden></div><div id="feedback" role="status" aria-live="polite">Waiting for the live game.</div></div></aside>
   <section class="leftControls" aria-label="Base and gripper controls">
     <div class="baseDial">
@@ -83,6 +77,7 @@
     <p id="xyzHint" class="srOnly">In Targeting, tap to preview a destination or drag the green bullseye, then press Go; Fine tune reduces drag movement to one tenth. Use two fingers to pan and zoom. In XYZ, sliders select map coordinates; red markers show actual arm position. Green bullseye and dashed cross lines show your XY target; thin red bullseye and dashed cross lines show actual XY. The right vertical Y slider increases downward; the left height slider increases upward. Arrows move X and Y by 10 map units, and height by 1 unit (1 mm in physical play), or 1 map unit and 0.1 height unit with Fine tune enabled. Height stays available in Targeting and while Cue is stopped. Orange means XY aligned; height is separate. Virtual heights range from 0 to 400. Physical play uses calibrated camera coordinates, millimeter heights, and the displayed red reach limits. Fine tune zooms to one tenth of the range with 0.1 unit slider steps.</p>
     <div class="xyzLegend"><span class="targetKey">⊕ Target</span><span class="actualKey">⊕ Actual</span><span id="xyzAlignment">XY aligned</span></div>
   </section>
+  <canvas id="mcam1Video" role="img" aria-label="MCAM1 live video" hidden></canvas>
   <aside id="cuePanel" class="cuePanel glass" aria-label="Cue sequence" hidden>
     <div class="cueHeading"><b>Cue</b><button id="cueMinimize" aria-label="Minimize cue" aria-expanded="true">›</button></div>
     <div id="cueReadiness" aria-label="Game, arm and cue status"><span id="cueGameState">Game waiting</span><span id="cueArmState">Arm disconnected</span><span id="cueRunState">Cue idle</span></div>
@@ -100,7 +95,7 @@
 <article class="tier" data-control="xyz"><div class="tierNumber">02 <span id="tier2">Preview</span></div><div class="miniXYZ">✛ <span>↕</span></div><h3>Cartesian XYZ</h3><p>X and Y sliders, a vertical height slider, and target / actual bullseyes.</p><strong>Available when unlocked</strong></article>
 <article class="tier" data-control="targeting"><div class="tierNumber">03 <span id="tier3">Preview</span></div><div class="miniTarget">⊕ <span>·····◎</span></div><h3>Targeting</h3><p>Tap to preview a target, then press Go. Keep height and presets; use Fine tune for 10× precision.</p><strong>Available when unlocked</strong></article>
 <article class="tier" data-control="cue"><div class="tierNumber">04 <span id="tier4">Preview</span></div><div class="miniCue">①─②─③ <span>▶</span></div><h3>Cue autonomy</h3><p>Queue piece → marker rows. Play, pause, or stop automatic pickup and placement.</p><strong>Available when unlocked</strong></article>
-</div><p class="muted">Three eligible wins unlock the next control level. Simulation is practice and does not award permanent progress.</p></dialog>
+</div><p class="muted">Three eligible wins unlock the next control level. Practice kill credits buy upgrades; scored wins unlock control levels.</p></dialog>
 <dialog id="login"><form id="loginForm"><p class="eyebrow">mobile ltz</p><h2>Join Green.</h2><p>Use your Green player password.</p><label for="password">Player password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit" class="primary">Sign in</button><p id="loginError" role="alert"></p></form></dialog>
 <script src="viewport.js?v=20260917-touch-map"></script><script src="live-game.js?v=20260917-touch-map"></script><script src="network.js?v=20260917-touch-map"></script><script src="mobile.js?v=20260918-rig-bundle"></script>
 </body></html>

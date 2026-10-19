@@ -5,13 +5,14 @@ import os
 from pathlib import Path
 import threading
 import uuid
-from photon_game_runtime.settings import validate_settings
+import horde_presets
+from photon_game_runtime.settings import validate_settings, DEFAULTS
 
 
 class Presets:
     def __init__(self,path):
         self.path,self.lock=Path(path),threading.RLock()
-        self.state={'revision':0,'presets':[],'selected':{}}
+        self.state={'schema_version':1,'revision':0,'presets':[],'selected':{}}
         try:
             saved=json.loads(self.path.read_text())
             if not isinstance(saved,dict) or saved.get('schema_version')!=1 or not isinstance(saved.get('presets'),list) or not isinstance(saved.get('selected'),dict):
@@ -51,7 +52,11 @@ class Presets:
 
     def ensure_map(self,map_id,base):
         with self.lock:
-            if any(p['map_id']==map_id for p in self.state['presets']): return
+            if any(p['map_id']==map_id for p in self.state['presets']):
+                self._ensure_archer_family(map_id, base)
+                self._ensure_horde_family(map_id, base)
+                self._ensure_event_family(map_id, base)
+                return
             state=copy.deepcopy(self.state)
             clean,errors=validate_settings(base)
             if errors:raise ValueError(str(errors))
@@ -71,6 +76,54 @@ class Presets:
                     family='progression',target_active_seconds=1500 if tier==1 else None,
                     measured_speed_factor=None,source_run_ids=[])
                 state['selected'][f'{map_id}:{tier}']=preset['id']
+            self._save(state)
+            self._ensure_archer_family(map_id, base)
+            self._ensure_horde_family(map_id, base)
+            self._ensure_event_family(map_id, base)
+
+    def _ensure_event_family(self,map_id,base):
+        """One-time event rollout; retain old revisions and subsequent GM choices."""
+        if any(p['map_id']==map_id and p.get('family')=='event-progression-v1' for p in self.state['presets']):return
+        state=copy.deepcopy(self.state)
+        for tier,factor in enumerate((1,2,8,10),1):
+            selected=state['selected'].get(f'{map_id}:{tier}')
+            previous=next((p for p in state['presets'] if p['id']==selected),None)
+            settings={**DEFAULTS,**copy.deepcopy(previous['settings'] if previous else base)}
+            settings['enemy_health_multiplier']=min(10,float(settings['enemy_health_multiplier'])*factor)
+            clean,errors=validate_settings(settings)
+            if errors:raise ValueError(str(errors))
+            preset=self._append(state,map_id,tier,'Event progression',clean,
+                family='event-progression-v1',previous_preset_id=previous['id'] if previous else None,
+                evidence='Synthetic eight-turret traces: low-tier equipment loses ground at L3/L4; venue tuning provisional')
+            state['selected'][f'{map_id}:{tier}']=preset['id']
+        self._save(state)
+
+    def _ensure_horde_family(self,map_id,base):
+        state=copy.deepcopy(self.state)
+        for tier in range(1,5):
+            if any(p['map_id']==map_id and p['tier']==tier and p.get('family')==horde_presets.FAMILY and p.get('candidate_revision')==horde_presets.REVISION for p in state['presets']):continue
+            seed=next((p['settings'] for p in reversed(state['presets']) if p['map_id']==map_id and p['tier']==tier and p.get('family')=='breaker-archer'),base)
+            settings,errors=validate_settings(horde_presets.candidate(seed,tier))
+            if errors:raise ValueError(str(errors))
+            self._append(state,map_id,tier,horde_presets.NAME,settings,family=horde_presets.FAMILY,candidate_revision=horde_presets.REVISION,
+                         evidence='Synthetic reference trace; human playtest pending; 1,000 active cap and 2,000 deferred cap')
+        if state['revision']!=self.state['revision']:self._save(state)
+
+    def _ensure_archer_family(self, map_id, base):
+        """Append candidates once; preserve every existing revision/selection."""
+        state = copy.deepcopy(self.state)
+        for tier in range(1, 5):
+            if any(p['map_id'] == map_id and p['tier'] == tier and p.get('family') == 'breaker-archer' for p in state['presets']):
+                continue
+            seed = next((p for p in reversed(state['presets']) if p['map_id'] == map_id
+                         and p['tier'] == tier and p.get('family') == 'progression'), None)
+            settings, errors = validate_settings({**(seed['settings'] if seed else base), 'breaker_attack_mode': 'ranged'})
+            if errors:
+                raise ValueError(str(errors))
+            self._append(state, map_id, tier, 'Breaker archer candidate', settings,
+                         family='breaker-archer', combat_rule_version=1,
+                         evidence='red archer; tower-first targeting; shield-blocked arrows; candidate tuning')
+        if state['revision'] != self.state['revision']:
             self._save(state)
 
     def command(self,value):
@@ -102,21 +155,23 @@ class Presets:
                 settings,errors=validate_settings(incoming)
                 if errors:raise ValueError(str(errors))
                 family=value.get('family','progression')
-                if family not in ('progression','practice'):raise ValueError('supported preset family required')
+                if family not in ('progression','practice','breaker-archer',horde_presets.FAMILY):raise ValueError('supported preset family required')
                 selected=self._append(state,map_id,tier,name,settings,family=family,
                     evidence=str(value.get('evidence') or 'operator provisional tuning')[:500],
                     target_active_seconds=1500 if tier==1 else None,measured_speed_factor=None,source_run_ids=[])
             else:raise ValueError('unsupported preset action')
             state['selected'][key]=selected['id'];state['revision']+=1
             self._save(state)
-            return {**self.snapshot(),'selected_preset':copy.deepcopy(selected)}
+            # Project defaults for old revisions without rewriting their record.
+            public_selected={**copy.deepcopy(selected),'settings':{**DEFAULTS,**copy.deepcopy(selected['settings'])}}
+            return {**self.snapshot(),'selected_preset':public_selected}
 
     def for_run(self,map_id,tier,fallback):
         self.ensure_map(map_id,fallback)
         with self.lock:
             selected=self.state['selected'].get(f'{map_id}:{tier}')
             preset=next((p for p in self.state['presets'] if p['id']==selected),None)
-            return (copy.deepcopy(preset['settings']),copy.deepcopy(preset)) if preset else (dict(fallback),None)
+            return ({**DEFAULTS, **copy.deepcopy(preset['settings'])},copy.deepcopy(preset)) if preset else ({**DEFAULTS, **fallback},None)
 
     def family_for_map(self,map_id,fallback):
         return [self.for_run(map_id,tier,fallback) for tier in range(1,5)]

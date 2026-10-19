@@ -1,5 +1,6 @@
 """Real schedule arithmetic, immutable presets and safe preparation clock."""
 import copy
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,7 +18,17 @@ class PresetTests(unittest.TestCase):
         self.store=self.Presets(Path(self.folder.name)/'presets.json');self.map='fixture-map'
     def test_migration_preserves_venue_and_seeds_four_increasing_candidates(self):
         self.store.ensure_map(self.map,self.base);snapshot=self.store.snapshot()
-        self.assertEqual(len(snapshot['presets']),8)
+        self.assertEqual(len(snapshot['presets']),20)
+        archers=[p for p in snapshot['presets'] if p['family']=='breaker-archer']
+        self.assertEqual([p['tier'] for p in archers],[1,2,3,4])
+        self.assertTrue(all(p['settings']['breaker_attack_mode']=='ranged' for p in archers))
+        event=[p for p in snapshot['presets'] if p['family']=='event-progression-v1']
+        self.assertEqual([p['settings']['enemy_health_multiplier'] for p in event],[1,2,8,10])
+        self.assertEqual(set(snapshot['selected'].values()),{p['id'] for p in event})
+        selected=dict(snapshot['selected'])
+        self.store.ensure_map(self.map,self.base)
+        self.assertEqual(self.store.snapshot(),snapshot)
+        self.assertTrue(all(p['id'] not in selected.values() for p in archers))
         self.assertEqual([p['settings'] for p in snapshot['presets'] if p['family']=='legacy'],[self.base]*4)
         schedules=[self.game.orc_schedule(settings,self.bundle['waves'],i+1) for i,(settings,_) in enumerate(self.store.family_for_map(self.map,self.base))]
         self.assertTrue(all(b['total']>a['total'] and b['wave_interval_s']<a['wave_interval_s'] and b['release_rate_multiplier']>a['release_rate_multiplier'] for a,b in zip(schedules,schedules[1:])))
@@ -30,6 +41,21 @@ class PresetTests(unittest.TestCase):
             schedule=self.game.orc_schedule(incoming,self.bundle['waves'],2)
             expected=[[max(1,round(g['count']*.22*1.08*(1+offset))) for g in w['groups']] for w in self.bundle['waves']]
             self.assertEqual(schedule['groups'],expected)
+    def test_old_presets_keep_bytes_and_selection_when_archers_are_added(self):
+        self.store.ensure_map(self.map,self.base)
+        old=self.store.snapshot()
+        old['presets']=[p for p in old['presets'] if p['family'] not in ('breaker-archer','ltz-horde-v1')]
+        for preset in old['presets']:
+            preset['settings']={k:v for k,v in preset['settings'].items() if not k.startswith('breaker_')}
+        self.store.path.write_text(json.dumps({'schema_version':1,**old}))
+        restarted=self.Presets(self.store.path)
+        settings,_=restarted.for_run(self.map,1,self.base)
+        self.assertEqual(settings['breaker_attack_mode'],'melee')
+        snapshot=restarted.snapshot()
+        self.assertEqual(snapshot['presets'][:len(old['presets'])],old['presets'])
+        self.assertEqual(snapshot['selected'],old['selected'])
+        self.assertEqual(len(snapshot['presets']),20)
+        self.assertEqual(self.Presets(self.store.path).snapshot(),snapshot)
     def test_save_load_rename_restart_and_frozen_run(self):
         frozen,preset=self.store.for_run(self.map,1,self.base);original=copy.deepcopy(frozen)
         def command(action,name,**extra):return self.store.command({'action':action,'map_id':self.map,'tier':1,'name':name,'revision':self.store.snapshot()['revision'],**extra})

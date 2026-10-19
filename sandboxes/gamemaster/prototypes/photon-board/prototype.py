@@ -1,4 +1,5 @@
 """Photon Board: corrected physical observations, with an explicit simulator."""
+from shared import delay_trace as trace
 
 import json
 import math
@@ -11,7 +12,7 @@ from flask import Blueprint, jsonify, redirect, request, send_from_directory
 
 import live
 from cue_targets import CueTargets
-from board_occupancy import OccupancyTracker
+from board_occupancy import OccupancyTracker, GRACE_S as OCCUPANCY_GRACE_S
 from marker_quality import marker_size as _marker_size, size_consistent_markers as _size_consistent_markers
 from board_tracking import (
     BoardTracker, DEFAULT_SETTINGS, PhysicalPlacementTracker, SETTING_BOUNDS,
@@ -44,6 +45,7 @@ _occupancy_tracker = OccupancyTracker()
 _occupancy = {}
 _cue_targets = CueTargets()
 _cue_layouts = {}
+_game_layout_key = None
 _tracking = {}
 _placement = {}
 _runtime = {}
@@ -58,7 +60,7 @@ class BoardError(ValueError):
 
 
 def settings_snapshot():
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         return {"contract": "photon.board.settings", "version": 1,
                 "status": "unavailable" if _settings_error else "ready", "error": _settings_error,
                 "settings": dict(_settings), "defaults": dict(DEFAULT_SETTINGS),
@@ -78,7 +80,7 @@ def _load_settings():
         pass  # First use keeps the original defaults without writing a file.
     except (OSError, ValueError) as exc:
         error = f"Could not load tracking settings; using defaults: {exc}"
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         _settings, _settings_error = values, error
 
 
@@ -86,7 +88,7 @@ def update_settings(values):
     """Persist one validated replacement; never changes game or robot safety."""
     global _settings, _settings_error, _tracker
     clean = validate_settings(values)
-    with _sample_lock:
+    with trace.locked(_sample_lock, 'board.sample_lock'):
         temporary = None
         try:
             folder = os.path.dirname(SETTINGS_PATH)
@@ -98,14 +100,14 @@ def update_settings(values):
                 os.fsync(handle.fileno())
             os.replace(temporary, SETTINGS_PATH)
         except OSError as exc:
-            with _lock:
+            with trace.locked(_lock, 'board.state_lock'):
                 _settings_error = f"Could not save tracking settings; previous values remain active: {exc}"
             _live.bump()
             raise
         finally:
             if temporary is not None and os.path.exists(temporary):
                 os.unlink(temporary)
-        with _lock:
+        with trace.locked(_lock, 'board.state_lock'):
             _settings, _settings_error = clean, None
             _tracker = BoardTracker(clean)
             # Keep the raw observation cache, but never mix transport evidence
@@ -117,7 +119,7 @@ def update_settings(values):
 
 
 def hub_init(ctx):
-    global _hub_ctx, _thread, _stop, _tracker, _placement_tracker, _cue_targets, _cue_layouts, _occupancy_tracker
+    global _hub_ctx, _thread, _stop, _tracker, _placement_tracker, _cue_targets, _cue_layouts, _occupancy_tracker, _game_layout_key
     hub_stop()
     _hub_ctx = ctx
     _load_settings()
@@ -126,6 +128,7 @@ def hub_init(ctx):
     _occupancy_tracker = OccupancyTracker()
     _cue_targets = CueTargets()
     _cue_layouts = {}
+    _game_layout_key = None
     _sample_tracking()
     _stop = threading.Event()
     _thread = threading.Thread(target=_tracking_loop, args=(_stop,), name="photon-board-tracking", daemon=True)
@@ -142,7 +145,7 @@ def hub_stop():
             raise RuntimeError("Previous Photon Board sampler has not stopped; refusing a second sampler")
     _hub_ctx = None
     _thread = _stop = None
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         _tracking = {}
         _placement = {}
         _runtime = {}
@@ -219,8 +222,8 @@ def _clean_tags(value):
 def set_simulation(enabled, tags, arms=None):
     clean_tags = _clean_tags(tags) if enabled else []
     clean_arms = _clean_arms(arms or {}) if enabled and arms else {}
-    with _sample_lock:
-        with _lock:
+    with trace.locked(_sample_lock, 'board.sample_lock'):
+        with trace.locked(_lock, 'board.state_lock'):
             _simulation.update(enabled=bool(enabled), tags=clean_tags, arms=clean_arms)
             _simulation["revision"] += 1
         _sample_tracking()
@@ -261,6 +264,7 @@ def _clean_arms(value):
     return arms
 
 
+@trace.traced('board.read_input')
 def _read_input(slug, function_name, contract, version, *args):
     try:
         module = _module(slug)
@@ -340,9 +344,10 @@ def _validate_tracking_inputs(projection, intents):
         json.dumps(intents, allow_nan=False)
 
 
+@trace.traced('board.runtime_input')
 def _runtime_input():
     """Complete validated observation for production game adapters."""
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         simulated = json.loads(json.dumps(_simulation))
     now = time.time()
     if simulated["enabled"]:
@@ -472,22 +477,35 @@ def _fresh_runtime(raw, now, stale_s):
     return output
 
 
+@trace.traced('board.sample_tracking')
 def _sample_tracking():
     global _tracking, _placement, _runtime, _occupancy
-    with _sample_lock:
-        now = time.time()
+    with trace.locked(_sample_lock, 'board.sample_lock'):
         raw = _runtime_input()
+        now = time.time()
+        base_runtime = _fresh_runtime(raw, now, STALE_S)
+        camera_runtime = raw.get('_occupancy_camera', base_runtime)
+        # One camera-owned map supplies coordinates to both consumers. Its
+        # learning/occupancy remain independent of relay availability; public
+        # cue acquisition still applies runtime_observation's existing gate.
+        trace.call('board.cue_targets', _cue_targets.update, camera_runtime, now)
+        for targets in _cue_layouts.values():
+            trace.call('board.cue_layout', targets.update, camera_runtime, now)
+        fixed_map = None
+        if _game_layout_key is not None and raw.get('source') != 'simulation':
+            scope, ids = _game_layout_key
+            fixed_map = dict(_cue_layouts[_game_layout_key].snapshot(now),
+                             layout_scope=scope, fixed_ids=list(ids))
+        scope = _game_layout_key[0] if _game_layout_key else None
         try:
-            occupancy = _occupancy_tracker.update(raw.get('_occupancy_camera', raw), now)
+            occupancy = trace.call('board.occupancy', _occupancy_tracker.update, camera_runtime, now,
+                                   fixed_map=fixed_map)
             json.dumps(occupancy, allow_nan=False)
         except (ValueError, TypeError, KeyError, IndexError, AttributeError, OverflowError) as exc:
             occupancy = _occupancy_tracker.unavailable(f'Occupancy input rejected: {exc}', now)
-        base_runtime = _fresh_runtime(raw, now, STALE_S)
-        _cue_targets.update(base_runtime, now)
-        for targets in _cue_layouts.values():
-            targets.update(base_runtime, now)
         try:
-            placement = _placement_tracker.update(base_runtime, now)
+            placement = trace.call('board.placement', _placement_tracker.update, base_runtime, now,
+                                   fixed_map=fixed_map)
             json.dumps(placement, allow_nan=False)
         except (ValueError, TypeError, KeyError, IndexError, AttributeError, OverflowError) as exc:
             _placement_tracker.reset_evidence()
@@ -498,6 +516,9 @@ def _sample_tracking():
                 source_epoch=_placement_tracker.source_epoch,
                 sampled_at=now,
             )
+        base_runtime['layout_scope'] = scope
+        base_runtime['fixed_ids'] = list(_game_layout_key[1]) if _game_layout_key else []
+        occupancy['layout_scope'] = scope
         runtime = _fresh_runtime(raw, now, _tracker.settings["stale_s"])
         remembered = {tag_id: rec["tag"] for tag_id, rec in _tracker.records.items()
                       if now - rec["last_seen"] <= 15}
@@ -512,13 +533,13 @@ def _sample_tracking():
         runtime["inputs"]["controller_intent"] = _input_state(intents, intent_error)
         try:
             _validate_tracking_inputs(projection, intents)
-            output = _tracker.update(runtime, projection, intents, now)
+            output = trace.call('board.tracking', _tracker.update, runtime, projection, intents, now)
             json.dumps(output, allow_nan=False)
         except (ValueError, TypeError, KeyError, IndexError, AttributeError, OverflowError) as exc:
             _tracker.reset_evidence()
             runtime.update(status="unavailable", errors=[f"Tracking input rejected: {exc}"])
             output = _tracker.update(runtime, None, None, now)
-        with _lock:
+        with trace.locked(_lock, 'board.state_lock'):
             _tracking = output
             _placement = placement
             _runtime = base_runtime
@@ -533,7 +554,7 @@ def _tracking_loop(stop):
             _sample_tracking()
         except Exception as exc:
             # A failing sibling must not kill the sampler or preserve old truth.
-            with _lock:
+            with trace.locked(_lock, 'board.state_lock'):
                 _tracking.update(status="unavailable", sampled_at=time.time(), arms={}, tags=[], errors=[f"Tracking sampler failed: {exc}"])
                 _placement = _placement_tracker.unavailable(
                     f"Board sampler failed: {exc}",
@@ -549,26 +570,27 @@ def _tracking_loop(stop):
             _live.bump()
 
 
-def occupancy_snapshot():
+def occupancy_snapshot(*, scope=None):
     """photon.board.occupancy v1; cached camera authority, independent of arms."""
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         output = json.loads(json.dumps(_occupancy))
     now = time.time()
-    if (not output or not fresh(output.get('sampled_at'), now)
+    if (not output or scope is not None and output.get('layout_scope') != scope
+            or not fresh(output.get('sampled_at'), now)
             or not fresh(output.get('frame_at'), now)):
         return {'contract': 'photon.board.occupancy', 'version': 1,
-                'status': 'unavailable', 'error': 'Occupancy sampler or camera stale',
+                'status': 'unavailable', 'error': 'Occupancy layout, sampler or camera unavailable',
                 'relations': []}
     # Short per-tag grace is stricter than the general camera freshness gate.
     for relation in output.get('relations', []):
-        if relation['state'] == 'present' and now - relation['evidence_at'] > .35:
+        if relation['state'] == 'present' and now - relation['evidence_at'] > OCCUPANCY_GRACE_S:
             relation['state'] = 'unavailable'
     return output
 
 
 def tracking_snapshot():
     """photon.board.tracking v1. Reading never advances transport state."""
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         output = json.loads(json.dumps(_tracking))
         game_placement = json.loads(json.dumps(_placement))
         configuration = settings_snapshot()
@@ -600,9 +622,10 @@ def tracking_snapshot():
     return output
 
 
+@trace.traced('board.runtime_observation')
 def runtime_observation():
     """Cached source observation. HTTP/SSE readers never sample hardware."""
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         output = json.loads(json.dumps(_runtime))
         sampled_at = _tracking.get("sampled_at")
         placement = json.loads(json.dumps(_placement))
@@ -650,6 +673,57 @@ def runtime_observation():
     return output
 
 
+def _layout_key(scope, fixed_ids):
+    if (not isinstance(scope, str) or not 1 <= len(scope) <= 128
+            or not isinstance(fixed_ids, list) or not 1 <= len(fixed_ids) <= 30
+            or any(type(i) is not int or not 30 <= i <= 59 for i in fixed_ids)
+            or len(set(fixed_ids)) != len(fixed_ids)):
+        raise ValueError('Cue layout requires a scope and unique fixed marker IDs 30–59.')
+    return (scope, tuple(sorted(fixed_ids)))
+
+
+def _layout_targets(key):
+    targets = _cue_layouts.pop(key, None)
+    if targets is None:
+        targets = CueTargets(fixed_ids=key[1])
+    _cue_layouts[key] = targets
+    while len(_cue_layouts) > 4:
+        oldest = next(k for k in _cue_layouts if k != _game_layout_key)
+        del _cue_layouts[oldest]
+    return targets
+
+
+def game_observation(*, scope, fixed_ids):
+    """photon.board.runtime v1 with acknowledged Game-owned layout scope.
+
+    Registers the active layout without sampling. Only the sampler learns its
+    coordinates; displays and Game share the same CueTargets instance.
+    """
+    global _game_layout_key, _placement, _occupancy, _placement_tracker, _occupancy_tracker
+    key = _layout_key(scope, fixed_ids)
+    # Normal Game reads must not wait behind camera/calibration sampling.
+    # Only a layout transition mutates sampler-owned state.
+    if key != _game_layout_key:
+        with trace.locked(_sample_lock, 'board.sample_lock'):
+            if key != _game_layout_key:
+                if _game_layout_key is not None:
+                    _cue_layouts.pop(_game_layout_key, None)
+                _game_layout_key = key
+                _layout_targets(key)
+                _placement_tracker = PhysicalPlacementTracker()
+                _occupancy_tracker = OccupancyTracker()
+                with trace.locked(_lock, 'board.state_lock'):
+                    _placement = _placement_tracker.unavailable('Waiting for the new game map sample')
+                    _occupancy = _occupancy_tracker.unavailable('Waiting for the new game map sample')
+    output = runtime_observation()
+    if (key != _game_layout_key or output.get('layout_scope') != scope
+            or output.get('fixed_ids') != list(key[1])):
+        output.update(status='unavailable', tags=[], detections=[], visible_ids=[],
+                      errors=['Waiting for the new game map sample'])
+    return output
+
+
+@trace.traced('board.cue_targets_snapshot')
 def cue_targets_snapshot(*, scope=None, fixed_ids=None):
     """Camera evidence, optionally limited to the consumer's active layout.
 
@@ -657,30 +731,27 @@ def cue_targets_snapshot(*, scope=None, fixed_ids=None):
     The existing sampler learns its tags from subsequent camera observations.
     """
     if scope is not None or fixed_ids is not None:
-        if (not isinstance(scope, str) or not 1 <= len(scope) <= 128
-                or not isinstance(fixed_ids, list) or not 1 <= len(fixed_ids) <= 30
-                or any(type(i) is not int or not 30 <= i <= 59 for i in fixed_ids)
-                or len(set(fixed_ids)) != len(fixed_ids)):
-            raise ValueError('Cue layout requires a scope and unique fixed marker IDs 30–59.')
-        key = (scope, tuple(sorted(fixed_ids)))
+        key = _layout_key(scope, fixed_ids)
     else:
         key = None
-    with _sample_lock:
+    with trace.locked(_sample_lock, 'board.sample_lock'):
         targets = _cue_targets
         if key is not None:
-            targets = _cue_layouts.pop(key, None)
-            if targets is None:
-                targets = CueTargets(fixed_ids=key[1])
-            _cue_layouts[key] = targets
-            # Both teams share the same game layout; retain recent calibration
-            # layouts too, without an unbounded cache of old games.
-            while len(_cue_layouts) > 4:
-                del _cue_layouts[next(iter(_cue_layouts))]
+            targets = _layout_targets(key)
         value = targets.snapshot(time.time())
         if key is not None:
             value.update(layout_scope=scope, fixed_ids=list(key[1]))
-        if runtime_observation().get('status') != 'ready':
+        observation = runtime_observation()
+        # Same cached camera sample as the cue map; no new hardware read or
+        # controller intent can manufacture a camera-confirmed stack.
+        stacking = (observation.get('placement') or {}).get('stacking')
+        value['stacking'] = json.loads(json.dumps(stacking)) if stacking else {
+            'contract': 'photon.board.stacking', 'version': 1,
+            'status': 'unavailable', 'relations': [],
+        }
+        if observation.get('status') != 'ready':
             value.update(status='unavailable', tags=[], error='Board observations unavailable.')
+        trace.evidence('board.cue_decision', value)
         return value
 
 
@@ -691,6 +762,7 @@ def cue_targets_api():
     return response
 
 
+@trace.traced('board.camera_markers_snapshot')
 def camera_markers_snapshot():
     """photon.board.camera-markers v1: current corrected detections, never memory."""
     runtime = runtime_observation()
@@ -699,10 +771,13 @@ def camera_markers_snapshot():
              "coordinate_space": "corrected-camera-normalized",
              "frame_at": runtime.get("frame_at"), "max_age_s": STALE_S,
              "width": runtime.get("width", 0), "height": runtime.get("height", 0),
+             "camera_identity": runtime.get("camera_identity"),
+             "camera_revision": runtime.get("camera_revision"),
              "tags": [], "error": "Fresh corrected camera markers unavailable."}
     if (runtime.get("status") != "ready" or runtime.get("source") != "camera"
             or not runtime.get("corrected") or not fresh(runtime.get("frame_at"), time.time())
             or not value["width"] or not value["height"]):
+        trace.evidence('board.marker_size_check', value)
         return value
     visible = set(runtime.get("visible_ids", []))
     candidates = [tag for tag in runtime.get("detections", [])
@@ -712,6 +787,8 @@ def camera_markers_snapshot():
         value["tags"].append({"id": tag["id"], "camera": [tag["nx"], tag["ny"]],
                               "corners": tag.get("ncorners"), "last_seen": runtime["frame_at"]})
     value.update(status="ready", error=None)
+    if trace.enabled():
+        trace.evidence('board.marker_size_check', {**value, 'accepted_ids': [tag['id'] for tag in accepted]})
     return value
 
 
@@ -780,7 +857,7 @@ def settings_api():
 
 @bp.route("/api/preview")
 def preview_api():
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         simulated = _simulation["enabled"]
     if simulated:
         return jsonify({"error": "Simulation never displays live camera evidence"}), 409
@@ -790,12 +867,13 @@ def preview_api():
     return redirect(request.script_root + "/p/camera-calibration" + preview["stream_path"])
 
 
+@trace.traced('board.preview_frame')
 def preview_frame():
     """photon.board.preview v1: fresh corrected display pixels, never game input."""
     empty = {"contract": "photon.board.preview", "version": 1,
              "status": "unavailable", "coordinate_space": "corrected-camera-normalized",
              "frame_at": None, "width": 0, "height": 0, "jpeg": None}
-    with _lock:
+    with trace.locked(_lock, 'board.state_lock'):
         if _simulation["enabled"]:
             return dict(empty, error="Simulation never displays live camera evidence")
     value, error = _read_input("camera-calibration", "preview_frame", "hhh.camera-frame", 1)

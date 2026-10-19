@@ -1,12 +1,14 @@
 """Laser Tag Y: a thin gamemaster presentation over Photon Game output."""
 
 import base64
+from shared.fixed_board import cue_layout
 import json
 import math
+from shared.ltz_ui import ROOT as SCORE_UI_ROOT
 import os
 import time
 
-from flask import Blueprint, Response, jsonify, redirect, request, send_from_directory
+from flask import Blueprint, Response, current_app, jsonify, redirect, request, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GAME_CONTRACT = "photon.game"
@@ -86,6 +88,20 @@ def _marker_diagnostics():
                 or type(markers.get("version")) is not int or markers["version"] != 1):
             raise ValueError("Incompatible Photon Board camera markers")
         value["camera_markers"] = markers
+        game = _module('photon-game')
+        if game and callable(getattr(board, 'cue_targets_snapshot', None)):
+            snapshot = game.game_snapshot()
+            if (snapshot.get('contract') != GAME_CONTRACT or type(snapshot.get('version')) is not int
+                    or snapshot['version'] != GAME_VERSION):
+                raise ValueError('Photon Game contract mismatch')
+            if snapshot.get('journey', {}).get('phase') != 'calibration' and not snapshot.get('virtual_play'):
+                scope, ids = cue_layout(snapshot)
+                fixed = board.cue_targets_snapshot(scope=scope, fixed_ids=ids)
+                if (fixed.get('contract') != 'photon.board.cue-targets' or type(fixed.get('version')) is not int
+                        or fixed['version'] != 2 or fixed.get('layout_scope') != scope
+                        or fixed.get('fixed_ids') != sorted(ids)):
+                    raise ValueError('Fixed board display contract mismatch')
+                value['fixed_board'] = dict(fixed, scope=scope, server_time=time.time())
         json.dumps(value, allow_nan=False)
         return value
     except Exception as exc:
@@ -174,21 +190,33 @@ def settings():
 
 @bp.route("/tower-defence-view.js")
 def renderer():
-    return send_from_directory(HERE, "tower-defence-view.js")
+    return _renderer_bundle()
+
+
+def _renderer_bundle():
+    # Same owner supplies one bundle to Y, authenticated Mobile and the exporter.
+    with open(os.path.join(HERE, "breaker-renderer.js"), encoding="utf-8") as helper:
+        prefix = helper.read()
+    with open(os.path.join(HERE, "tower-defence-view.js"), encoding="utf-8") as renderer:
+        return Response(prefix + "\n" + renderer.read(), mimetype="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
 
 
 def renderer_contract():
-    return {"contract": "photon.renderer", "version": 1}
+    return {"contract": "photon.renderer", "version": 1, "enemy_combat_version": 1}
 
 
 def renderer_response():
     """Owned renderer shared with authenticated player presentations."""
-    return send_from_directory(HERE, "tower-defence-view.js")
+    return _renderer_bundle()
 
 
 @bp.route("/calibration-display.js")
 @bp.route("/calibration-display.css")
 @bp.route("/calibration-history.js")
+@bp.route("/player-admin.js")
+@bp.route("/turret-controls.js")
+@bp.route("/turret-controls.css")
 @bp.route("/calibration-history.css")
 def calibration_display_asset():
     return send_from_directory(HERE, request.path.rsplit('/', 1)[-1])
@@ -256,3 +284,20 @@ def command_api():
             "error": str(exc),
             "errors": getattr(exc, "fields", {}),
         }), 400
+    except Exception:
+        current_app.logger.exception('Unexpected Photon Game command failure')
+        return jsonify(ok=False, error='Server error while processing the command. Check the live game status and server log before retrying.'), 500
+
+@bp.route('/score-feedback.js')
+@bp.route('/shop.css')
+@bp.route('/shop.js')
+@bp.route('/marker-presence.js')
+@bp.route('/wave-timeline.js')
+@bp.route('/wave-timeline.css')
+def score_ui():
+    return send_from_directory(SCORE_UI_ROOT,request.path.rsplit('/',1)[-1],max_age=0)
+
+
+@bp.route('/operation-id.js')
+def operation_id_asset():
+    return send_from_directory(os.path.join(HERE,'../../../../shared/mobile_ltz'),'operation-id.js',max_age=0)

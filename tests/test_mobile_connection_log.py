@@ -45,7 +45,7 @@ class ConnectionLogTests(unittest.TestCase):
 
     def test_only_diagnostic_fields_persist_and_retries_deduplicate(self):
         secret='a'*32
-        event=self.event(context={'feedback_age_ms':1700,'motion_epoch':5,'connected':True,
+        event=self.event(context={'feedback_age_ms':1700,'motion_epoch':5,'motion_invalidation':'feedback_gap','connected':True,
             'token':secret,'session':secret,'password':'private','pose':[1,2,3],
             'game_error':'token='+secret+' https://test/?auth=private', 'robot_age_ms':float('nan')})
         event['token']=secret;event['reason']='Session='+secret
@@ -53,6 +53,7 @@ class ConnectionLogTests(unittest.TestCase):
         raw=self.path.read_text();self.assertEqual(len(raw.splitlines()),1)
         for sensitive in (secret,'private','https://test','password','pose','NaN'):self.assertNotIn(sensitive,raw)
         row=json.loads(raw);self.assertEqual(row['context']['feedback_age_ms'],1700)
+        self.assertEqual(row['context']['motion_invalidation'],'feedback_gap')
         self.assertTrue(row['context']['connected'])
 
     def test_cue_calibration_layer_and_offsets_survive_export(self):
@@ -65,6 +66,36 @@ class ConnectionLogTests(unittest.TestCase):
             self.assertEqual(self.post(event).status_code, 200)
             row = json.loads(self.log.export().splitlines()[-1])
             self.assertEqual(row['context'], context)
+
+    def test_active_delay_capture_links_exact_board_and_driver_failure_evidence(self):
+        from shared import delay_trace as trace
+        with tempfile.TemporaryDirectory() as folder:
+            recorder = trace.install(folder)
+            try:
+                recorder.start()
+                event = self.event(context={'tag_id':49, 'mapping_gate':'frame_stale', 'servo_error':'IPC timeout token=secret',
+                    'board':{'status':'partial','pending_fixed_ids':[48], 'blocked_fixed_ids':[], 'board_motion_ids':[],
+                             'mapping_gate':'frame_stale','mapping_source':'sse','frame_age_ms':1501,'poll_age_ms':1700,'epoch':'a'*32,
+                             'quarantined_tags':[{'id':48,'reason':'shape_change'}],
+                             'verification':{'anchor_ids':[40,41,42,43],'hull':[[0,0],[1,0],[0,1]]}}})
+                event['event'] = 'cue_motion_held'
+                self.assertEqual(self.post(event).status_code, 200)
+                recorder.drain()
+                incident = recorder.snapshot()['incidents'][0]
+                self.assertEqual(incident['name'], 'connection.cue_motion_held')
+                self.assertEqual(incident['details']['board']['pending_fixed_ids'], [48])
+                self.assertEqual(incident['details']['mapping_gate'],'frame_stale')
+                self.assertEqual(incident['details']['board']['frame_age_ms'],1501)
+                self.assertEqual(incident['details']['board']['epoch'],'a'*32)
+                self.assertIn('IPC timeout', incident['details']['servo_error'])
+                self.assertNotIn('secret', recorder.path.read_text())
+                recorder.stop(); recorder.drain()
+                event['id'] = uuid.uuid4().hex
+                self.assertEqual(self.post(event).status_code, 200)
+                self.assertNotIn('board', json.loads(self.log.export().splitlines()[-1])['context'])
+                self.assertNotIn('mapping_gate', json.loads(self.log.export().splitlines()[-1])['context'])
+            finally:
+                trace.shutdown()
 
     def test_rotation_is_bounded_and_survives_new_reader(self):
         with patch.object(self.log,'MAX_BYTES',1):

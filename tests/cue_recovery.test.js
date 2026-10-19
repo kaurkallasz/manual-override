@@ -1,6 +1,7 @@
 /* Real cue recovery functions; fake time, camera and relay. No physical I/O. */
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const html=fs.readFileSync('shared/robot_controls/controller.html','utf8');
+function emptyStack(at){return {contract:'photon.board.stacking',version:1,status:'ready',source_epoch:'stack-camera',sampled_at:at,relations:[]};}
 function context(){
  let now=10000,delays=0;
  const c={Date:{now:()=>now},TEAM:'green',LTZ:true,AUTO_PPX:true,gameCalibration2:{revision:3},
@@ -18,10 +19,66 @@ function context(){
  for(const [a,b] of [['function autoPpxCueMapKey()', 'async function activeGameTags()'],
                      ['function assertAutoPpxVisionSession()', 'async function refreshAutoPpxPhysicalEndpoint(']])
   vm.runInContext(html.slice(html.indexOf(a),html.indexOf(b)),c);
- c.observe=tags=>{c.autoPpxCueMap={status:'ready',frameAtLocal:now,calibrationRevision:c.gameCalibration2.revision,scope:'layout',epoch:'camera'};c.latestVisibleArucoTags=tags;};
+ c.observe=tags=>{c.autoPpxCueMap={status:'ready',frameAtLocal:now,calibrationRevision:c.gameCalibration2.revision,scope:'layout',epoch:'camera',server_time:now/1000,receivedAtLocal:now,stacking:emptyStack(now/1000)};c.latestVisibleArucoTags=tags;};
  c.tag=(id,extra={})=>({id,nx:.3,ny:.4,fixed:id<100,visible:true,stable:true,lastSeenAt:now,...extra});
  return c;
 }
+function verifiedRegion(c,tags,hull=[[.2,.2],[.8,.2],[.8,.8],[.2,.8]]){
+ c.observe(tags);
+ Object.assign(c.autoPpxCueMap,{contract:'photon.board.cue-targets',version:1,coordinate_space:'corrected-camera-normalized',
+  status:'partial',receivedAtLocal:c.now(),frame_at:c.now()/1000,server_time:c.now()/1000,
+  verification:{status:'ready',observed_at:c.now()/1000,anchor_ids:[40,42,43,44],hull},
+  pending_fixed_ids:[48],quarantined_tags:[{id:48,reason:'marker_geometry',covered_by:[]}]});
+}
+test('partial mapping bounds fixed and unqualified legacy observations for both teams and camera orientations',()=>{
+ for(const team of ['green','purple'])for(const flipped of [false,true]){
+  const c=context();c.TEAM=team;c.gid=()=>({checked:flipped});
+  const tag=(id,x,y)=>c.tag(id,{nx:flipped?1-x:x,ny:flipped?1-y:y});
+  verifiedRegion(c,[]);
+  assert(c.autoPpxCueMapReady());
+  for(const id of [49,100,103]){
+   assert.equal(c.autoPpxCueEndpointIssue(tag(id,.3,.4),true),'');
+   assert.equal(c.autoPpxCueEndpointIssue(tag(id,.1,.5),true),'region');
+  }
+  assert.equal(c.autoPpxCueEndpointIssue(tag(49,.2,.4),true),'','Hull boundary is included');
+  assert.equal(c.autoPpxCueEndpointIssue(tag(48,.1,.5),true),'quarantined');
+  assert.equal(c.autoPpxCueEndpointIssue(tag(48,.1,.5)),'region');
+  c.autoPpxCueMap.quarantined_tags.push({id:49});c.autoPpxCueMap.pending_fixed_ids.push(49);
+  assert.equal(c.autoPpxCueEndpointIssue(tag(49,.5,.5),true),'quarantined');
+  assert.equal(c.autoPpxCueEndpointIssue(tag(49,.5,.5)),'','Acquired interior target survives quarantine');
+ }
+});
+test('partial mapping fails closed on expired evidence and malformed or inadequate regions',()=>{
+ const failures=[c=>c.tick(751),c=>delete c.autoPpxCueMap.verification,c=>c.autoPpxCueMap.verification.hull=null,
+  c=>c.autoPpxCueMap.verification.observed_at+=1,c=>c.autoPpxCueMap.verification.anchor_ids=[40,42,42,43],
+  c=>delete c.autoPpxCueMap.pending_fixed_ids,c=>c.autoPpxCueMap.quarantined_tags=[],
+  c=>c.autoPpxCueMap.verification.anchor_ids=[40,42,43,48],
+  c=>c.autoPpxCueMap.verification.hull=[[.2,.2],[.8,.8],[.8,.2],[.2,.8]],
+  c=>c.autoPpxCueMap.verification.hull=[[.2,.2],[.8,.2],[.8,.3],[.2,.3]],
+  c=>c.autoPpxCueMap.verification.hull=[[.2,.2],[NaN,.2],[.8,.8],[.2,.8]],
+  c=>c.autoPpxCueMap.verification.hull.push(...c.autoPpxCueMap.verification.hull)];
+ for(const fail of failures){const c=context();verifiedRegion(c,[]);fail(c);assert.equal(c.autoPpxCueMapReady(),false);assert.equal(c.autoPpxCueEndpointIssue(c.tag(100),true),'camera');}
+});
+test('new SSE region and quarantine revoke endpoint authority before acquisition polling',()=>{
+ const c=context();c.performance={now:()=>c.now()};c.mobileGameAt=c.now();verifiedRegion(c,[]);
+ const loaded=c.autoPpxCueMap;
+ c.mobileGame.mobile_cue_targets={...loaded,frame_at:loaded.frame_at+.1,server_time:loaded.server_time+.1,
+  verification:{...loaded.verification,observed_at:loaded.server_time+.1,hull:[[.5,.2],[.9,.2],[.9,.8],[.5,.8]]}};
+ assert.equal(c.autoPpxCueEndpointIssue(c.tag(100),true),'region');
+ assert.equal(c.autoPpxCueMap,loaded,'Stop-only SSE checks cannot overwrite acquisition evidence');
+ c.mobileGame.mobile_cue_targets.quarantined_tags=[{id:49,covered_by:[103]}];c.mobileGame.mobile_cue_targets.pending_fixed_ids=[49];
+ assert.equal(c.autoPpxCueEndpointIssue(c.tag(49,{nx:.6}),true),'quarantined');
+ assert(c.autoPpxCueEndpointChanged(c.tag(49,{nx:.6})));
+ c.tick(751);assert.equal(c.autoPpxCueMapReady(),false);
+});
+test('new acquisition waits outside the verified region and retains the requested endpoint',async()=>{
+ const c=context(),saved={sourceTag:{id:100},targetTag:{id:49}},messages=[];let reads=0;
+ c.setAutoPpxStatus=m=>messages.push(m);
+ c.refreshAutoPpxTags=async()=>verifiedRegion(c,[c.tag(49,{nx:.9})],++reads<3?undefined:[[.2,.2],[.95,.2],[.95,.8],[.2,.8]]);
+ await c.waitForAutoPpxMappedEndpoint(saved,'target',0);
+ assert.equal(reads,3);assert.equal(saved.target.x,900);
+ assert(messages.some(m=>m.includes('verified board region')));
+});
 // Exercise acquisition with the actual Cal 2 transforms, rather than the simple
 // coordinate stub used by recovery-only cases. Different layers/arms deliberately
 // disagree so a missing, doubled or wrong-arm correction cannot pass unnoticed.
@@ -49,6 +106,88 @@ function calibratedContext(team,rotated,c=context()){
  c.diagnostics=[];c.window.mobileArmDiagnostic=(event,reason,details)=>c.diagnostics.push({event,reason,...details});
  return c;
 }
+// Captured from the reported hold: #100 sits on covered/quarantined #40,
+// outside the remaining healthy ground-marker centres. No robot I/O.
+const covered40Hull=[[.3899,.4929],[.4007,.3919],[.5026,.2878],[.6331,.2878],
+ [.6797,.4934],[.6879,.5967],[.6289,.6978],[.3904,.6971]];
+function covered40(c,tags){
+ verifiedRegion(c,tags,covered40Hull);
+ Object.assign(c.autoPpxCueMap,{pending_fixed_ids:[40],quarantined_tags:[{id:40,reason:'marker_geometry',covered_by:[100]}]});
+ c.autoPpxCueMap.verification.anchor_ids=[38,41,42,43,44,45,46,47,49,50,51,52,53,54,55];
+}
+test('qualified live Atoms on covered #40 do not depend on the exposed ground-marker hull',()=>{
+ for(const team of ['green','purple'])for(const rotated of [false,true]){
+  const c=calibratedContext(team,rotated);covered40(c,[]);
+  const tag=c.evidence(100,.3859,.2667,{acquirable:true,evidence_samples:4});
+  assert.equal(c.autoPpxCueEndpointIssue(tag,true),'');
+  assert.equal(c.autoPpxCueEndpointIssue({...tag,id:103},true),'','Stack targets use their own live observation too');
+  assert.equal(c.autoPpxCueEndpointIssue({...tag,id:40,fixed:true},true),'quarantined');
+  for(const changed of [{acquirable:false},{acquirable:undefined},{evidence_samples:2},{evidence_samples:NaN},
+   {lastSeenAt:c.now()-751},{lastSeenAt:c.now()+1},{lastSeenAt:undefined},{fixed:true},{id:200},{id:99},
+   {nx:1.1},{ny:-.1},{nx:NaN}]){
+   assert.equal(c.autoPpxCueEndpointIssue({...tag,...changed},true),'region',JSON.stringify(changed));
+  }
+  c.tick(751);
+  assert.equal(c.autoPpxCueEndpointIssue({...tag,lastSeenAt:c.now()},true),'camera','Fresh Atom cannot replace stale board verification');
+ }
+});
+test('the covered-marker pickup retains its calibrated position only for the acquired operation and mapping',async()=>{
+ for(const team of ['green','purple'])for(const rotated of [false,true]){
+  const c=calibratedContext(team,rotated),saved={sourceTag:{id:100}};
+  c.refreshAutoPpxTags=async()=>covered40(c,[c.evidence(100,.3859,.2667,{acquirable:true,evidence_samples:4})]);
+  const resolve=c.createAutoPpxEndpointResolver(saved,'source',0);await resolve();
+  const pose={...saved.source};
+  const groundX=.3859-(team==='green'?.04:-.03);
+  assert(Math.abs(pose.x-(250+groundX*150+(team==='purple'?15:0)))<1e-6,'Raised correction is applied once');
+  assert(Math.abs(pose.y-(.2667-.02-.5)*100)<1e-6);
+  c.tick(6000);covered40(c,[]);await resolve();
+  assert.deepEqual({...saved.source},pose,'Hidden Atom keeps its calibrated pickup');
+  assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag),'');
+  assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag,true),'region','New approach needs fresh sightings');
+  assert.equal(c.autoPpxCueEndpointIssue(JSON.parse(JSON.stringify(saved.sourceTag))),'region','Saved JSON cannot authorize motion');
+  assert.equal(c.autoPpxCueEndpointIssue({...saved.sourceTag,nx:saved.sourceTag.nx+.01}),'region');
+  const mapping={...c.autoPpxCueMap},operation=c.activeOperation;
+  for(const field of ['epoch','scope','calibrationRevision']){
+   c.autoPpxCueMap[field]='changed';assert(c.autoPpxCueEndpointIssue(saved.sourceTag));Object.assign(c.autoPpxCueMap,mapping);
+  }
+  c.gameCalibration2.revision++;assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag),'camera');c.gameCalibration2.revision--;
+  c.autoPpxClickOverrideGeneration++;assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag),'region');c.autoPpxClickOverrideGeneration--;
+  c.activeOperation={...operation};assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag),'region');c.activeOperation=operation;
+  const gid=c.gid;c.gid=()=>({checked:!rotated});assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag),'region');c.gid=gid;
+  c.autoPpxCueMap.verification.status='unavailable';assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag),'camera');
+ }
+});
+test('covered-marker acquisition still waits for consistent sightings and enforces Cal 2 reach',async()=>{
+ const c=calibratedContext('green',false),saved={sourceTag:{id:100}},messages=[];let reads=0;
+ c.setAutoPpxStatus=message=>messages.push(message);
+ c.refreshAutoPpxTags=async()=>{reads++;covered40(c,[c.evidence(100,.3859,.2667,{acquirable:reads>1,evidence_samples:reads>1?4:1})]);};
+ c.autoPpxTagInsideActiveArea=()=>reads>2;
+ const click=c.clickToPose;
+ c.clickToPose=(...args)=>{if(reads===3)throw Object.assign(Error('Cal 2 reach rejected'),{code:'motion_limit'});return click(...args);};
+ await c.createAutoPpxEndpointResolver(saved,'source',0)();assert.equal(reads,4);
+ assert(messages.some(m=>m.includes('Confirming piece #100')));
+ assert(messages.some(m=>m.includes('Cal 2 reach rejected')));
+ assert(!messages.some(m=>m.includes('verified board region')));
+ const missing=calibratedContext('green',false);missing.gameArmCal2().parallax_points={};
+ missing.refreshAutoPpxTags=async()=>covered40(missing,[missing.evidence(100,.3859,.2667,{acquirable:true,evidence_samples:4})]);
+ await assert.rejects(missing.waitForAutoPpxMappedEndpoint({sourceTag:{id:100}},'source',0),/Four raised-Atom/);
+});
+test('100 on covered #40 completes pickup and placement with both arms and landscape camera orientations',async()=>{
+ for(const team of ['green','purple'])for(const rotated of [false,true]){
+  const c=calibratedContext(team,rotated,queueContext([{sourceTag:{id:100},targetTag:{id:42}}]));let hidden=false,holds=0;
+  c.refreshAutoPpxTags=async()=>covered40(c,[c.evidence(42,.55,.5),
+   ...(hidden?[]:[c.evidence(100,.3859,.2667,{acquirable:true,evidence_samples:4})])]);
+  const api=c.api;c.api=async(path,...args)=>{if(path==='/api/stop')holds++;return api(path,...args);};
+  c.onMove=async(label,options)=>{
+   if(label==='source hover'){hidden=true;c.tick(6000);await c.refreshAutoPpxTags();assert.equal(options.interruptWhen(),false);}
+  };
+  await c.runAutoPpx();assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
+  assert.equal(holds,0);assert.equal(c.pump.filter(p=>p.mode==='suck').length,1);
+  assert.equal(c.events.filter(e=>e.name==='release_completed').length,1);
+  assert.equal(c.moves.filter(m=>m.label==='source pickup').length,1);
+  assert.equal(c.autoPpxCueEndpointIssue(c.evidence(40,.3859,.2667),true),'quarantined');
+ }
+});
 test('100-series pickup and every 40/50-series drop retain their own calibration layer on both arms and views',async()=>{
  for(const team of ['green','purple'])for(const rotated of [false,true]){
   const c=calibratedContext(team,rotated),shift=team==='green'?.04:-.03;
@@ -402,6 +541,7 @@ function queueContext(rows){
   cancelAutoPpxClickOverride(){c.autoPpxClickOverride=null;},updateAutoPpxPauseControl(){},assertReadyForAutoAction(){},
   autoPpxQueueIds:()=>rows.map(r=>r.action==='clear_view'?{action:'clear_view'}:{source:r.sourceTag.id,target:r.targetTag.id}),captureAutoPpxQueuePoses:async()=>rows,
   autoPpxTransportZ:()=>80,autoPpxPickupZForPose:()=>20,autoPpxDropZForTarget:()=>25,
+  autoPpxStackDropOffset:()=>31.5,
   autoPpxIsPhysicalTag:t=>t.id>=100,preflightAutoPpxQueue:async()=>{},updateAutoZReadout(){},log(){},
   runAutoPpxCueAtomic:async(label,fn)=>fn(),
   poseError:(actual,target)=>({max:Math.max(...['x','y','z'].map((axis,i)=>Math.abs(actual[i]-target[axis])))}),
@@ -416,6 +556,7 @@ function queueContext(rows){
    return {...p};
   }
  });
+ vm.runInContext(html.slice(html.indexOf('function autoPpxPickupZForSource('),html.indexOf('function autoPpxDropZForPose(')),c);
  vm.runInContext(html.slice(html.indexOf('const AUTO_PPX_CUE_MOTION_LABELS ='),html.indexOf('async function moveToPoseAttempt(')),c);
  vm.runInContext(html.slice(html.indexOf('async function ensureAutoPpxPickupReady('),html.indexOf('function requireScopedPumpReceipt(')),c);
  c.refreshAutoPpxPhysicalEndpoint=(saved,endpoint,index)=>c.waitForAutoPpxMappedEndpoint(saved,endpoint,index);
@@ -483,6 +624,30 @@ test('Clear view carries custom distance/direction into execution and rejects ma
  await c.runAutoPpx();assert.equal(c.autoPpxCueOutcome,'completed');assert.equal(c.moves.at(-1).pose.x,875);
  for(const row of [{action:'clear_view',direction:'up'},...[0,-1,50.1,NaN,Infinity,'5',true,null].map(distance_cm=>({action:'clear_view',distance_cm})),{action:'clear_view',distance:5}])assert.throws(()=>c.autoPpxClearViewRow(row),/Clear view/);
  assert(c.events.find(e=>e.name==='release_completed').pickupComplete,'Pickup completion is retained after a successful lift');
+});
+test('Clear view projects left/right onto each player screen with real calibration and either bridge orientation',()=>{
+ const Viewport=require('../shared/mobile_ltz/viewport.js');
+ for(const team of ['green','purple'])for(const flipped of [false,true])for(const rotation of [0,180])for(const direction of ['left','right']){
+  const c=calibratedContext(team,flipped,clearViewContext()),samples=c.cal2CalibrationSamples();
+  const center=c.gameDisplayPoint(.5,.5),origin={...c.cal2PoseEvaluator(samples)(center.u,center.v),z:-55,r:12};
+  const target=c.autoPpxClearViewTarget(origin,rotation,{action:'clear_view',direction,distance_cm:2});
+  const view=new Viewport(1000,500);view.setRotation(rotation);
+  const screen=pose=>{const p=c.cal2CameraForRobotPose(samples,pose),raw=c.gameDisplayPoint(p.u,p.v);return view.screen(raw.u*view.w,raw.v*view.h);};
+  const before=screen(origin),after=screen(target);
+  assert(direction==='left'?after.x<before.x:after.x>before.x,`${team}, bridge flip ${flipped}, player rotation ${rotation}, ${direction}`);
+  assert(Math.abs(after.y-before.y)<1e-6);
+  assert(Math.abs(Math.hypot(target.x-origin.x,target.y-origin.y)-20)<1e-6);
+  assert.equal(target.z,origin.z);assert.equal(target.r,origin.r);
+ }
+});
+test('direct controller Clear view defaults to its visible orientation',()=>{
+ for(const team of ['green','purple']){
+  const rotated=team==='purple',c=calibratedContext(team,rotated,clearViewContext()),samples=c.cal2CalibrationSamples();
+  const origin={...c.cal2PoseEvaluator(samples)(.5,.5),z:-55};
+  const target=c.autoPpxClearViewTarget(origin,undefined,{action:'clear_view',distance_cm:2});
+  const before=c.cal2CameraForRobotPose(samples,origin),after=c.cal2CameraForRobotPose(samples,target);
+  assert(after.u<before.u,`${team}: default left decreases displayed camera X`);
+ }
 });
 test('Clear view refuses an unsafe offset and paused motion retries the same target',async()=>{
  const blocked=clearViewContext();blocked.assertAutoPpxPoseSafe=()=>{throw Error('Clear view is outside the safe reach');};
@@ -569,6 +734,34 @@ test('real row execution holds through mapping outages and completes with source
  }
 });
 
+test('region loss holds fixed and unqualified legacy acquisitions without losing their poses or suction',async()=>{
+ for(const stage of ['source hover','source pickup','target hover','target drop']){
+  const c=queueContext([{sourceTag:{id:100},targetTag:{id:49}}]),diagnostics=[];
+  let sourceHidden=false,targetHidden=false,outage=false,injected=false,reads=0,holds=0,pumpAtHold;
+  c.window.mobileArmDiagnostic=(event,reason,details)=>diagnostics.push({event,reason,...details});
+  c.refreshAutoPpxTags=async()=>{
+   if(outage&&++reads>=3)outage=false;
+   verifiedRegion(c,[...(sourceHidden?[]:[c.tag(100)]),...(targetHidden?[]:[c.tag(49,{nx:.7})])],
+    outage?[[.4,.5],[.65,.5],[.65,.8],[.4,.8]]:undefined);
+  };
+  const api=c.api,delay=c.delay;
+  c.api=async(path,...args)=>{if(path==='/api/stop'){holds++;pumpAtHold=c.pump.length;}return api(path,...args);};
+  c.delay=async ms=>{if(outage){assert.equal(c.autoPpxVisionWait.phase,'region_retained');assert.equal(c.pump.length,pumpAtHold);}await delay(ms);};
+  c.onMove=async(label,options)=>{
+   if(label==='source hover')sourceHidden=true;
+   if(label==='target hover')targetHidden=true;
+   if(label===stage&&!injected){injected=true;outage=true;await c.refreshAutoPpxTags();assert(options.interruptWhen());}
+  };
+  await c.runAutoPpx();
+  assert.equal(c.autoPpxCueOutcome,'completed',stage+': '+c.autoPpxCueError?.message);
+  assert.equal(holds,1);assert.equal(c.events.filter(e=>e.name==='release_completed').length,1);
+  assert.equal(c.moves.find(m=>m.label==='source pickup').pose.x,300);
+  assert.equal(c.moves.find(m=>m.label==='target drop').pose.x,700);
+  assert(diagnostics.some(e=>e.event==='cue_motion_held'&&e.phase==='region_unavailable'));
+  assert(!diagnostics.some(e=>e.event==='cue_target_invalidated'));
+ }
+});
+
 test('the initial acquisition survives the preflight-to-approach handoff without another source sighting',async()=>{
  const c=queueContext([{sourceTag:{id:100},targetTag:{id:42}}]);let sourceHidden=false,sourceReads=0;
  c.refreshAutoPpxTags=async()=>{if(!sourceHidden)sourceReads++;c.observe([c.tag(42),...(sourceHidden?[]:[c.tag(100)])]);};
@@ -596,14 +789,14 @@ def observe(now, x=.8, source=True):
     return dict(owner.snapshot(now),server_time=now,scope='layout')
 observe(10);observe(10.3)
 print(json.dumps([observe(10.6),observe(16.6,x=.5,source=False),observe(17.2,source=False)]))
- `],{encoding:'utf8'}));
+ `],{encoding:'utf8',maxBuffer:8*1024*1024}));
  const c=queueContext([{sourceTag:{id:100},targetTag:{id:42}}]),diagnostics=[];
  let frameIndex=0,outlierReads=0,holds=0;
  c.window.mobileArmDiagnostic=(event,reason,details)=>diagnostics.push({event,reason,...details});
  c.readAutoPpxCueTargets=async()=>{
   if(frameIndex===1&&outlierReads++)frameIndex=2;
   const data=frames[frameIndex],tags=c.autoPpxCueProjectionTags(data,c.now());
-  c.autoPpxCueMap={...data,frameAtLocal:c.now(),calibrationRevision:3};
+  c.autoPpxCueMap={...data,stacking:emptyStack(data.server_time),receivedAtLocal:c.now(),frameAtLocal:c.now(),calibrationRevision:3};
   return tags;
  };
  const api=c.api;
@@ -613,8 +806,8 @@ print(json.dumps([observe(10.6),observe(16.6,x=.5,source=False),observe(17.2,sou
  };
  await c.runAutoPpx();
  assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
- assert.equal(holds,1);assert.equal(frameIndex,2);
- assert.deepEqual(c.moves.filter(m=>m.label==='source pickup').map(m=>m.pose.x),[300,300]);
+ assert.equal(holds,0);assert.equal(frameIndex,2);
+ assert.deepEqual(c.moves.filter(m=>m.label==='source pickup').map(m=>m.pose.x),[300]);
  assert.equal(diagnostics.filter(e=>e.event==='cue_target_acquired'&&e.tag_id===100).length,1);
  assert(!diagnostics.some(e=>e.event==='cue_target_invalidated'));
  assert.equal(c.events.filter(e=>e.name==='release_completed').length,1);
@@ -642,15 +835,14 @@ for n in range(240):
     value,old=observe(11.2+n*.3,n+2);frames.append(value)
     legacy_hold |= old['status']=='unavailable'
 print(json.dumps(dict(frames=frames,legacy_hold=legacy_hold,legacy_reset=old['epoch']!=epoch)))
- `],{encoding:'utf8'}));
- assert(evidence.legacy_hold,'Unscoped policy reproduces the reported hold');
- assert(evidence.legacy_reset,'Repeated inactive detections even reset the unscoped map');
+ `],{encoding:'utf8',maxBuffer:8*1024*1024}));
+ assert(!evidence.legacy_reset,'One outlier cannot reset even an unscoped v2 map');
  const c=queueContext([{sourceTag:{id:100},targetTag:{id:40}}]),diagnostics=[];
  let frameIndex=0,holds=0;
  c.window.mobileArmDiagnostic=(event,reason,details)=>diagnostics.push({event,reason,...details});
  c.readAutoPpxCueTargets=async()=>{
   const data=evidence.frames[frameIndex],tags=c.autoPpxCueProjectionTags(data,c.now());
-  c.autoPpxCueMap={...data,frameAtLocal:c.now(),calibrationRevision:3};return tags;
+  c.autoPpxCueMap={...data,stacking:emptyStack(data.server_time),receivedAtLocal:c.now(),frameAtLocal:c.now(),calibrationRevision:3};return tags;
  };
  const api=c.api;
  c.api=async(path,...args)=>{if(path==='/api/stop')holds++;return api(path,...args);};
@@ -692,7 +884,7 @@ def observe(now, stage=0):
     return dict(owner.snapshot(now),server_time=now,scope='layout')
 observe(10);observe(10.3)
 print(json.dumps([observe(10.6),observe(10.9,1)]+[observe(11.2+n*.3,n+2) for n in range(210)]))
- `],{encoding:'utf8'}));
+ `],{encoding:'utf8',maxBuffer:8*1024*1024}));
  const c=queueContext([{sourceTag:{id:100},targetTag:{id:49}},{action:'clear_view'}]),diagnostics=[];
  c.cal2CalibrationSamples=()=>[];
  c.cal2CameraForRobotPose=(_,p)=>({u:p.x/1000,v:p.y/1000});
@@ -702,7 +894,7 @@ print(json.dumps([observe(10.6),observe(10.9,1)]+[observe(11.2+n*.3,n+2) for n i
  c.window.mobileArmDiagnostic=(event,reason,details)=>diagnostics.push({event,reason,...details});
  c.readAutoPpxCueTargets=async()=>{
   const data=frames[frameIndex],tags=c.autoPpxCueProjectionTags(data,c.now());
-  c.autoPpxCueMap={...data,frameAtLocal:c.now(),calibrationRevision:3};return tags;
+  c.autoPpxCueMap={...data,stacking:emptyStack(data.server_time),receivedAtLocal:c.now(),frameAtLocal:c.now(),calibrationRevision:3};return tags;
  };
  const api=c.api;
  c.api=async(path,...args)=>{if(path==='/api/stop')holds++;return api(path,...args);};
@@ -711,11 +903,11 @@ print(json.dumps([observe(10.6),observe(10.9,1)]+[observe(11.2+n*.3,n+2) for n i
   if(label==='target hover'){
    for(frameIndex=2;frameIndex<frames.length;frameIndex++){
     c.tick(300);await c.refreshAutoPpxTags();
-    assert.equal(c.autoPpxCueMap.verification.status,'ready');
+    assert.equal(c.autoPpxCueMap.status,'ready');
     assert.deepEqual([...c.autoPpxCueMap.pending_fixed_ids],[49]);
     assert.equal(options.interruptWhen(),false);
     assert.equal(c.pump.at(-1).mode,'suck');
-    assert(!c.latestVisibleArucoTags.some(t=>t.id===49),'Bad geometry supplies no fresh target evidence');
+    assert(c.latestVisibleArucoTags.some(t=>t.id===49&&t.nx===.5&&!t.visible),'Bad geometry preserves frozen memory without fresh evidence');
    }
    frameIndex--;
   }
@@ -746,6 +938,56 @@ test('quarantined destinations cannot start a new approach and still report bloc
  assert(c.autoPpxCueEndpointChanged({id:49,fixed:true}));
  c.autoPpxCueMap.quarantined_tags[0].covered_by=[100];
  assert(!c.autoPpxCueEndpointChanged({id:49,fixed:true}),'Own carried piece is not another occupant');
+});
+
+test('real owner retains both interior and edge targets through malformed edge detections',async()=>{
+ const frames=JSON.parse(require('node:child_process').execFileSync('python3',['-c',`
+import json,sys
+sys.path.insert(0,'sandboxes/gamemaster/prototypes/photon-board')
+from cue_targets import CueTargets
+owner=CueTargets(fixed_ids=[41,42,44,48,49,53,55])
+def observe(now,stage=0):
+    positions={41:(.4007,.3917),42:(.5026,.2878),44:(.633,.2874),53:(.3904,.6971),55:(.6881,.5965)}
+    if stage<3: positions[49]=(.3997,.5956)
+    if stage<5: positions[48]=(.2856,.4928)
+    if stage<2: positions[100]=(.43,.43)
+    tags=[]
+    for ident,(x,y) in positions.items():
+        size=90 if ident==48 and stage else 40
+        tags.append(dict(id=ident,nx=x,ny=y,missing=0,ncorners=[[x+a/1280,y+b/720] for a,b in ((-size/2,-size/2),(size/2,-size/2),(size/2,size/2),(-size/2,size/2))]))
+    owner.update(dict(status='ready',source='camera',corrected=True,camera_identity='one',camera_revision='lens',width=1280,height=720,frame_at=now,visible_ids=list(positions),detections=tags),now)
+    return dict(owner.snapshot(now),server_time=now,scope='layout')
+observe(10);observe(10.3);observe(10.6)
+print(json.dumps([observe(10.9+n*.3,n+1) for n in range(210)]))
+ `],{encoding:'utf8',maxBuffer:8*1024*1024}));
+ assert(frames.every(f=>f.status==='ready'&&f.pending_fixed_ids.includes(48)&&!f.blocked_fixed_ids.length));
+ const c=queueContext([{sourceTag:{id:100},targetTag:{id:49}},{sourceTag:{id:100},targetTag:{id:48}}]);
+ let frameIndex=0,holds=0;
+ c.readAutoPpxCueTargets=async()=>{
+  const data=frames[frameIndex],tags=c.autoPpxCueProjectionTags(data,c.now());
+  c.autoPpxCueMap={...data,stacking:emptyStack(data.server_time),receivedAtLocal:c.now(),frameAtLocal:c.now(),calibrationRevision:3};return tags;
+ };
+ const api=c.api,delay=c.delay;
+ c.api=async(path,...args)=>{if(path==='/api/stop')holds++;return api(path,...args);};
+ c.onMove=async(label,options)=>{
+  if(label==='source hover'){frameIndex=1;c.tick(300);await c.refreshAutoPpxTags();}
+  if(label==='target hover'){
+   for(frameIndex=2;frameIndex<frames.length;frameIndex++){
+    c.tick(300);await c.refreshAutoPpxTags();assert.equal(options.interruptWhen(),false);
+    assert.equal(c.pump.at(-1).mode,'suck');
+   }
+   frameIndex--;
+  }
+ };
+ c.delay=async ms=>{
+  if(c.autoPpxVisionWait){assert.equal(c.activeOperation.queue_index,2);assert.equal(c.autoPpxVisionWait.phase,'mapping');assert.equal(c.autoPpxCueEndpointIssue(c.tag(48,{nx:.2856,ny:.4928}),true),'');assert.equal(holds,0);c.autoPpxAbort=true;}
+  await delay(ms);
+ };
+ await c.runAutoPpx();
+ assert.equal(c.autoPpxCueOutcome,'stopped');assert.equal(holds,1,'Only the requested Stop holds the arm');
+ assert.equal(c.moves.length,6);assert.equal(c.moves.find(m=>m.label==='target drop').pose.x,399.7);
+ assert.equal(c.events.filter(e=>e.name==='release_completed').length,1);
+ assert.equal(c.pump.filter(p=>p.mode==='suck').length,1);
 });
 
 test('a recovered map with a different identity cannot resume a hidden source at its old coordinates',async()=>{
@@ -912,4 +1154,286 @@ test('a brief SSE sighting latches failure between acquisition polls without rew
  assert.equal(c.latestVisibleArucoTags,retained);assert.equal(retained.length,0);
  data.mobile_cue_targets.tags=[];await c.applyMobileGame(data);
  assert.throws(()=>c.assertAutoPpxPickupNotFailed(),e=>e.code==='pickup_failed');
+});
+
+function fixedContext(){
+ const c=context();c.performance={now:()=>c.now()};c.mobileGameAt=c.now();
+ c.publish=(changes={},poll=true)=>{
+  const value={contract:'photon.board.cue-targets',version:2,status:'ready',source:'camera',
+   stacking:emptyStack(c.now()/1000),coordinate_space:'corrected-camera-normalized',scope:'game-one',epoch:'map-one',server_time:c.now()/1000,
+   frame_at:c.now()/1000,sampled_at:c.now()/1000,tags:[c.tag(40)],fixed_tags:[c.tag(40)],blocked_fixed_ids:[],board_motion_ids:[],...changes};
+  c.mobileGame.mobile_cue_targets=value;c.mobileGameAt=c.now();
+  if(poll)c.autoPpxCueMap={...value,receivedAtLocal:c.now(),frameAtLocal:c.now(),calibrationRevision:3};
+  return value;
+ };c.publish();return c;
+}
+test('v2 fresh SSE is the mapping authority when acquisition poll is old or unavailable',()=>{
+ const c=fixedContext();c.tick(1600);c.publish({},false);
+ assert(c.autoPpxCueMapReady());assert.equal(c.autoPpxCueGateDetails().poll_age_ms,1600);
+ c.autoPpxCueMap.status='unavailable';assert(c.autoPpxCueMapReady());
+ c.tick(1601);assert.equal(c.autoPpxCueGate(),'frame_stale');
+ c.publish({sampled_at:(c.now()-1601)/1000},false);assert.equal(c.autoPpxCueGate(),'sampler_stale');
+});
+test('v2 newer unavailable publication revokes motion even when its frame did not advance',()=>{
+ const c=fixedContext(),first=c.autoPpxCueMap.frame_at;c.tick(50);
+ c.publish({frame_at:first,status:'unavailable',board_motion_ids:[40,54]},false);
+ assert.equal(c.autoPpxCueGate(),'board_movement');
+ c.publish({frame_at:first,status:'unavailable'},false);assert.equal(c.autoPpxCueGate(),'mapping_unavailable');
+ c.publish({epoch:'next'},false);assert(c.autoPpxCueMapReady());assert.equal(JSON.parse(c.autoPpxCueMapKey())[0],'next');
+ c.gameCalibration2.revision=4;assert.equal(c.autoPpxCueGate(),'calibration_changed');
+});
+test('v2 malformed, unknown or stale authority fails closed despite healthy robot state',()=>{
+ for(const changes of [{contract:'other'},{version:true},{version:3},{source:'simulation'},{scope:null},
+  {epoch:null},{tags:null},{server_time:NaN},{frame_at:NaN},{frame_at:100},
+  {blocked_fixed_ids:null},{blocked_fixed_ids:[true]}]){
+  const c=fixedContext();c.publish(changes);assert(!c.autoPpxCueMapReady(),JSON.stringify(changes));
+ }
+});
+test('v2 geometry rejection and covered anchors never remove fixed endpoint authority or apply a shrinking hull',()=>{
+ const c=fixedContext();c.publish({pending_fixed_ids:[54],quarantined_tags:[{id:54,reason:'marker_geometry'}]});
+ for(const id of [38,40,46,54,55])assert.equal(c.autoPpxCueEndpointIssue(c.tag(id,{nx:.999}),true),'');
+ c.publish({blocked_fixed_ids:[54]});assert.equal(c.autoPpxCueEndpointIssue(c.tag(54)),'quarantined');
+ assert.equal(c.autoPpxCueEndpointIssue(c.tag(46)),'');
+});
+test('v2 late poll cannot resurrect a board revoked by newer SSE',async()=>{
+ const c=fixedContext(),old=JSON.parse(JSON.stringify(c.mobileGame.mobile_cue_targets));
+ c.AbortSignal={timeout:()=>null};c.fetch=async()=>{
+  c.tick(100);c.publish({status:'unavailable',board_motion_ids:[40,54]},false);
+  return {ok:true,json:async()=>old};
+ };
+ await assert.rejects(c.readAutoPpxCueTargets(true),/unavailable/);
+ assert.equal(c.autoPpxCueGate(),'board_movement');
+});
+test('v2 genuine map epoch change invalidates a retained target while a stale poll does not',async()=>{
+ const c=fixedContext(),events=[],saved={targetTag:{id:40}};
+ c.window.mobileArmDiagnostic=(event,reason,detail)=>events.push({event,reason,...detail});
+ c.refreshAutoPpxTags=async()=>{c.latestVisibleArucoTags=[c.tag(40)];};
+ const resolve=c.createAutoPpxEndpointResolver(saved,'target',0);await resolve();
+ c.tick(2000);c.publish({},false);await resolve();
+ assert(!events.some(e=>e.event==='cue_target_invalidated'));
+ c.publish({epoch:'moved',epoch_reason:'board_moved',epoch_marker_id:40},false);await resolve();
+ assert.equal(events.filter(e=>e.event==='cue_target_invalidated').length,1);
+ assert(events.some(e=>e.reason.includes('fixed marker #40 moved')));
+});
+test('v2 endpoint conflict waits and resumes without discarding the acquired fixed position',async()=>{
+ const c=fixedContext(),events=[],saved={sourceTag:{id:100},targetTag:{id:40}};
+ c.window.mobileArmDiagnostic=(event,reason,detail)=>events.push({event,reason,...detail});
+ c.refreshAutoPpxTags=async()=>{c.latestVisibleArucoTags=[c.tag(40)];};
+ const resolve=c.createAutoPpxEndpointResolver(saved,'target',0);await resolve();
+ const original={...saved.target};c.tick(50);c.publish({blocked_fixed_ids:[40]},false);
+ let reads=0;
+ c.refreshAutoPpxTags=async()=>{
+  reads++;c.tick(50);c.publish({blocked_fixed_ids:reads<2?[40]:[]},false);
+  c.latestVisibleArucoTags=[];
+ };
+ await resolve();assert.equal(reads,2);assert.deepEqual({...saved.target},original);
+ assert(events.some(e=>e.event==='cue_waiting'&&e.phase==='quarantined_retained'));
+ assert(events.some(e=>e.event==='cue_mapping_recovered'));
+ assert(!events.some(e=>e.event==='cue_target_invalidated'));
+ assert.equal(events.filter(e=>e.event==='cue_target_acquired').length,1);
+});
+
+// Full real cue runner with receipt-backed fake pumps and both calibration views.
+function stackQueueContext(team='green',rotated=false){
+ const rows=[{sourceTag:{id:100},targetTag:{id:103}}];
+ const c=calibratedContext(team,rotated,queueContext(rows));
+ c.mobileGame.run_id='stack-game';
+ const pieces=new Map([[100,{x:.4,y:.5,level:0,lower:null,held:false}],
+                       [103,{x:.6,y:.5,level:0,lower:null,held:false}]]);
+ let covered=false;
+ const shift=team==='green'?.04:-.03;
+ c.renderStackFrame=()=>{
+  const tags=[c.evidence(42,.5,.5),c.evidence(43,.45,.5)];
+  for(const [id,p] of pieces){
+   const supporting=[...pieces.values()].some(q=>q.lower===id&&!q.held);
+   if(!p.held&&!supporting&&!(covered&&id===c.activeOperation?.physical_tag))
+    tags.push(c.evidence(id,p.x+shift*(p.level+1),p.y+.02*(p.level+1)));
+  }
+  c.observe(tags);
+  c.autoPpxCueMap.stacking.relations=[...pieces].filter(([id,p])=>p.level===1&&!p.held&&!covered).map(([id,p])=>
+   ({upper_id:id,lower_id:p.lower,stable:true,stable_at:c.now()/1000-.1,observed_since:c.now()/1000-.7}));
+  return tags;
+ };
+ c.refreshAutoPpxTags=async()=>c.renderStackFrame();
+ const pump=c.setPumpMode;
+ c.setPumpMode=async(mode,label,...args)=>{
+  const receipt=await pump(mode,label,...args);
+  if(label==='vacuum off'){
+   const operation=c.activeOperation,p=pieces.get(operation.physical_tag),target=pieces.get(operation.target_marker);
+   Object.assign(p,{x:target?.x??(operation.target_marker===42?.5:.45),y:target?.y??.5,
+    level:target?target.level+1:0,lower:target?operation.target_marker:null,held:false});
+   covered=false;c.tick(1);c.renderStackFrame();
+  }
+  return receipt;
+ };
+ c.onMove=async label=>{
+  if(label==='source hover')covered=true;
+  if(label==='lift to moving height')pieces.get(c.activeOperation.physical_tag).held=true;
+  if(label==='return to moving height')covered=false;
+  c.tick(30);c.renderStackFrame();
+ };
+ c.waitForCal2BaseGuard=async()=>{};
+ c.planCal2Movement=(cursor,target)=>[c.assertAutoPpxPoseSafe(target,'queue preflight')];
+ vm.runInContext(html.slice(html.indexOf('async function preflightAutoPpxQueue('),html.indexOf('function autoPpxClearViewTarget(')),c);
+ c.playTo=async target=>{
+  rows[0]={sourceTag:{id:100},targetTag:{id:target}};covered=false;c.tick(1000);
+  await c.runAutoPpx();
+ };
+ c.pieces=pieces;c.rows=rows;
+ return c;
+}
+test('both players stack, pick at stack height, return to board and pick normally across separate Play runs',async()=>{
+ for(const team of ['green','purple'])for(const rotated of [false,true]){
+  const c=stackQueueContext(team,rotated),base=team==='green'?-100:-95;
+  await c.playTo(103);assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
+  assert.equal(c.autoPpxCueStackRecords().get(100).level,1);
+  await c.playTo(42);assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
+  assert.equal(c.autoPpxCueStackRecords().get(100).level,0);
+  await c.playTo(43);assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
+  assert.deepEqual(c.moves.filter(m=>m.label==='source pickup').map(m=>m.pose.z),[base,base+31.5,base]);
+  assert.deepEqual(c.moves.filter(m=>m.label==='target drop').map(m=>m.pose.z),[base+32.5,base+1,base+1]);
+  const pickups=c.moves.filter(m=>m.label==='source pickup');
+  assert(Math.abs(pickups[1].pose.x-(250+.6*150+(team==='purple'?15:0)))<1e-5,'Upper Atom uses the two-height camera correction');
+  assert(Math.abs(pickups[1].pose.y)<1e-5);
+  assert.deepEqual(c.moves.filter(m=>m.label==='source hover').map(m=>m.pose.z),[-23.5,-23.5,-55]);
+  assert.equal(c.pump.filter(p=>p.mode==='suck').length,3);
+ }
+});
+test('fresh camera stack evidence recognizes an Atom placed by another controller',async()=>{
+ const c=stackQueueContext();Object.assign(c.pieces.get(100),{level:1,lower:103,x:.6});
+ await c.playTo(42);assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
+ assert.equal(c.moves.find(m=>m.label==='source pickup').pose.z,-68.5);
+});
+test('an interrupted carrying move becomes uncertain and does not pretend it was placed',async()=>{
+ const c=stackQueueContext();await c.playTo(103);
+ const onMove=c.onMove;c.onMove=async(label,...args)=>{await onMove(label,...args);if(label==='target hover')throw Error('fixture interrupted');};
+ await c.playTo(42);assert.equal(c.autoPpxCueOutcome,'error');
+ const record=c.autoPpxCueStackRecords().get(100);
+ assert.equal(record.state,'uncertain');assert.equal(record.level,1);
+ c.tick(200);c.renderStackFrame();
+ assert.throws(()=>c.autoPpxCueStackInfo(c.tag(100)),/height is uncertain/);
+});
+test('a rejected release receipt cannot turn a known stacked pickup into a board placement',async()=>{
+ const c=stackQueueContext();await c.playTo(103);
+ const pump=c.setPumpMode;c.setPumpMode=async(mode,label,...args)=>{if(label==='vacuum off')throw Error('receipt rejected');return pump(mode,label,...args);};
+ await c.playTo(42);assert.equal(c.autoPpxCueOutcome,'error');
+ assert.equal(c.autoPpxCueStackRecords().get(100).level,1);
+ assert.equal(c.autoPpxCueStackRecords().get(100).state,'uncertain');
+});
+test('confirmed release survives later blow/return failure',async()=>{
+ const c=stackQueueContext();await c.playTo(103);
+ const pump=c.setPumpMode;c.setPumpMode=async(mode,label,...args)=>{if(label==='brief blow')throw Error('blow failed');return pump(mode,label,...args);};
+ await c.playTo(42);assert.equal(c.autoPpxCueOutcome,'error');
+ assert.equal(c.autoPpxCueStackRecords().get(100).level,0);
+ assert.equal(c.autoPpxCueStackRecords().get(100).state,'placed');
+});
+test('stack evidence rejects missing, stale, malformed and ambiguous relationships',()=>{
+ const c=context();c.observe([c.tag(100)]);
+ for(const stack of [undefined,{...emptyStack(10),status:'unavailable'},{...emptyStack(8)},
+  {...emptyStack(10),version:true},{...emptyStack(10),relations:[{upper_id:100,lower_id:100,stable:true}]}]){
+  c.autoPpxCueMap.stacking=stack;assert.throws(()=>c.autoPpxCueStackInfo(c.tag(100)),e=>e.code==='stack_unavailable');
+ }
+ c.autoPpxCueMap.stacking=emptyStack(10);
+ c.autoPpxCueMap.stacking.relations=[{upper_id:100,lower_id:103,stable:false,observed_since:9.7,stable_at:10.25}];
+ assert.throws(()=>c.autoPpxCueStackInfo(c.tag(100)),/Confirming the stack/);
+});
+test('stack state survives camera occlusion but cannot hide contradictory support evidence',()=>{
+ const c=context();c.observe([c.tag(100)]);
+ c.autoPpxCueStackRecords().set(100,{level:1,lowerId:103,state:'placed',at:c.now()-1000});
+ const acquired={...c.tag(100),stackLevel:1,stackLowerId:103};
+ assert.equal(c.autoPpxCueStackIssue(acquired),'');
+ c.observe([]);assert.equal(c.autoPpxCueStackIssue(acquired),'');
+ c.observe([c.tag(100),c.tag(103)]);assert.equal(c.autoPpxCueStackIssue(acquired),'stack');
+ assert.throws(()=>c.autoPpxCueStackInfo(c.tag(103)),/upper Atom first/);
+ c.mobileGame.run_id='another-game';assert.equal(c.autoPpxCueStackRecords().size,0);
+});
+test('stack pickup fails preflight before suction if raised travel exceeds the calibrated Z limit',async()=>{
+ const c=stackQueueContext();c.ws.z[1]=-30;
+ await c.playTo(103);assert.equal(c.autoPpxCueOutcome,'error');assert.match(c.autoPpxCueError.message,/Z workspace/);
+ assert.equal(c.pump.filter(p=>p.mode==='suck').length,0);assert.equal(c.moves.length,0);
+});
+test('a stacked pickup retains its height after Pause and Resume during descent',async()=>{
+ const c=stackQueueContext();Object.assign(c.pieces.get(100),{level:1,lower:103,x:.6});
+ const onMove=c.onMove;let paused=false;
+ c.onMove=async(label,...args)=>{await onMove(label,...args);if(label==='source pickup'&&!paused){paused=true;c.autoPpxPaused=true;c.autoPpxPauseGeneration++;}};
+ c.waitForAutoPpxResume=async()=>{c.autoPpxPaused=false;};
+ await c.playTo(42);assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
+ const pickups=c.moves.filter(m=>m.label==='source pickup');assert.equal(pickups.length,2);
+ assert(pickups.every(m=>m.pose.z===-68.5));assert.equal(c.pump.filter(p=>p.mode==='suck').length,1);
+});
+test('two-height perspective follows a tilted pinhole camera and preserves single-height calibration',()=>{
+ const c=calibratedContext('green',false),v=[.03,-.02,.06],line=[.2,-.1,1];
+ const project=(x,y,ratio)=>{const w=(line[0]*x+line[1]*y+line[2])*ratio;
+  return {u:(x+v[0]*w)/(1+v[2]*w),v:(y+v[1]*w)/(1+v[2]*w)};};
+ c.gameArmCal2().parallax_points=Object.fromEntries([[.2,.2],[.8,.2],[.2,.8],[.8,.8]].map(([x,y],i)=>
+  [i,{ground:{u:x,v:y},raised:project(x,y,1),height_mm:30}]));
+ for(const [x,y] of [[.3,.3],[.5,.5],[.65,.7]]){
+  const observed=project(x,y,1+31.5/30),corrected=c.compensateCal2Parallax(observed.u,observed.v,100,1);
+  assert(Math.hypot(corrected.u-x,corrected.v-y)<1e-6);
+ }
+ c.gameArmCal2().parallax_points[0].height_mm=40;
+ assert.throws(()=>c.compensateCal2Parallax(.5,.5,100,1),/consistent raised-Atom calibration heights/);
+});
+test('a failed stacked pickup retains the confirmed stack height for a later retry',async()=>{
+ const c=stackQueueContext();Object.assign(c.pieces.get(100),{level:1,lower:103,x:.6});
+ const onMove=c.onMove;
+ c.onMove=async(label,...args)=>{
+  await onMove(label,...args);
+  if(label==='lift to moving height'){
+   const refresh=c.refreshAutoPpxTags;
+   c.refreshAutoPpxTags=async()=>{await refresh();c.latestVisibleArucoTags.push(c.evidence(100,.68,.54));};
+  }
+ };
+ await c.playTo(42);assert.equal(c.autoPpxCueOutcome,'error');assert.match(c.autoPpxCueError.message,/Pickup failed/);
+ assert.equal(c.autoPpxCueStackRecords().get(100).level,1);
+ assert.equal(c.autoPpxCueStackRecords().get(100).state,'placed');
+ assert.equal(c.events.filter(e=>e.name==='release_completed').length,0);
+});
+test('unavailable map identity cannot erase placement memory and a new camera epoch needs revalidation',()=>{
+ const c=context();c.observe([c.tag(100)]);c.mobileGame.run_id='one';
+ c.autoPpxCueStackRecords().set(100,{level:1,lowerId:103,state:'placed',at:c.now()-1000,evidenceEpoch:'stack-camera'});
+ c.autoPpxCueMap={status:'unavailable'};
+ assert.equal(c.autoPpxCueStackRecords().get(100).level,1);
+ c.observe([c.tag(100)]);c.autoPpxCueMap.stacking.source_epoch='new-camera';
+ assert.throws(()=>c.autoPpxCueStackInfo(c.tag(100)),/height is uncertain/);
+ assert.equal(c.autoPpxCueStackRecords().get(100).level,1);
+});
+test('a newly confirmed stack invalidates the acquired ground height and replans before suction',async()=>{
+ const c=calibratedContext('green',false),saved={sourceTag:{id:100},targetTag:{id:42}};
+ let stacked=false;
+ c.refreshAutoPpxTags=async()=>{
+  c.tick(10);c.observe([c.evidence(100,.54,.52),c.evidence(42,.5,.5)]);
+  if(stacked)c.autoPpxCueMap.stacking.relations=[{upper_id:100,lower_id:103,stable:true,observed_since:c.now()/1000-.7,stable_at:c.now()/1000-.1}];
+ };
+ const resolve=c.createAutoPpxEndpointResolver(saved,'source',0);await resolve();assert.equal(saved.sourceTag.stackLevel,0);
+ stacked=true;c.tick(1000);await c.refreshAutoPpxTags();
+ assert.equal(c.autoPpxCueEndpointIssue(saved.sourceTag),'stack_changed');
+ await resolve();assert.equal(saved.sourceTag.stackLevel,1);
+ assert.equal(c.autoPpxPickupZForSource(saved.sourceBase,saved.sourceTag),-68.5);
+ assert(c.diagnostics.some(d=>d.event==='cue_target_invalidated'&&d.phase==='stack_changed'));
+});
+test('stack height carries through Clear view and successive rows of the same cue',async()=>{
+ const c=stackQueueContext();
+ c.rows.push({action:'clear_view',distance_cm:1}, {sourceTag:{id:100},targetTag:{id:42}},
+  {action:'clear_view',distance_cm:1}, {sourceTag:{id:100},targetTag:{id:43}});
+ await c.playTo(103);assert.equal(c.autoPpxCueOutcome,'completed',c.autoPpxCueError?.message);
+ assert.deepEqual(c.moves.filter(m=>m.label==='source pickup').map(m=>m.pose.z),[-100,-68.5,-100]);
+ assert(c.moves.filter(m=>m.label==='clear view').every(m=>m.pose.z===-23.5));
+ assert.equal(c.autoPpxCueStackRecords().get(100).level,0);
+});
+test('a destination already on an Atom is refused before any pickup',async()=>{
+ const c=stackQueueContext();c.pieces.set(104,{x:.6,y:.5,level:0,held:false});
+ Object.assign(c.pieces.get(103),{level:1,lower:104});
+ await c.playTo(103);assert.equal(c.autoPpxCueOutcome,'error');assert.match(c.autoPpxCueError.message,/stacks of two/);
+ assert.equal(c.pump.filter(p=>p.mode==='suck').length,0);
+});
+test('release at an unexpected measured Z does not record a new stack level',async()=>{
+ const c=stackQueueContext();const pump=c.setPumpMode;
+ c.setPumpMode=async(mode,label,...args)=>{
+  const receipt=await pump(mode,label,...args);
+  if(label==='vacuum off')receipt.pose[2]+=20;
+  return receipt;
+ };
+ await c.playTo(103);assert.equal(c.autoPpxCueOutcome,'error');assert.match(c.autoPpxCueError.message,/Release receipt was not at/);
+ assert.equal(c.autoPpxCueStackRecords().get(100).state,'uncertain');
 });

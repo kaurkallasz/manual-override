@@ -83,9 +83,19 @@ function fixture(count = 0) {
   await new Promise(resolve => setImmediate(resolve));
   rows.tick(20);
   assert.ok(rows.labels.includes('ROW 3/3'), 'powered row is rendered');
+  const rowLabels = () => rows.labels.filter(text => text.startsWith('ROW '));
+  const stableLabels = rowLabels().length;
+  rows.tick(37);
+  assert.equal(rowLabels().length, stableLabels, 'unchanged barrier text reuses the raster');
   rows.state.row_barriers = [{row_id:'outer_top',active_count:2,powered:false,changed_at:10}];
-  rows.view.applyState(rows.state); rows.tick(40);
+  rows.view.applyState(rows.state); rows.tick(55);
   assert.ok(rows.labels.includes('ROW 2/3 · BROKEN'), 'turret loss is visible');
+  rows.state.runtime_time = 12;
+  rows.view.applyState(rows.state); rows.tick(75);
+  assert.equal(rowLabels().at(-1), 'ROW 2/3', 'break flash expires into a fresh static raster');
+  rows.state.row_barriers = [{row_id:'outer_top',active_count:3,powered:true,changed_at:12}];
+  rows.view.applyState(rows.state); rows.tick(95);
+  assert.equal(rowLabels().at(-1), 'ROW 3/3', 'restored power invalidates the raster');
   rows.view.destroy();
 
   const received = [];

@@ -13,6 +13,17 @@ from unittest.mock import patch
 import uuid
 
 from test_photon_framework import load, FakeContext, ROOT, Flask
+from test_photon_progress import scored_profile
+
+
+def synthetic_kills(engine, count):
+    remaining=count
+    for kind,scheduled in engine.rewards.rule['scheduled_counts'].items():
+        for _ in range(min(remaining,scheduled)):
+            engine.rewards.killed({'enemy_type':kind})
+        remaining-=min(remaining,scheduled)
+    assert remaining==0
+    engine.kills=count
 
 
 class LtzIntegrationTests(unittest.TestCase):
@@ -47,7 +58,7 @@ class LtzIntegrationTests(unittest.TestCase):
         for level in range(1, 5):
             engine = self.engine(level)
             tower = next(iter(engine.placements.values()))
-            self.assertAlmostEqual(tower['base_max_hp'], engine._tower_max_hp() * (1 + .1 * (level - 1)))
+            self.assertAlmostEqual(tower['base_max_hp'], engine._tower_max_hp() * (1, 1.3, 1.4, 1.5)[level - 1])
             self.assertEqual(engine.snapshot()['towers'][0]['upgrade_level'], level)
             tower['aim_angle'] = 0
             enemy = {'id':1, 'hp':1000, 'x':tower['x'] + 30, 'y':tower['y'], 'progress':0}
@@ -55,7 +66,7 @@ class LtzIntegrationTests(unittest.TestCase):
             engine._fire_towers(.1, set())
             damages.append(1000-enemy['hp'])
         for i, damage in enumerate(damages):
-            self.assertAlmostEqual(damage, damages[0] * (1 + .1*i))
+            self.assertAlmostEqual(damage, damages[0] * (1, 1.3, 1.4, 1.5)[i])
 
     def test_fields_use_weaker_owner_and_keep_geometry(self):
         engine = self.engine(4)
@@ -202,14 +213,14 @@ class LtzIntegrationTests(unittest.TestCase):
         with self.assertRaises(game.GameError):
             game.apply_command({'action':'start','virtual_play':True,'reward_enabled':True})
         def physical():game._inputs['board']={'status':'ready','error':None}
-        game._journey.ready('green');game._journey.ready('purple')
+        self.assertEqual(game._journey.snapshot()['ready'],{})
         with patch.object(game,'_physical_observation',side_effect=physical):
             result=game.apply_command({'action':'start','virtual_play':False,'reward_enabled':True})
         self.assertEqual(result['progress']['participants'][0]['player_id'],self.player_id)
         self.assertEqual(result['contract_control_tier'],1)
         with self.assertRaises(game.GameError):game.apply_command({'action':'start'})
         with self.assertRaises(game.GameError):game.apply_command({'action':'place','atom_tag_id':100})
-        game._engine.kills=12
+        synthetic_kills(game._engine,12)
         game.apply_command({'action':'reset'})
         self.assertEqual(self.store.snapshot('green')['player']['credits'],12)
         self.assertEqual(self.store.snapshot('green')['player']['wins'],0)
@@ -226,7 +237,7 @@ class LtzIntegrationTests(unittest.TestCase):
         game.apply_command({'action':'set_virtual','virtual_play':True})
         return game
 
-    def test_virtual_unlocks_apply_to_both_teams_and_never_change_player(self):
+    def test_virtual_unlocks_do_not_change_saved_levels_or_scored_progress(self):
         game=self.virtual_game()
         before=self.store.snapshot('green')['player']
         levels={track:4 for track in before['levels']}
@@ -238,10 +249,13 @@ class LtzIntegrationTests(unittest.TestCase):
         state=game.apply_command({'action':'start','virtual_play':True,'reward_enabled':False})
         self.assertEqual({tower['upgrade_level'] for tower in state['towers']},{4})
         self.assertEqual(state['progress']['metadata']['virtual_test_loadout'],levels)
-        game._engine.kills=999
+        synthetic_kills(game._engine,999)
         game.apply_command({'action':'reset','virtual_play':True})
         self.assertEqual(game._engine.virtual_test_loadout,levels)
-        self.assertEqual(self.store.snapshot('green')['player'],before)
+        after=self.store.snapshot('green')['player']
+        self.assertEqual(scored_profile(after),scored_profile(before))
+        self.assertEqual(after['credits'],after['lifetime_practice_credits'])
+        self.assertGreater(after['credits'],0)
 
     def test_virtual_live_upgrades_refresh_health_fields_and_restore_profile(self):
         game=self.virtual_game();engine=game._engine;slots=list(engine.level.sockets)
@@ -315,7 +329,10 @@ class LtzIntegrationTests(unittest.TestCase):
             game.apply_command({'action':'start','reward_enabled':True})
         with self.assertRaisesRegex(game.GameError,'scored attempt'):
             game.apply_command({'action':'virtual_test_loadout','levels':levels})
-        self.assertEqual(self.store.snapshot('green')['player'],before)
+        after=self.store.snapshot('green')['player']
+        self.assertEqual({k:after[k] for k in before if k!='revision'}, {k:v for k,v in before.items() if k!='revision'})
+        self.assertEqual(after['game_wins_by_tier'],[0,0,0,0])
+        self.assertTrue(self.store.snapshot()['saved_games']['pair_locked'])
 
     def test_virtual_unlocks_work_without_progress_module(self):
         game=self.virtual_game();game._hub_ctx.modules.pop('photon-progress')
@@ -338,10 +355,11 @@ class LtzIntegrationTests(unittest.TestCase):
             self.assertEqual(state['contract_control_tier'],tier)
             for side in ('green','purple'):
                 self.assertEqual(game.motion_policy(side)['tier'],tier)
-            game._engine.kills=1000
+            synthetic_kills(game._engine,1000)
             game.apply_command({'action':'reset','virtual_play':True})
-        self.assertEqual(self.store.snapshot('purple')['player'],before)
-        self.assertEqual(self.store.snapshot('green')['player'],test_before)
+        self.assertEqual(scored_profile(self.store.snapshot('purple')['player']),scored_profile(before))
+        self.assertEqual(scored_profile(self.store.snapshot('green')['player']),scored_profile(test_before))
+        self.assertGreater(self.store.snapshot('purple')['player']['lifetime_practice_credits'],0)
         self.assertEqual(self.store.history(None,{'combined':True})['total'],0)
         self.assertEqual(self.store.history(None,{'combined':True,'dataset':'practice'})['total'],4)
 
@@ -354,7 +372,8 @@ class LtzIntegrationTests(unittest.TestCase):
         self.assertFalse(link.snapshot()['reward_enabled'])
         engine.phase,engine.kills='won',900
         link.flush()
-        self.assertEqual(self.store.snapshot('purple')['player']['credits'],0)
+        self.assertEqual(self.store.snapshot('purple')['player']['credits'],900)
+        self.assertEqual(self.store.snapshot('purple')['player']['wins'],0)
 
 
 if __name__=='__main__':unittest.main()

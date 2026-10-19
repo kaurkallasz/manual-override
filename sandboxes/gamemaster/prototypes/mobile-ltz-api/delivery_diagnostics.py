@@ -1,4 +1,5 @@
 """Bounded, passive delivery measurements. Never reads game or robot state."""
+from shared import delay_trace as trace
 from collections import deque
 import copy
 import json
@@ -53,6 +54,7 @@ class DeliveryDiagnostics:
                 'samples': {}, 'sample_deadlines': {}, 'traffic': deque(maxlen=4096),
             }
 
+    @trace.traced('diagnostics.sample')
     def _sample(self, side, channel, value, *, kind, body_bytes=None, route=None):
         now = time.monotonic()
         with self.lock:
@@ -61,13 +63,14 @@ class DeliveryDiagnostics:
             if now < team['sample_deadlines'].get(channel, 0) and previous and previous['kind'] == kind:
                 return
             team['sample_deadlines'][channel] = now + SAMPLE_INTERVAL_S
-        raw_bytes = len(encoded(value)) if body_bytes is None else body_bytes
-        clean = safe_value(value)
+        raw_bytes = len(trace.call('diagnostics.payload_encode', encoded, value)) if body_bytes is None else body_bytes
+        clean = trace.call('diagnostics.redaction', safe_value, value)
         contents = clean.get('state', {}) if isinstance(clean, dict) and clean.get('contract') == 'hub.live' else clean
-        fields = [{'name': key, 'bytes': len(encoded(item)),
-                   'items': len(item) if isinstance(item, (list, dict)) else None}
-                  for key, item in contents.items()] if isinstance(contents, dict) else []
-        text = json.dumps(clean, ensure_ascii=False, indent=2, default=str).encode('utf-8')
+        with trace.span('diagnostics.field_sizes'):
+            fields = [{'name': key, 'bytes': len(encoded(item)),
+                       'items': len(item) if isinstance(item, (list, dict)) else None}
+                      for key, item in contents.items()] if isinstance(contents, dict) else []
+        text = trace.call('diagnostics.preview_encode', json.dumps, clean, ensure_ascii=False, indent=2, default=str).encode('utf-8')
         truncated = len(text) > MAX_PREVIEW_BYTES
         preview = text[:MAX_PREVIEW_BYTES].decode('utf-8', errors='ignore')
         if truncated:
@@ -121,6 +124,7 @@ class DeliveryDiagnostics:
             self.recent.appendleft({'at': time.time(), 'side': side,
                                     'kind': 'stream_error' if failed else 'stream_close'})
 
+    @trace.traced('diagnostics.emitted')
     def emitted(self, side, chunk):
         wire = chunk.encode('utf-8') if isinstance(chunk, str) else chunk
         kind = 'ping' if wire.startswith(b':') else 'update' if wire.startswith(b'event: update') else 'snapshot'

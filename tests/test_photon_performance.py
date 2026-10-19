@@ -103,16 +103,15 @@ class PhotonPerformanceTests(unittest.TestCase):
         bundle = level.runtime_bundle()
         game._install_level(bundle)
         game._hub_ctx = FakeContext({"photon-level": level})
-        with mock.patch.object(level.time, "monotonic", return_value=100):
-            level._runtime_asset_cache = None
-            before = level.runtime_status()
+        before = level.runtime_status()
         new_art = {**before["presentation"], "revision": "updated-art"}
-        with mock.patch.object(level, "presentation_assets", return_value=new_art):
-            with mock.patch.object(level.time, "monotonic", return_value=100.1):
-                self.assertEqual(level.runtime_status()["presentation"], before["presentation"])
-            with mock.patch.object(level.time, "monotonic", return_value=100.26):
-                self.assertTrue(game._sync_level())
-                self.assertEqual(game._presentation["revision"], "updated-art")
+        with mock.patch.object(level, "asset_snapshot", return_value=new_art) as scan:
+            self.assertEqual(level.runtime_status()["presentation"], before["presentation"])
+            scan.assert_not_called()
+            level.refresh_presentation_assets()
+            scan.assert_called_once()
+            self.assertTrue(game._sync_level())
+            self.assertEqual(game._presentation["revision"], "updated-art")
         new_revision = bundle["revision"] + 1
         runtime = {**bundle["runtime"], "layout_revision": new_revision}
         with mock.patch.object(level, "runtime_status", return_value={**before, "revision": new_revision}):

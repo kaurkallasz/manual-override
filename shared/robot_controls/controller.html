@@ -858,8 +858,9 @@ document.body.classList.toggle('mobileLtz', MOBILE_LTZ);
 document.body.classList.toggle('ltzPlayer', LTZ);
 let mobileGame=null,mobileGameAt=0,mobileGameBusy=false,mobileViewActive=true,mobileOwnsMotion=false,mobileGameError='',mobileControlChoice=1,lastMobileControlAssignment=null,lastMobileCalibration=null;
 let mobileCalibrationLoading=null,lastMobileScope=null;
-function mobileConnectionReady(){return !mobileCalibrationLoading&&mobileViewActive&&!document.hidden&&mobileGame?.status==='ready'&&!mobileGame.virtual_play&&!mobileGame.paused&&performance.now()-mobileGameAt<2000&&(mobileGame.journey?.phase==='calibration'?mobileGame.mobile_calibration_connect===true:(!['upgrades','ready'].includes(mobileGame.journey?.phase)||Number.isInteger(mobileGame.virtual_test_control))&&['setup','running'].includes(mobileGame.phase));}
-function mobileRobotReady(){return mobileConnectionReady()&&(mobileGame.journey?.phase==='calibration'?mobileGame.mobile_calibration_ready===true:mobileGame.mobile_safety?.status==='ready');}
+function mobileMotionPolicyReady(){const p=mobileGame?.mobile_motion_policy;return p?.contract==='photon.game.motion'&&p.version===1&&p.status==='ready'&&p.blocked===false&&['player','tutorial'].includes(p.scope);}
+function mobileConnectionReady(){return !mobileCalibrationLoading&&mobileViewActive&&!document.hidden&&mobileGame?.status==='ready'&&!mobileGame.virtual_play&&!mobileGame.paused&&performance.now()-mobileGameAt<2000&&(mobileGame.journey?.phase==='calibration'?mobileGame.mobile_calibration_connect===true:mobileMotionPolicyReady()&&['setup','running'].includes(mobileGame.phase));}
+function mobileRobotReady(){return mobileConnectionReady()&&mobileMotionPolicyReady()&&(mobileGame.journey?.phase==='calibration'?mobileGame.mobile_calibration_ready===true:mobileGame.mobile_safety?.status==='ready');}
 function mobileCalibrationKeepsSuction(pump){
  return pump==='suck'&&!mobileGame?.virtual_play&&mobileGame?.journey?.phase==='calibration'
   &&(mobileGame.journey.calibration_side??mobileGame.journey.active_side)===TEAM
@@ -921,7 +922,7 @@ function renderMobileGameControls(){
  const chosen=mobileControlChoice;
  applyLtxConfig({game_mode:'game_'+chosen,video_click_move:ready&&ltzTier>=3&&chosen>=3,visibility:{joint_angles:chosen===1,tcp_pose:chosen===2||chosen===3,auto_pick_place:chosen===3,auto_pp_x:chosen===4}});
  const heading=document.querySelector('header h1');if(heading)heading.textContent=TEAM[0].toUpperCase()+TEAM.slice(1)+' robot controls';
- gid('runStatus').textContent=ready?'Physical play · '+(player?.name||'Practice'):mobileGame?.paused?'Game paused':mobileGame?.phase==='overrun'||mobileGame?.phase==='won'?'Reset the game to resume controls':mobileGameError||mobileGame?.mobile_safety?.error||'Waiting for fresh physical game state';
+ gid('runStatus').textContent=ready?'Physical play · '+(player?.name||'Practice'):mobileGame?.paused?'Game paused':mobileGame?.phase==='overrun'||mobileGame?.phase==='won'?'Reset the game to resume controls':mobileGameError||mobileGame?.mobile_motion_policy?.error||mobileGame?.mobile_safety?.error||'Waiting for fresh physical game state';
  if(mobileGame?.virtual_play)gid('runStatus').textContent='Simulation · use Mobile LTZ to drive the virtual arm';
  if(player){playerName=player.name;gid('playerName').textContent=player.name;}
  if(!ready)haltMobileRobot();
@@ -1851,17 +1852,215 @@ function renderAutoPpxTagOptions(tags) {
   updateAutoPpxControls(tags);
 }
 function autoPpxCueMapKey() {
-  return JSON.stringify([autoPpxCueMap?.epoch, autoPpxCueMap?.scope, gameCalibration2?.revision, gid('flipToggle').checked]);
+  const data=autoPpxCueEvidence().data;
+  return JSON.stringify([data?.epoch, data?.scope, gameCalibration2?.revision, gid('flipToggle').checked]);
 }
-function autoPpxCueMapReady() {
-  return autoPpxCueMap?.status === 'ready' && Date.now()-autoPpxCueMap.frameAtLocal <= 1500
-    && autoPpxCueMap.calibrationRevision === gameCalibration2?.revision
-    && (!mobileGame?.mobile_cue_targets || mobileGame.mobile_cue_targets.status==='ready'
-      && mobileGame.mobile_cue_targets.scope===autoPpxCueMap.scope
-      && mobileGame.mobile_cue_targets.epoch===autoPpxCueMap.epoch);
+// Motion evidence only, scoped to this game/layout. Never saved in a cue or
+// used as camera XY. Successful pump receipts record releases; fresh Board
+// relationships also recognize stacks placed by the other player.
+let autoPpxStackScope=null;
+let autoPpxStackRun=null;
+const autoPpxStackPlacements=new Map();
+function autoPpxCueStackRecords() {
+  const run=mobileGame?.run_id,scope=autoPpxCueEvidence().data?.scope;
+  // An unavailable publication may omit identity. It is not a new game and
+  // must not silently erase the height of a previously confirmed stack.
+  if(run!=null&&run!==autoPpxStackRun){autoPpxStackPlacements.clear();autoPpxStackRun=run;}
+  if(typeof scope==='string'&&scope!==autoPpxStackScope){autoPpxStackPlacements.clear();autoPpxStackScope=scope;}
+  return autoPpxStackPlacements;
+}
+function autoPpxCueStackInfo(tag) {
+  if(tag.id<100)return {level:0,lowerId:null};
+  const records=autoPpxCueStackRecords(),known=records.get(tag.id);
+  const {data,received}=autoPpxCueEvidence(),stack=data?.stacking;
+  const fail=message=>{throw Object.assign(Error(message),{code:'stack_unavailable'});};
+  if(!stack)fail('Atom stack evidence is unavailable. Reload the updated Board and player controls.');
+  let relations=[],sampleAt=0;
+  if(stack!==undefined){
+    const age=Date.now()-received+(data.server_time-stack?.sampled_at)*1000;
+    if(stack?.contract!=='photon.board.stacking'||stack.version!==1||stack.status!=='ready'
+        ||!Number.isFinite(age)||age< -250||age>1500||typeof stack.source_epoch!=='string'
+        ||!Array.isArray(stack.relations)||stack.relations.length>512)
+      fail('Waiting for fresh Atom stack evidence.');
+    sampleAt=Date.now()-age;
+    const upper=new Set(),lower=new Set();
+    for(const r of stack.relations){
+      if(!r||![r.upper_id,r.lower_id].every(id=>Number.isInteger(id)&&id>=100&&id<=999)
+          ||r.upper_id===r.lower_id||upper.has(r.upper_id)||lower.has(r.lower_id)
+          ||typeof r.stable!=='boolean'||!Number.isFinite(r.stable_at)||!Number.isFinite(r.observed_since)
+          ||r.observed_since>=r.stable_at||r.observed_since>stack.sampled_at
+          ||(r.stable&&r.stable_at>stack.sampled_at+.01))fail('Atom stack evidence is invalid.');
+      upper.add(r.upper_id);lower.add(r.lower_id);
+    }
+    relations=stack.relations;
+  }
+  if(known?.level>0&&known.evidenceEpoch&&known.evidenceEpoch!==stack.source_epoch)known.state='uncertain';
+  if(relations.some(r=>r.lower_id===tag.id)
+      ||[...records.values()].some(r=>r.lowerId===tag.id&&r.level>0&&r.state==='placed'))
+    fail(`Atom #${tag.id} supports another Atom. Pick up the upper Atom first.`);
+  const cover=relations.find(r=>r.upper_id===tag.id);
+  if(cover&&(!known||sampleAt>=known.at)){
+    if(!cover.stable)fail(`Confirming the stack under Atom #${tag.id}.`);
+    if(relations.some(r=>r.upper_id===cover.lower_id)||records.get(cover.lower_id)?.level>0)
+      fail('Cue supports stacks of two Atoms. Remove the extra layer before continuing.');
+    if(known?.state==='placed'&&(known.level!==1||known.lowerId!==cover.lower_id)
+        && received-(data.server_time-cover.observed_since)*1000<known.at)
+      fail(`Waiting for the camera to confirm Atom #${tag.id}'s latest placement.`);
+    const info={level:1,lowerId:cover.lower_id,state:'placed',at:known?.at||sampleAt,evidenceEpoch:stack.source_epoch};
+    records.set(tag.id,info);return info;
+  }
+  if(known?.state==='uncertain')fail(`Atom #${tag.id}'s height is uncertain after an interrupted move. Restore its stack and reveal both positions to revalidate.`);
+  if(known?.level>0&&sampleAt>=known.at){
+    const lower=data.tags?.find(t=>t.id===known.lowerId)||latestVisibleArucoTags.find(t=>t.id===known.lowerId);
+    const lowerAge=Number.isFinite(lower?.last_seen)?(data.server_time-lower.last_seen)*1000:Date.now()-lower?.lastSeenAt;
+    if(lower?.visible&&lowerAge>=0&&lowerAge<=350)
+      fail(`The support under Atom #${tag.id} changed. Waiting for a confirmed stack.`);
+  }
+  return known||{level:0,lowerId:null};
+}
+function autoPpxCueStackIssue(tag) {
+  if(!Number.isInteger(tag?.stackLevel))return '';
+  try{
+    const info=autoPpxCueStackInfo(tag);
+    return info.level!==tag.stackLevel||info.lowerId!==tag.stackLowerId?'stack_changed':'';
+  }catch(error){if(error.code==='stack_unavailable')return 'stack';throw error;}
+}
+function autoPpxCueRecordDrop(saved,releasePose) {
+  if(!LTZ)return;
+  const expected={...saved.target,z:autoPpxDropZForTarget(saved.targetBase,saved.targetTag,true)};
+  const error=poseError([releasePose?.x,releasePose?.y,releasePose?.z],expected,['x','y','z']);
+  if(!error||!Number.isFinite(error.max)||error.max>AUTO_PP_DROP_TOLERANCE_MM)
+    throw Error('Release receipt was not at the confirmed destination. Atom height needs revalidation.');
+  const level=saved.targetTag.id>=100?(saved.targetTag.stackLevel||0)+1:0;
+  autoPpxCueStackRecords().set(saved.sourceTag.id,{level,lowerId:level?saved.targetTag.id:null,state:'placed',at:Date.now(),
+    evidenceEpoch:autoPpxCueEvidence().data?.stacking?.source_epoch});
+  activeOperation.releaseComplete=true;
+  window.mobileArmDiagnostic?.('cue_stack_placement',`Atom #${saved.sourceTag.id} placed ${level?'on Atom #'+saved.targetTag.id:'at board height'}.`,
+    {tag_id:saved.sourceTag.id,stack_level:level,queue_index:activeOperation.queue_index-1});
+}
+function autoPpxCueUncertainStack(operation) {
+  if(!LTZ||!operation?.carryStartedAt||operation.releaseComplete||operation.pickupFailure)return;
+  const records=autoPpxCueStackRecords(),previous=records.get(operation.physical_tag);
+  records.set(operation.physical_tag,{...previous,level:previous?.level||0,lowerId:previous?.lowerId||null,state:'uncertain',at:Date.now()});
+}
+// Local to a calibrated acquisition; spread copies retain it, JSON/queue saves
+// cannot. A covered ground marker is not the position authority for an Atom.
+const autoPpxCuePieceAcquisition = Symbol('cue-piece-acquisition');
+function autoPpxCueLivePiece(tag) {
+  return Number.isInteger(tag?.id) && tag.id>=100 && tag.id<=199 && tag.fixed===false
+    && tag.acquirable===true && Number.isInteger(tag.evidence_samples) && tag.evidence_samples>=3
+    && [tag.nx,tag.ny].every(n=>Number.isFinite(n)&&n>=0&&n<=1)
+    && autoPpxCueAcquisitionReady(tag);
+}
+function autoPpxCueAcquiredPiece(tag) {
+  const acquired=tag?.[autoPpxCuePieceAcquisition];
+  return !!acquired && !!activeOperation && acquired.operation===activeOperation
+    && acquired.mappingKey===autoPpxCueMapKey() && acquired.generation===autoPpxClickOverrideGeneration
+    && tag.fixed===false && acquired.id===tag.id && acquired.nx===tag.nx && acquired.ny===tag.ny;
+}
+function autoPpxCueRetainPiece(tag) {
+  const acquired={...tag};
+  if(activeOperation && autoPpxCueLivePiece(tag)) acquired[autoPpxCuePieceAcquisition]=Object.freeze({
+    operation:activeOperation,mappingKey:autoPpxCueMapKey(),generation:autoPpxClickOverrideGeneration,
+    id:tag.id,nx:tag.nx,ny:tag.ny});
+  return acquired;
+}
+function autoPpxCueRegion(data, received) {
+  const v=data?.verification,hull=v?.hull;
+  const age=Date.now()-received+(data?.server_time-v?.observed_at)*1000;
+  if(v?.status!=='ready'||!Number.isFinite(age)||age<0||age>750
+    ||!Number.isFinite(data.frame_at)||v.observed_at>data.frame_at
+    ||!Array.isArray(v.anchor_ids)||new Set(v.anchor_ids).size<4||!v.anchor_ids.every(Number.isInteger)
+    ||!Array.isArray(data.pending_fixed_ids)||!data.pending_fixed_ids.length
+    ||!data.pending_fixed_ids.every(i=>Number.isInteger(i)&&i>=30&&i<=59&&!v.anchor_ids.includes(i))
+    ||!Array.isArray(data.quarantined_tags)||data.pending_fixed_ids.some(i=>!data.quarantined_tags.some(t=>t?.id===i))
+    ||!Array.isArray(hull)||hull.length<3||hull.length>30
+    ||!hull.every(p=>Array.isArray(p)&&p.length===2&&p.every(n=>Number.isFinite(n)&&n>=0&&n<=1)))return null;
+  if(new Set(hull.map(p=>p.join(','))).size!==hull.length)return null;
+  const cross=(a,b,p)=>(b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);
+  let area=0;
+  for(let i=0;i<hull.length;i++){
+    const a=hull[i],b=hull[(i+1)%hull.length];
+    if(Math.hypot(a[0]-b[0],a[1]-b[1])<1e-9||hull.some(p=>cross(a,b,p)<-1e-9))return null;
+    area+=a[0]*b[1]-a[1]*b[0];
+  }
+  if(area/2<.02||[0,1].some(i=>Math.max(...hull.map(p=>p[i]))-Math.min(...hull.map(p=>p[i]))<.15))return null;
+  return hull;
+}
+function autoPpxCueEvidence() {
+  const incoming=mobileGame?.mobile_cue_targets;
+  // Publication time selects both fresh evidence and newer revocations. Frame
+  // time alone cannot order an outage carrying the last known camera frame.
+  if(incoming && (incoming.version===2 || autoPpxCueMap?.version===2)){
+    const useIncoming=!autoPpxCueMap || incoming.scope!==autoPpxCueMap.scope
+      || !Number.isFinite(autoPpxCueMap.server_time)
+      || !Number.isFinite(incoming.server_time) || incoming.server_time>=autoPpxCueMap.server_time;
+    if(useIncoming)return {data:incoming,received:Date.now()-(performance.now()-mobileGameAt),source:'sse'};
+  }else if(incoming&&Number.isFinite(incoming.frame_at)&&incoming.frame_at>=(autoPpxCueMap?.frame_at??-Infinity))
+    return {data:incoming,received:Date.now()-(performance.now()-mobileGameAt),source:'sse'};
+  return {data:autoPpxCueMap,received:autoPpxCueMap?.receivedAtLocal,source:'poll'};
+}
+function autoPpxCueGateDetails() {
+  const {data,received,source}=autoPpxCueEvidence();
+  const age=stamp=>Number.isFinite(stamp)&&Number.isFinite(data?.server_time)&&Number.isFinite(received)
+    ? Date.now()-received+(data.server_time-stamp)*1000:null;
+  return {mapping_gate:autoPpxCueGate(),mapping_source:source,
+    frame_age_ms:age(data?.frame_at),sampler_age_ms:age(data?.sampled_at),
+    poll_age_ms:Number.isFinite(autoPpxCueMap?.frameAtLocal)?Date.now()-autoPpxCueMap.frameAtLocal:null};
+}
+function autoPpxCueGate() {
+  const {data,received}=autoPpxCueEvidence();
+  if(data?.version!=null&&![1,2].includes(data.version))return 'mapping_contract';
+  if(data?.version===2){
+    if(data.contract!=='photon.board.cue-targets'||data.source!=='camera'
+      ||data.coordinate_space!=='corrected-camera-normalized'||typeof data.epoch!=='string'||!data.epoch
+      ||typeof data.scope!=='string'||!data.scope||!Array.isArray(data.tags)
+      ||!Array.isArray(data.blocked_fixed_ids)||!data.blocked_fixed_ids.every(i=>Number.isInteger(i)&&i>=30&&i<60))return 'mapping_contract';
+    if(data.status!=='ready')return data.board_motion_ids?.length?'board_movement':'mapping_unavailable';
+    if(!Number.isFinite(received)||!Number.isFinite(data.server_time))return 'mapping_clock';
+    for(const [key,reason] of [['frame_at','frame_stale'],['sampled_at','sampler_stale']]){
+      const age=Date.now()-received+(data.server_time-data[key])*1000;
+      if(!Number.isFinite(age)||age< -250||age>1500)return reason;
+    }
+    if(!autoPpxCueMap || autoPpxCueMap.calibrationRevision!==gameCalibration2?.revision)return 'calibration_changed';
+    return '';
+  }
+  // Accept the previous contract only with its original conservative rules.
+  const usable=value=>value?.status==='ready'||value?.status==='partial';
+  if(!usable(autoPpxCueMap))return 'polled_mapping_unavailable';
+  if(!(Date.now()-autoPpxCueMap.frameAtLocal<=1500))return 'polled_frame_stale';
+  if(autoPpxCueMap.calibrationRevision!==gameCalibration2?.revision)return 'calibration_changed';
+  if(mobileGame?.mobile_cue_targets && (!usable(mobileGame.mobile_cue_targets)
+      ||mobileGame.mobile_cue_targets.scope!==autoPpxCueMap.scope
+      ||mobileGame.mobile_cue_targets.epoch!==autoPpxCueMap.epoch))return 'mapping_changed';
+  if(data?.status==='partial'&&!autoPpxCueRegion(data,received))return 'region_stale';
+  return '';
+}
+function autoPpxCueMapReady() { return !autoPpxCueGate(); }
+function autoPpxCueEndpointIssue(tag, acquiring=false) {
+  if(!autoPpxCueMapReady())return 'camera';
+  if(!acquiring){const stackIssue=autoPpxCueStackIssue(tag);if(stackIssue)return stackIssue;}
+  const {data,received}=autoPpxCueEvidence();
+  if(data.version===2)return data.blocked_fixed_ids.includes(tag?.id)?'quarantined':'';
+  if(acquiring&&(data.pending_fixed_ids?.includes(tag?.id)||data.quarantined_tags?.some(t=>t.id===tag?.id)))return 'quarantined';
+  if(data.status!=='partial')return '';
+  const hull=autoPpxCueRegion(data,received);
+  if(!hull||!Number.isFinite(tag?.nx)||!Number.isFinite(tag?.ny))return 'region';
+  // The hull bounds retained ground-marker coordinates. Qualified moving tags
+  // have their own measured position, then pass the normal raised Cal 2/reach
+  // checks. Keep that acquisition through arm occlusion only in this operation.
+  if(autoPpxCueLivePiece(tag)||(!acquiring&&autoPpxCueAcquiredPiece(tag)))return '';
+  // Tags are in the controller's oriented view; the owner's hull is raw
+  // corrected-camera coordinates. A 180-degree flip is its own inverse.
+  const x=gid('flipToggle').checked?1-tag.nx:tag.nx,y=gid('flipToggle').checked?1-tag.ny:tag.ny;
+  return hull.every((a,i)=>{const b=hull[(i+1)%hull.length];return (b[0]-a[0])*(y-a[1])-(b[1]-a[1])*(x-a[0])>=-1e-9;})?'':'region';
 }
 function autoPpxCueDisplayTags() {
   if (!autoPpxCueMapReady()) return [];
+  const authoritative=autoPpxCueEvidence();
+  if(authoritative.data?.version===2){
+    try{return autoPpxCueProjectionTags(authoritative.data,authoritative.received);}catch(_){return [];}
+  }
   const data=mobileGame?.mobile_cue_targets;
   // Presentation follows the latest SSE observation, independently of the
   // slower calibration/acquisition poll. Never promote these display tags to
@@ -1882,10 +2081,11 @@ function autoPpxCueCandidates(tags=autoPpxCueDisplayTags()) {
   return {sources:owned.map(id=>({id})), destinations:tags.filter(t=>!owned.includes(t.id)).map(t=>({id:t.id,cached:!!t.fixed&&!t.visible}))};
 }
 function autoPpxCueProjectionTags(data,received) {
-  if (data.contract !== 'photon.board.cue-targets' || data.version !== 1
-      || data.status !== 'ready' || data.coordinate_space !== 'corrected-camera-normalized'
+  if (data.contract !== 'photon.board.cue-targets' || ![1,2].includes(data.version)
+      || !(data.version===2?data.status==='ready':['ready','partial'].includes(data.status)) || data.coordinate_space !== 'corrected-camera-normalized'
       || !Number.isFinite(data.server_time) || !Number.isFinite(data.frame_at) || !Array.isArray(data.tags))
     throw Error(data.error || 'Cue camera mapping unavailable.');
+  if(data.version===1&&data.status==='partial'&&!autoPpxCueRegion(data,received))throw Error('Verified board region unavailable or stale.');
   return data.tags.filter(t=>Number.isInteger(t.id)&&Number.isFinite(t.last_seen)&&Number.isFinite(t.nx)&&Number.isFinite(t.ny))
     .map(t=>({...gameDisplayTag(t),lastSeenAt:received-Math.max(0,data.server_time-t.last_seen)*1000,
       frameAt:data.frame_at,obscured:!t.visible}));
@@ -1900,8 +2100,11 @@ async function readAutoPpxCueTargets(force=false) {
     if (!res.ok) throw Error(data.error || 'Cue camera mapping unavailable.');
     received=started; // Include the full request delay in the freshness budget.
   }
+  const latest=autoPpxCueEvidence();
+  if(data?.version===2&&latest.data?.version===2 && (latest.data.scope!==data.scope
+      ||latest.data.server_time>=data.server_time)){data=latest.data;received=latest.received;}
   const tags=autoPpxCueProjectionTags(data,received);
-  autoPpxCueMap = {...data, frameAtLocal:received-Math.max(0,data.server_time-data.frame_at)*1000,
+  autoPpxCueMap = {...data, receivedAtLocal:received, frameAtLocal:received-Math.max(0,data.server_time-data.frame_at)*1000,
     calibrationRevision:gameCalibration2?.revision};
   return tags;
 }
@@ -2474,7 +2677,7 @@ function pointInsideCalibratedBoundary(hull, samples, u, v) {
   // The red dashed Cal 2 arm-limit outline is the outward motion boundary.
   return pointInsideConvexCalibration(hull, u, v, 0.002);
 }
-function compensateCal2Parallax(u, v, tagId) {
+function compensateCal2Parallax(u, v, tagId, stackLevel=0) {
   // IDs in the 100s are the physical 3 cm-tall tags. Their observed camera
   // centres must be mapped through the captured raised-tag locations before
   // converting them to a robot pose. Flat targets (30s, 40s and 50s) use
@@ -2488,9 +2691,14 @@ function compensateCal2Parallax(u, v, tagId) {
       return {
         u:raised.u,v:raised.v,
         groundU:ground.u,groundV:ground.v,
+        height:Number(p.height_mm)||AUTO_PP_PHYSICAL_TAG_HEIGHT_MM,
       };
     }).filter(p=>Object.values(p).every(Number.isFinite));
   if(points.length<4) throw Error('Four raised-Atom perspective samples are required for this pickup.');
+  if(stackLevel){
+    if(stackLevel!==1)throw Error('Stacked camera correction supports two Atoms.');
+    return cal2StackParallax(u,v,points,autoPpxStackDropOffset());
+  }
   try {
     return {
       u:evalTps(points,fitTps(points,"groundU"),u,v),
@@ -2499,6 +2707,44 @@ function compensateCal2Parallax(u, v, tagId) {
   } catch (_) {
     throw Error('Four raised-Atom perspective samples are required for this pickup.');
   }
+}
+function cal2StackParallax(u,v,points,extraHeight) {
+  // Fit ground -> one-Atom image homography. Parallel height planes form a
+  // homology H=I+h*A (rank(A)=1), up to homogeneous scale. Normalize its
+  // repeated eigenvalue to 1 before extending the plane by the stack offset;
+  // applying the one-height correction twice would compound perspective error.
+  const heights=points.map(p=>p.height),height=heights.reduce((a,b)=>a+b,0)/heights.length;
+  if(!Number.isFinite(height)||height<=0||Math.max(...heights)-Math.min(...heights)>1)
+    throw Error('Stack pickup needs consistent raised-Atom calibration heights.');
+  const rows=[],values=[];
+  for(const p of points){
+    const x=p.groundU,y=p.groundV;
+    rows.push([x,y,1,0,0,0,-p.u*x,-p.u*y],[0,0,0,x,y,1,-p.v*x,-p.v*y]);
+    values.push(p.u,p.v);
+  }
+  const normal=Array.from({length:8},(_,i)=>Array.from({length:8},(_,j)=>rows.reduce((s,r)=>s+r[i]*r[j],0)));
+  const rhs=Array.from({length:8},(_,i)=>rows.reduce((s,r,k)=>s+r[i]*values[k],0));
+  const h=solveLinearSystem(normal,rhs).concat(1);
+  const trace=h[0]+h[4]+h[8],second=h[0]*h[4]+h[0]*h[8]+h[4]*h[8]-h[1]*h[3]-h[2]*h[6]-h[5]*h[7];
+  const delta=Math.sqrt(Math.max(0,trace*trace-3*second));
+  const candidates=[(trace+delta)/3,(trace-delta)/3].filter(x=>Number.isFinite(x)&&Math.abs(x)>.001);
+  const rankError=a=>{
+    let error=0;
+    for(let i=0;i<3;i++)for(let j=i+1;j<3;j++)for(let k=0;k<3;k++)for(let l=k+1;l<3;l++)
+      error+=(a[i*3+k]*a[j*3+l]-a[i*3+l]*a[j*3+k])**2;
+    return error;
+  };
+  const models=candidates.map(scale=>{
+    const a=h.map((n,i)=>n/scale-(i%4===0?1:0));return {a,error:rankError(a)};
+  }).sort((a,b)=>a.error-b.error);
+  if(!models.length||models[0].error>.0001)throw Error('Raised-Atom calibration cannot reliably resolve a stacked height. Recheck the perspective samples.');
+  const ratio=1+extraHeight/height;
+  const matrix=Array.from({length:3},(_,i)=>Array.from({length:3},(_,j)=>(i===j?1:0)+ratio*models[0].a[i*3+j]));
+  const ground=solveLinearSystem(matrix,[u,v,1]);
+  const result={u:ground[0]/ground[2],v:ground[1]/ground[2]};
+  if(ground[2]<=0||!Object.values(result).every(Number.isFinite)||Math.hypot(result.u-u,result.v-v)>.25)
+    throw Error('Stacked Atom is outside the calibrated perspective range.');
+  return result;
 }
 function cal2CameraTargetPose(pose, tagId=null, validatedGuard=undefined) {
   // The camera can place a raised Atom outside the nominal arc even after
@@ -2530,9 +2776,9 @@ function cal2ClickToPose(u, v, tagId=null) {
   assertAutoPpxPoseSafe(pose, "Auto PP Cal 2 target");
   return pose;
 }
-function clickToPose(u, v, tagId=null) {
+function clickToPose(u, v, tagId=null, stackLevel=0) {
   if (AUTO_PPX && selectedAutoPpxCalibration() === "cal2") {
-    const corrected=compensateCal2Parallax(u,v,tagId);
+    const corrected=compensateCal2Parallax(u,v,tagId,stackLevel);
     return cal2ClickToPose(corrected.u,corrected.v,tagId);
   }
   const cal = gameArmCal();
@@ -3246,6 +3492,9 @@ function playerJointRigAvailable(){
 }
 function mountPlayerJointRig(){
  if(!LTX||playerJointRig||!window.MobileJointRig)return;
+ // The mobile parent renders its own rig. The hidden bridge owns control and
+ // feedback only; a second animated SVG spends layout time without a viewer.
+ if(MOBILE_LTZ&&new URLSearchParams(location.search).has('bridge'))return;
  const ids=['j1','j2','j3'];
  playerJointRig=MobileJointRig.mount(gid('playerJointRig'),{
   contain:true,zoom:1,
@@ -3419,13 +3668,16 @@ function log(msg, cls="log-info") {
 }
 
 async function api(path, body, method, timeoutMs = 12000) {
+  let delayRecorder=null;
+  if(MOBILE_LTZ&&parent!==window){try{delayRecorder=parent.mobileDelay;}catch{}}
+  const delayTiming=path==='/api/status'?delayRecorder?.begin():null;
   if(['/api/stop','/api/disconnect','/api/joint-move'].includes(path)){try{window.mobileArmPath?.(null);}catch{}}
   const motion=path==='/api/move'||path==='/api/joint-move'||path==='/api/enable'||path==='/api/pump'&&body?.mode!=='off';
-  if(LTZ&&motion){if(!mobileRobotReady())return {ok:false,error:mobileGame?.mobile_safety?.error||'Wait for an unpaused physical game and fresh game state.'};mobileOwnsMotion=true;}
+  if(LTZ&&motion){if(!mobileRobotReady())return {ok:false,error:mobileGame?.mobile_motion_policy?.error||mobileGame?.mobile_safety?.error||'Wait for an unpaused physical game and fresh game state.'};mobileOwnsMotion=true;}
   if (LTZ && (path === '/api/move' || path === '/api/joint-move')) {
     const action = path === '/api/joint-move' ? 'joint' : autoPpxRunning ? 'cue' : (autoPpxClickOverride || body?.ltz_action === 'image') ? 'image' : 'xyz';
-    const practice=Number.isInteger(mobileGame?.virtual_test_control)||mobileGame?.journey?.active_side===TEAM;
-    if (ltzTier < ({joint:1,xyz:2,image:3,cue:4}[action])||!practice&&ltzTier>1&&action==='joint') return {ok:false,error:'This LTZ control is locked'};
+    const calibrationTurn=mobileGame?.journey?.active_side===TEAM;
+    if (ltzTier < ({joint:1,xyz:2,image:3,cue:4}[action])||!calibrationTurn&&ltzTier>1&&action==='joint') return {ok:false,error:'This LTZ control is locked'};
     body = {...body, ltz_action:action, control_session:playerJointStatus?.control_session,
       motion_epoch:playerJointStatus?.motion_epoch};
   }
@@ -3443,6 +3695,7 @@ async function api(path, body, method, timeoutMs = 12000) {
     return { ok:false, error:msg };
   } finally {
     clearTimeout(timer);
+    delayRecorder?.end('browser.status_request',delayTiming);
   }
 }
 function report(name, res) {
@@ -3952,13 +4205,18 @@ async function moveToPose(pose, label, wait = true, options = {}) {
     const pauseGeneration = cueOwned ? autoPpxPauseGeneration : null;
     const mappingKey=cueOwned&&LTZ&&options.resolveTarget?autoPpxCueMapKey():null;
     const endpointTag=options.endpointTag?.();
-    let visionInterruption=null;
+    let visionInterruption=null,visionGate=null;
     const visionChanged=()=>{
       if(mappingKey===null)return false;
       // Latch the cause: a poll can recover between interruption and catch.
       // Missing frames require a hold, not destruction of the acquired pose.
-      visionInterruption ||= !autoPpxCueMapReady() ? 'mapping_unavailable'
+      visionGate ||= autoPpxCueGate();
+      visionInterruption ||= visionGate ? 'mapping_unavailable'
         : autoPpxCueMapKey()!==mappingKey ? 'mapping_changed'
+        : autoPpxCueStackIssue(endpointTag)==='stack_changed' ? 'stack_changed'
+        : autoPpxCueStackIssue(endpointTag)==='stack' ? 'stack_unavailable'
+        : autoPpxCueEndpointIssue(endpointTag)==='quarantined' ? 'endpoint_conflict'
+        : autoPpxCueEndpointIssue(endpointTag) ? 'region_unavailable'
         : autoPpxCueEndpointChanged(endpointTag) ? 'endpoint_changed' : null;
       return visionInterruption!==null;
     };
@@ -3981,11 +4239,12 @@ async function moveToPose(pose, label, wait = true, options = {}) {
         if(!held.ok)throw Error(held.error||'Could not pause the arm safely.');
         window.mobileArmDiagnostic?.('cue_motion_paused',`${label}: arm held; pump unchanged.`,{action:'cue_pause'});
       }else if(autoPpxClickOverrideGeneration===cueGeneration && visionChanged()){
-        if(visionInterruption!=='mapping_unavailable')options.invalidateTarget?.(visionInterruption);
+        const retainedHold=['mapping_unavailable','region_unavailable','endpoint_conflict','stack_unavailable'].includes(visionInterruption);
+        if(!retainedHold)options.invalidateTarget?.(visionInterruption);
         const held=await api('/api/stop',{});
         if(!held.ok)throw Error(held.error||'Could not hold the arm while camera mapping recovers.');
-        window.mobileArmDiagnostic?.('cue_motion_held',`${label}: ${visionInterruption==='mapping_unavailable'?'camera mapping unavailable; acquired position retained':'target revalidation required'}.`,
-          {tag_id:endpointTag?.id,queue_index:(activeOperation?.queue_index||1)-1,phase:visionInterruption});
+        window.mobileArmDiagnostic?.('cue_motion_held',`${label}: ${retainedHold?(visionInterruption==='endpoint_conflict'?'destination position conflict; acquired position retained':visionInterruption==='region_unavailable'?'endpoint outside verified board region; acquired position retained':'camera mapping unavailable; acquired position retained'):'target revalidation required'}.`,
+          {tag_id:endpointTag?.id,queue_index:(activeOperation?.queue_index||1)-1,phase:visionInterruption,mapping_gate:visionGate||visionInterruption});
       }
       log(`${label}: movement held; validating recovery before resuming the current step.`, "log-info");
       await waitForAutoPpxResume(label);
@@ -4273,7 +4532,7 @@ function autoPpxTransportZ() {
     const transport = gameArmCal2().transport_height ?? (gameCalibration2.shared_z || {}).transport_height;
     const z = Number(transport);
     if (transport == null || transport === "" || !Number.isFinite(z)) throw new Error("Auto PP Cal 2 transport Z is not calibrated");
-    return z;
+    return z + (LTZ ? Number(activeOperation?.stackTravelOffset)||0 : 0);
   }
   return calibratedZ("transport_height");
 }
@@ -4293,6 +4552,22 @@ function autoPpxPickupZForPose(pose, includeLiveTune = true) {
   return autoPpxBasePickupZ() + (Number(correction.dz) || 0) + liveTune;
 }
 
+function autoPpxPickupZForSource(pose, tag, includeLiveTune=true) {
+  return autoPpxPickupZForPose(pose,includeLiveTune)
+    +(LTZ ? Number(tag?.stackLevel)||0 : 0)*autoPpxStackDropOffset();
+}
+
+function autoPpxCuePrepareHeights(saved) {
+  if(!LTZ)return;
+  const sourceLevel=saved.sourceTag.stackLevel||0;
+  const targetLevel=saved.targetTag.id>=100?(saved.targetTag.stackLevel||0)+1:0;
+  if(sourceLevel>1||targetLevel>1)throw Error('Cue supports stacks of two Atoms. Remove the extra layer before continuing.');
+  // Keep the normal calibrated clearance above the highest working surface.
+  // Monotonic within a move: reacquisition cannot lower a carrying arm's route.
+  activeOperation.stackTravelOffset=Math.max(activeOperation.stackTravelOffset||0,
+    Math.max(sourceLevel,targetLevel)*autoPpxStackDropOffset());
+}
+
 function autoPpxDropZForPose(pose, includeLiveTune = true) {
   const pickupZ = autoPpxPickupZForPose(pose, includeLiveTune);
   return pickupZ + (selectedAutoPpxCalibration() === "cal2" ? 1 : 0);
@@ -4302,7 +4577,7 @@ function autoPpxDropZForTarget(pose, targetTag, includeLiveTune = true) {
   // A 100-series target means this drop is stacking one physical tag on
   // another. Cal 2 lets each arm tune that vertical offset independently.
   return autoPpxDropZForPose(pose, includeLiveTune)
-    + (Number(targetTag && targetTag.id) >= 100 ? autoPpxStackDropOffset() : 0);
+    + (Number(targetTag && targetTag.id) >= 100 ? (1+(LTZ?Number(targetTag.stackLevel)||0:0))*autoPpxStackDropOffset() : 0);
 }
 
 async function captureAutoPpxPoses() {
@@ -4368,7 +4643,9 @@ function assertAutoPpxVisionSession() {
   if (!mobileRobotReady()) throw Error('Physical game or calibration unavailable. Connect to resume.');
 }
 function setAutoPpxVisionWait(id, endpoint, index, phase='mapping', detail='') {
-  const reason = phase === 'reach'
+  const reason = phase === 'stack'
+    ? `Waiting to verify the height of Atom #${id}. ${detail||'Its stack changed or stack evidence is unavailable. Reveal the Atom and its support to continue.'}`
+    : phase === 'reach'
     ? `Row ${index+1}: ${endpoint==='source'?'piece':'destination'} #${id} is mapped but outside this arm's permitted area. ${detail} ${endpoint==='source'?'Reposition the piece within the calibrated area.':'Stop and choose a reachable destination.'}`
     : phase === 'confirming'
     ? `Confirming ${endpoint==='source'?'piece':'destination'} #${id}: waiting for consistent recent sightings.${detail ? ' '+detail : ''} Brief detection gaps are allowed; keep the Atom in place.`
@@ -4376,8 +4653,12 @@ function setAutoPpxVisionWait(id, endpoint, index, phase='mapping', detail='') {
     ? `Waiting for fresh camera mapping for #${id}.${detail ? ' '+detail : ''}`
     : phase === 'camera_retained'
     ? `Holding for camera mapping to recover. The acquired ${endpoint==='source'?'piece':'destination'} #${id} position is retained for this move; its tag can remain hidden.${detail?' '+detail:''}`
+    : phase === 'region' || phase === 'region_retained'
+    ? `Waiting for the verified board region to cover ${endpoint==='source'?'piece':'destination'} #${id}. ${phase==='region_retained'?'Its acquired position is retained for this move.':'This endpoint cannot start a new approach yet.'} Reveal nearby board markers or choose a target inside the verified region.`
     : phase === 'occupied'
     ? `Destination #${id} is covered by an Atom. Clear the destination, or Stop and select that Atom as a stacking target. The cue will wait here.`
+    : phase === 'quarantined_retained'
+    ? `Holding for marker #${id}: a valid detection conflicts with its fixed position. The acquired position is retained while the camera verifies the board.`
     : phase === 'quarantined'
     ? `Waiting to verify marker #${id} after a conflicting camera detection. Its old position cannot start a new approach; reveal the marker to acquire it again.`
     : `Waiting for the camera to map ${endpoint === 'source' ? 'piece' : 'destination'} #${id}. If the arm is hiding the tag, you can tap another reachable point to reveal it; otherwise leave the arm in place.${id >= 100 ? ' Check the Atom battery if its tag stays dark.' : ''} The cue will continue when the tag is mapped.`;
@@ -4407,31 +4688,40 @@ async function waitForAutoPpxMappedEndpoint(saved, endpoint, index, notBefore=0)
       assertAutoPpxVisionSession();
       if (generation!==autoPpxClickOverrideGeneration || autoPpxClickOverride || autoPpxPaused) continue;
       const observed=autoPpxCueMapReady()&&latestVisibleArucoTags.find(t=>t.id===id);
-      const tag=observed&&(observed.fixed===true || autoPpxCueAcquisitionReady(observed,notBefore))&&observed;
+      const issue=autoPpxCueEndpointIssue(observed||{id},true);
+      let tag=observed&&(observed.fixed===true || autoPpxCueAcquisitionReady(observed,notBefore))&&observed;
       const blocked=endpoint==='target'&&tag?.fixed&&(tag.covered_by||[]).some(other=>other!==Number(saved.sourceTag.id));
-      if (tag && !blocked) {
+      if (tag && !blocked && !issue) {
         if (!autoPpxTagInsideActiveArea(tag,true)) {
           setAutoPpxVisionWait(id,endpoint,index,'reach');
           await delay(150);continue;
         }
         let base;
-        try { base=clickToPose(tag.nx,tag.ny,id); }
+        try {
+          const stack=autoPpxCueStackInfo(tag);
+          tag={...tag,stackLevel:stack.level,stackLowerId:stack.lowerId};
+          base=clickToPose(tag.nx,tag.ny,id,stack.level);
+        }
         catch(error) {
+          if(error.code==='stack_unavailable'){
+            setAutoPpxVisionWait(id,endpoint,index,'stack',error.message);
+            await delay(150);continue;
+          }
           if(error.code!=='motion_limit')throw Error(`Row ${index+1}: ${endpoint==='source'?'piece':'destination'} #${id}: ${error.message}`);
           setAutoPpxVisionWait(id,endpoint,index,'reach',error.message);
           await delay(150);continue;
         }
-        saved[tagKey]={...tag};saved[baseKey]=base;saved[endpoint]=autoPpxOffsetPose(base);
+        const acquired=autoPpxCueRetainPiece(tag);
+        saved[tagKey]=acquired;saved[baseKey]=base;saved[endpoint]=autoPpxOffsetPose(base);
         saved.mappingKey=autoPpxCueMapKey();
         if(autoPpxVisionWait){
           window.mobileArmDiagnostic?.('cue_reacquired',`ArUco ${id} reacquired; replanning current step.`,{tag_id:id,queue_index:index});
           setAutoPpxStatus(`Row ${index+1}: ${endpoint==='source'?'piece':'destination'} #${id} acquired. Resuming cue...`,'ok');
         }
-        return tag;
+        return acquired;
       }
       const recent=observed&&id>=100&&Date.now()-observed.lastSeenAt<=1500;
-      const quarantined=autoPpxCueMapReady()&&autoPpxCueMap.quarantined_tags?.some(t=>t.id===id);
-      setAutoPpxVisionWait(id,endpoint,index,blocked?'occupied':lastError||!autoPpxCueMapReady()?'camera':quarantined?'quarantined':recent?'confirming':'mapping',
+      setAutoPpxVisionWait(id,endpoint,index,blocked?'occupied':lastError||issue==='camera'?'camera':issue==='quarantined'?'quarantined':recent&&!tag?'confirming':observed&&issue==='region'?'region':recent?'confirming':'mapping',
         lastError||(recent?`Latest sighting ${Math.max(0,Date.now()-observed.lastSeenAt).toFixed(0)} ms ago.`:''));
       await delay(150);
     }
@@ -4442,7 +4732,8 @@ function autoPpxCueEndpointChanged(tag) {
   if (!tag) return false;
   const current=latestVisibleArucoTags.find(item=>item.id===tag.id);
   if (tag.fixed) {
-    const occupancy=current||autoPpxCueMap?.quarantined_tags?.find(item=>item.id===tag.id);
+    const data=autoPpxCueEvidence().data;
+    const occupancy=data?.tags?.find(item=>item.id===tag.id)||data?.quarantined_tags?.find(item=>item.id===tag.id)||current;
     return !!occupancy?.covered_by?.some(id=>id!==activeOperation?.physical_tag);
   }
   // Missing/partial detections are expected near the arm. Only qualified,
@@ -4490,8 +4781,8 @@ function createAutoPpxEndpointResolver(saved, endpoint, index) {
     if(retained&&reason==='mapping_changed'){
       const before=JSON.parse(retained.mappingKey),after=JSON.parse(autoPpxCueMapKey());
       detail+=': '+['camera/map epoch','layout','arm calibration','camera view'].filter((_,i)=>before[i]!==after[i]).join(', ');
-      if(before[0]!==after[0]&&autoPpxCueMap.epoch_reason==='fixed_marker_changed'&&Number.isInteger(autoPpxCueMap.epoch_marker_id))
-        detail+=`; fixed marker #${autoPpxCueMap.epoch_marker_id} moved`;
+      if(before[0]!==after[0]&&['fixed_marker_changed','board_moved'].includes(autoPpxCueEvidence().data?.epoch_reason)&&Number.isInteger(autoPpxCueEvidence().data?.epoch_marker_id))
+        detail+=`; fixed marker #${autoPpxCueEvidence().data.epoch_marker_id} moved`;
     }
     if(retained)window.mobileArmDiagnostic?.('cue_target_invalidated',
       `Row ${index+1}: ${endpoint} #${saved[tagKey].id} requires a new acquisition (${detail}).`,
@@ -4508,17 +4799,20 @@ function createAutoPpxEndpointResolver(saved, endpoint, index) {
         assertAutoPpxVisionSession();
         if (activeOperation!==operation) throw Error('stopped');
         if(retained && retained.generation!==autoPpxClickOverrideGeneration)invalidate('player_intervention');
-        if(retained && !autoPpxCueMapReady()){
+        if(retained && autoPpxCueMapReady() && retained.mappingKey!==autoPpxCueMapKey())invalidate('mapping_changed');
+        if(retained && autoPpxCueMapReady() && autoPpxCueStackIssue(retained.tag)==='stack_changed')invalidate('stack_changed');
+        if(retained && autoPpxCueEndpointIssue(retained.tag)){
           waitingForMap=true;
-          setAutoPpxVisionWait(saved[tagKey].id,endpoint,index,'camera_retained');
+          const issue=autoPpxCueEndpointIssue(retained.tag);
+          const phase=issue==='stack'?'stack':issue==='quarantined'?'quarantined_retained':issue==='region'?'region_retained':'camera_retained';
+          setAutoPpxVisionWait(saved[tagKey].id,endpoint,index,phase);
           // A fresh map is required to resume, but the occluded tag need not
           // reappear. Compare identities only after valid mapping returns.
           try{await refreshAutoPpxTags({strict:true});}
           catch(error){setAutoPpxVisionWait(saved[tagKey].id,endpoint,index,'camera_retained',error.message);}
-          if(!autoPpxCueMapReady())await delay(150);
+          if(autoPpxCueEndpointIssue(retained.tag))await delay(150);
           continue;
         }
-        if(retained && retained.mappingKey!==autoPpxCueMapKey())invalidate('mapping_changed');
         if(retained && autoPpxCueEndpointChanged(retained.tag))invalidate('endpoint_changed');
         if(!retained){
           const tag=await waitForAutoPpxMappedEndpoint(saved,endpoint,index,notBefore);
@@ -4528,12 +4822,13 @@ function createAutoPpxEndpointResolver(saved, endpoint, index) {
             mappingKey:autoPpxCueMapKey(),generation:autoPpxClickOverrideGeneration};
           if(endpoint==='source')operation.sourceEvidence={mappingKey:retained.mappingKey,
             coveredMarkers:latestVisibleArucoTags.filter(item=>item.fixed&&!item.visible&&item.covered_by?.includes(tag.id)).map(item=>item.id)};
-          const layer=tag.id>=100?'raised-tag':'ground';
+          const layer=tag.stackLevel?'stacked-Atom':tag.id>=100?'raised-tag':'ground';
           const inset=retained.base.placement_offset_mm||0;
           const tuning=Math.hypot(retained.pose.x-retained.base.x,retained.pose.y-retained.base.y);
           window.mobileArmDiagnostic?.('cue_target_acquired',
             `Row ${index+1}: ${endpoint} #${tag.id} retained with Cal 2 ${layer} layer; reach inset ${inset.toFixed(2)} mm; XY tuning ${tuning.toFixed(2)} mm.`,
             {tag_id:tag.id,queue_index:index,phase:endpoint,calibration_layer:layer,
+              stack_level:tag.stackLevel,stack_lower_id:tag.stackLowerId,
               calibration_revision:gameCalibration2?.revision,placement_offset_mm:inset,tuning_offset_mm:tuning});
         }else if(waitingForMap){
           window.mobileArmDiagnostic?.('cue_mapping_recovered',`Camera mapping recovered; resuming ${endpoint} #${retained.tag.id} at its acquired position.`,
@@ -4902,7 +5197,7 @@ async function preflightAutoPpxQueue(queue,movingZ){
   for(let index=0;index<queue.length;index+=1){
     const saved=queue[index];
     const sourceHover={...saved.source,z:movingZ};
-    const sourcePickup={...saved.source,z:autoPpxPickupZForPose(saved.sourceBase,true)};
+    const sourcePickup={...saved.source,z:autoPpxPickupZForSource(saved.sourceBase,saved.sourceTag,true)};
     const targetHover={...saved.target,z:movingZ};
     const targetDrop={...saved.target,z:autoPpxDropZForTarget(saved.targetBase,saved.targetTag,true)};
     const poses=[sourceHover,sourcePickup,sourceHover,targetHover,targetDrop,targetHover];
@@ -4917,7 +5212,7 @@ async function preflightAutoPpxQueue(queue,movingZ){
   return {segmentCount,adjustedCount};
 }
 
-function autoPpxClearViewTarget(origin,viewRotation,row={action:'clear_view'}) {
+function autoPpxClearViewTarget(origin,viewRotation=gid('flipToggle').checked?180:0,row={action:'clear_view'}) {
   const clear=autoPpxClearViewRow(row),distance=clear.distance_cm*10;
   if(!origin||!['x','y','z'].every(k=>Number.isFinite(origin[k]))||(viewRotation!==0&&viewRotation!==180))throw Error('Clear view needs a measured arm position and valid camera view.');
   const samples=cal2CalibrationSamples(),camera=cal2CameraForRobotPose(samples,origin),at=cal2PoseEvaluator(samples);
@@ -4929,7 +5224,7 @@ function autoPpxClearViewTarget(origin,viewRotation,row={action:'clear_view'}) {
   return target;
 }
 
-async function runAutoPpx(program=null,{viewRotation=0}={}) {
+async function runAutoPpx(program=null,{viewRotation=gid('flipToggle').checked?180:0}={}) {
   if (autoPpxRunning) return;
   // DOM click events are not mobile programs. Only the authenticated bridge
   // supplies an explicit program containing placement and Clear view rows.
@@ -4976,7 +5271,7 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
     if (!LTZ) await recoverTrustedPhysicalPlacements(queue, trustedPhysicalPlacements);
     const unresolved = queue.findIndex(item => !item.source || !item.sourceBase);
     if (!LTZ && unresolved >= 0) throw new Error(`physical ArUco ${queue[unresolved].sourceTag.id} on queue line ${unresolved + 1} has neither a fresh detection nor a robot-confirmed active-run placement`);
-    const movingZ = autoPpxTransportZ();
+    let movingZ = autoPpxTransportZ();
     const loop = gid("autoPpxLoop").checked;
     setAutoPpxStatus("Checking the complete movement plan for boundary collisions...");
     if (!LTZ) await preflightAutoPpxQueue(queue,movingZ);
@@ -4992,7 +5287,8 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
         if(saved.action==='clear_view'){
           if(!LTZ||index===0||queue[index-1].action)throw Error('Clear view must follow a placement.');
           const clear=autoPpxClearViewRow(saved);
-          activeOperation={queue_index:index+1,queue_length:queue.length,clear_view:true};
+          activeOperation={queue_index:index+1,queue_length:queue.length,clear_view:true,
+            stackTravelOffset:Math.max(0,movingZ-autoPpxTransportZ())};
           setAutoPpxStatus(`${progress}: Clear view · moving ${clear.distance_cm} cm ${clear.direction}...`);
           const status=await api('/api/status',null,'GET');
           if(status.pump_mode!=='off'||!Array.isArray(status.pose)||status.pose.length<3)throw Error('Clear view needs fresh arm position and the pump off.');
@@ -5024,17 +5320,20 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
             // Acquire once, after destination validation, then keep this same
             // resolver through hover, descent and the pre-vacuum pose check.
             await sourceEndpoint();
+            autoPpxCuePrepareHeights(saved);
+            movingZ=autoPpxTransportZ();
             await preflightAutoPpxQueue([saved],movingZ);
           }else{
             await confirmTrustedPhysicalPlacements(trustedPhysicalPlacements);
             await refreshAutoPpxPhysicalEndpoint(saved,"source",index,trustedPhysicalPlacements.get(Number(saved.sourceTag.id)));
           }
           sourceHover = { ...saved.source, z:movingZ };
-          let sourcePickup = { ...saved.source, z:autoPpxPickupZForPose(saved.sourceBase, true) };
+          let sourcePickup = { ...saved.source, z:autoPpxPickupZForSource(saved.sourceBase,saved.sourceTag,true) };
           const resolveSource=async(height)=>{
             await sourceEndpoint();
+            autoPpxCuePrepareHeights(saved);movingZ=autoPpxTransportZ();
             sourceHover={...saved.source,z:movingZ};
-            sourcePickup={...saved.source,z:autoPpxPickupZForPose(saved.sourceBase,true)};
+            sourcePickup={...saved.source,z:autoPpxPickupZForSource(saved.sourceBase,saved.sourceTag,true)};
             return height==='hover'?sourceHover:sourcePickup;
           };
           const sourceOptions=height=>LTZ?{resolveTarget:()=>resolveSource(height),endpointTag:()=>saved.sourceTag,invalidateTarget:sourceEndpoint.invalidate}:{};
@@ -5043,7 +5342,7 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
           await laserIntent("source_hover", eventBase);
           await moveToPose(sourceHover, "source hover",true,sourceOptions('hover'));
           await waitForAutoPpxResume("source pickup");
-          setAutoPpxStatus(`${progress}: picking up ArUco ${saved.sourceTag.id}${attemptText}...`);
+          setAutoPpxStatus(`${progress}: picking up ${saved.sourceTag.stackLevel?'stacked ':''}ArUco ${saved.sourceTag.id}${attemptText}...`);
           await laserIntent("source_pickup", eventBase);
           await moveToPose(sourcePickup, "source pickup",true,sourceOptions('pickup'));
           await waitForAutoPpxResume("pickup confirmation");
@@ -5064,6 +5363,8 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
             await refreshAutoPpxTags();
             assertAutoPpxPickupNotFailed();
             eventBase.pickupComplete=true;
+            const placement=autoPpxCueStackRecords().get(saved.sourceTag.id);
+            if(placement)placement.state='carrying';
           }
           await waitForAutoPpxResume("pickup check");
           if (LTZ) observeAutoPpxSourceClearance();
@@ -5082,10 +5383,12 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
         await waitForAutoPpxResume("target approach");
         const targetEndpoint=LTZ?createAutoPpxEndpointResolver(saved,'target',index):null;
         if(LTZ)await targetEndpoint();else await refreshAutoPpxPhysicalEndpoint(saved,"target",index);
+        if(LTZ){autoPpxCuePrepareHeights(saved);movingZ=autoPpxTransportZ();}
         let targetHover = { ...saved.target, z:movingZ };
         let targetDrop = { ...saved.target, z:autoPpxDropZForTarget(saved.targetBase, saved.targetTag, true) };
         const resolveTarget=async(height)=>{
           await targetEndpoint();
+          autoPpxCuePrepareHeights(saved);movingZ=autoPpxTransportZ();
           targetHover={...saved.target,z:movingZ};
           targetDrop={...saved.target,z:autoPpxDropZForTarget(saved.targetBase,saved.targetTag,true)};
           return height==='hover'?targetHover:targetDrop;
@@ -5110,6 +5413,7 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
             ? {x:Number(releaseResult.pose[0]), y:Number(releaseResult.pose[1]), z:Number(releaseResult.pose[2])}
             : acceptedDrop;
           await laserIntent("release_completed", {...eventBase, release_pose:releasePose, pump_command_seq:releaseResult.command_seq}, "command");
+          autoPpxCueRecordDrop(saved,releasePose);
           await laserIntent("blow_started", eventBase, "command");
           const blowResult = await setPumpMode("blow", "brief blow", eventBase.operation_id);
           await laserIntent("blow_completed", {...eventBase, pump_command_seq:blowResult.command_seq}, "command");
@@ -5170,6 +5474,7 @@ async function runAutoPpx(program=null,{viewRotation=0}={}) {
     setAutoPpxStatus(e.message === "stopped" ? "Stopped." : e.message, e.message === "stopped" ? "" : "err");
     log(`Auto PP X ✗ ${e.message}`, e.message === "stopped" ? "log-info" : "log-err");
   } finally {
+    autoPpxCueUncertainStack(activeOperation);
     autoPpxVisionWait=null;
     activeOperation = null;
     ltxHeldTagId = null;

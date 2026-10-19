@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-10",
+  "generator": "built-in image_gen",
+  "use_case": "precise-object-edit",
+  "reference": "../enemies-light-orcs-v2/breaker-walk-01.png",
+  "prompt": "Create ONE production sprite atlas for the referenced tower defense game's new Breaker archer. Use the reference as style and character reference: same green orc skin, chunky top-down pixel art, dark armor, normal proportions and steep overhead camera facing down toward bottom of image. Replace hammer completely with a wooden bow, visible bowstring, arrow and a back quiver. Add distinctive crimson red shoulder trim, red arm wraps/sash and red arrow fletching. No hammer, swords, axe or extra limbs. Transparent background. Exactly 8 evenly spaced isolated full-body sprites in a precise 4-column by 2-row grid; each equal cell with generous transparent padding and identical foot/body pivot and character scale. Top row: four coherent walking cycle frames while holding bow. Bottom row left to right: stationary aim with bow forward, fully drawn bow with nocked arrow, release with bow recoiling, recovery lowering bow. All face down the image, no direction changes. Each sprite must fit entirely within its cell; no overlap between cells. Crisp shaded pixel art matching reference, readable silhouettes at tiny game size. No text, labels, grid lines, panels, shadows on background, frames or watermark. The atlas will be sliced by the runtime into equal cells without cropping or repainting.",
+  "transparent_background": true,
+  "output": "archer-atlas.png",
+  "dimensions": [
+    1774,
+    887
+  ],
+  "layout": [
+    4,
+    2
+  ],
+  "sha256": "74ffd5c11bbc0cf48c5c632a47293e534badb9acdfc209d5515577c6d8d599bb",
+  "processing": "Original generated PNG copied unchanged. Runtime Canvas slices 8 equal cells into 256px pose caches.",
+  "poses": [
+    "walk-1",
+    "walk-2",
+    "walk-3",
+    "walk-4",
+    "aim",
+    "draw",
+    "release",
+    "recover"
+  ],
+  "review": "All eight poses viewed in eight rotations in real browser; transparent margins and red accents preserved. Down is the base facing."
+}

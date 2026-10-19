@@ -44,6 +44,24 @@ class DisplayOwnershipTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'disabled'):self.owner.calibration_session_begin(self.value)
             with self.assertRaisesRegex(ValueError,'disabled'):self.owner.calibration_session_maintain()
 
+    def test_undo_updates_projected_glow_without_capturing_new_evidence(self):
+        self.owner.calibration_session_begin(self.value)
+        value={'id':self.value['id'],'action':'capture','marker':31}
+        self.owner.calibration_session_command('green',value)
+        with patch.object(self.owner,'_fresh_calibration_measurement',side_effect=AssertionError('Undo must not capture')):
+            self.owner.calibration_session_command('green',{**value,'action':'undo_capture'})
+        self.assertFalse(any(a['show_area'] for a in self.field.list_areas()))
+        with patch.object(self.owner,'_fresh_calibration_measurement',side_effect=lambda side,marker=None:{
+            'pose':[300+10*((marker or 30)-30),0,10,0],'camera':{'u':.1,'v':.2},
+            'frame_at':time.time(),'camera_revision':'lens','rig_identity':{'ip':'test'}}):
+            for marker in range(30,36):
+                self.owner.calibration_session_command('green',{**value,'marker':marker})
+        self.owner.calibration_session_command('green',{**value,'action':'raised','camera':{'u':.2,'v':.3}})
+        self.assertFalse(next(a for a in self.field.list_areas() if a['marker']==31)['show_area'])
+        with patch.object(self.owner,'_fresh_calibration_measurement',side_effect=AssertionError('Undo must not capture')):
+            self.owner.calibration_session_command('green',{**value,'action':'undo_raised'})
+        self.assertTrue(next(a for a in self.field.list_areas() if a['marker']==31)['show_area'])
+
     def test_raised_phase_hides_centre_markers_and_extinguishes_each_saved_sample(self):
         for side in ('green','purple'):
             value={**self.value,'id':'raised:'+side,'side':side}
@@ -156,9 +174,11 @@ class DisplayOwnershipTests(unittest.TestCase):
         before=self.field.display_snapshot()
         self.owner.calibration_session_begin(self.value)
         green={a['marker']:a for a in self.field.list_areas()}
+        self.assertEqual(self.field._snapshot()['calibration_side'],'green')
         self.owner.calibration_session_release(self.value)
         purple={**self.value,'id':'run:purple','side':'purple'}
         result=self.owner.calibration_session_begin(purple)
+        self.assertEqual(self.field._snapshot()['calibration_side'],'purple')
         session=result['sessions'][purple['id']]
         self.assertEqual(session['display_camera_view'],'rot180')
         self.assertEqual(session['draft']['camera_view'],'rot180')
@@ -176,6 +196,7 @@ class DisplayOwnershipTests(unittest.TestCase):
         self.assertEqual([a['marker'] for a in displayed if a['color']=='#33ff88'],[31])
         self.owner.calibration_session_release(purple)
         after=self.field.display_snapshot()
+        self.assertIsNone(after['calibration_side'])
         self.assertEqual(after['areas'],before['areas'])
         self.assertEqual(after['settings'],before['settings'])
 

@@ -74,7 +74,7 @@ class LiveFeed {
       const source=new Source(this.url);this.source=source;
       const receive=(event,partial)=>{
         if(this.source!==source)return;
-        try{this.receive(JSON.parse(event.data),partial);this.lastEvent=performance.now();this.failures=0;}
+        try{const timing=root.mobileDelay?.begin();let value;try{value=JSON.parse(event.data);}finally{root.mobileDelay?.end('browser.parse',timing);}root.mobileDelay?.receive(value);this.receive(value,partial);this.lastEvent=performance.now();this.failures=0;}
         catch{this.retry('Live update interrupted. Reconnecting…');}
       };
       source.onmessage=e=>receive(e,false);

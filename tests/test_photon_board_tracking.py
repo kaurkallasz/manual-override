@@ -493,7 +493,7 @@ class Element {
   setAttribute(k,v){this.attrs[k]=v;}
   removeAttribute(k){delete this.attrs[k]; if(k==="src")delete this.src;}
 }
-const ids="status camera scene feed overlay cameraMessage inputs errors limits arms markers tagRows enabled simulation apply simulationError out settingsForm settingsFields saveSettings defaultSettings settingsStatus settingsError near_xy_mm near_z_mm unique_margin_mm stale_s default_near_xy_mm default_near_z_mm default_unique_margin_mm default_stale_s".split(" ");
+const ids="status camera scene feed overlay cameraMessage inputs errors limits arms markers tagRows placementStatus enabled simulation apply simulationError out settingsForm settingsFields saveSettings defaultSettings settingsStatus settingsError near_xy_mm near_z_mm unique_margin_mm stale_s default_near_xy_mm default_near_z_mm default_unique_margin_mm default_stale_s".split(" ");
 const nodes=Object.fromEntries(ids.map(id=>[id,new Element()]));nodes.camera.checked=true;
 const all=root=>[root,...root.children.flatMap(all)];
 const text=root=>all(root).map(n=>n.textContent).join(" ");
@@ -523,6 +523,13 @@ setImmediate(async()=>{
   assert.equal(Number(nodes.near_z_mm.value),60);
   assert.equal(Number(nodes.unique_margin_mm.value),20);
   assert.equal(Number(nodes.stale_s.value),1.5);
+  sources[0].onmessage({data:JSON.stringify({tracking:{...data,game_placement:{status:'ready',relations:[],
+    target_states:[{marker_id:48,status:'target_not_learned'},{marker_id:49,status:'target_position_disputed'}],
+    atom_states:[{movable_id:100,arm:'green',status:'arm_not_ready'}]}}})});
+  assert(nodes.placementStatus.textContent.includes('#48: target not learned'));
+  assert(nodes.placementStatus.textContent.includes('#49: target position disputed'));
+  assert(text(nodes.tagRows).includes('arm not ready / suction on'));
+  sources[0].onmessage({data:JSON.stringify({tracking:data})});
   nodes.near_xy_mm.value="125";nodes.settingsForm.oninput();
   sources[0].onmessage({data:JSON.stringify({tracking:data})});
   assert.equal(nodes.near_xy_mm.value,"125", "SSE must not overwrite a settings draft");

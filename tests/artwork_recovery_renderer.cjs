@@ -83,13 +83,15 @@ function retry() {
   // Exercise the real external-screen status callbacks without another SSE update.
   const html = fs.readFileSync(require.resolve('../sandboxes/gamemaster/prototypes/laser-tag-y/screen.html'), 'utf8');
   const source = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].at(-1)[1];
-  const status = {}, readyState = {status: 'ready', phase: 'setup', presentation: {status: 'ready'}};
+  const status = {replaceChildren() {}}, readyState = {status: 'ready', phase: 'setup', presentation: {status: 'ready'}};
   let callbacks;
   const streams = [];
   vm.runInNewContext(source, {
     location: {pathname: '/s/gamemaster/p/laser-tag-y/screen'},
-    document: {getElementById: () => status, querySelector: () => ({})},
+    document: {getElementById: () => status, querySelector: () => ({}), addEventListener() {}},
     window: {addEventListener() {}},
+    LTZWaveTimeline: class {update() {}},
+    LTZScoreFeedback: class {update() {} reconnect() {}},
     CalibrationDisplay: {create: () => ({update() {}})},
     TowerDefenceView: {create(options) {callbacks = options; return {
       applyState() { options.onAssetStatus({ready: false, requested: 2, loaded: 0, failed: 0, pending: 2}); },

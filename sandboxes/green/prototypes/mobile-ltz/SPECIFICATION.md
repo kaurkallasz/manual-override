@@ -634,6 +634,17 @@ switching off suction. A changed mapping or an observed position change is
 replanned before another endpoint move. Known occupied fixed destinations wait
 for clearance.
 
+When a disputed fixed marker leaves only part of the board independently verified,
+the owner publishes `partial` with a fresh convex region. Each cue endpoint must
+lie inside this region before acquisition and throughout its approach/descent.
+Disputed markers cannot be newly acquired even inside the region; already acquired
+endpoints can continue there. An unrelated disputed edge marker does not stop
+interior endpoints. Losing coverage holds through the same Stop route and retains
+the acquired pose and suction. Recovery needs fresh region evidence, not a new
+sighting of the hidden endpoint. Camera orientation is accounted for; expired,
+missing or malformed regions hold, and confirmed map changes still invalidate.
+Play explains selected disputed/outside-region endpoints separately from reach.
+
 Queue startup stores tag IDs but does not convert every row to robot poses.
 Acquisition and pose validation happen for the current row only. A mapped but
 unreachable endpoint reports the row, source/destination role and marker ID;

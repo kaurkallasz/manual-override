@@ -14,7 +14,7 @@ DATA_DIR = HERE / 'data'
 CONTRACT = 'photon.progress'
 VERSION = 2
 MANIFEST = {'name': 'Photon Progress', 'group': 'Photon Engine',
-            'description': 'Saved LTZ players, credits, three-win control unlocks and performance history.',
+            'description': 'Saved LTZ players, credits, event control unlocks and performance history.',
             'default_page': '', 'pages': [{'path': '', 'label': 'Player progress'}]}
 bp = Blueprint('photon_progress', __name__)
 _live = live.LiveState()
@@ -72,6 +72,12 @@ def history_snapshot(query):
     return _output({'history': _ready().history(query.get('player_id'), query)})
 
 
+def event_results_snapshot(query):
+    """photon.progress v2: read-only data for a future scoreboard consumer."""
+    return _output({'results': _ready().event_results(query.get('event_id'),
+                    cursor=query.get('cursor',0),limit=query.get('limit',100))})
+
+
 def player_command(side, value):
     """Owner-public mutation; caller must authenticate the supplied side."""
     if side not in ('green', 'purple') or not isinstance(value, dict):
@@ -79,12 +85,13 @@ def player_command(side, value):
     if value.get('side', side) != side:
         raise PermissionError('wrong player side')
     action = value.get('action')
+    if not value.get('event_id'):raise ValueError('Event identity required; refresh this client')
     if action == 'create':
         if type(value.get('select', False)) is not bool:
             raise ValueError('select must be true or false')
-        result = _ready().create_player(value.get('name'), value.get('operation_id'), side=side if value.get('select') else None)
+        result = _ready().create_player(value.get('name'), value.get('operation_id'), side=side if value.get('select') else None,event_id=value['event_id'])
     elif action == 'select':
-        _ready().select_player(side, value.get('player_id'))
+        _ready().select_player(side, value.get('player_id'),value['event_id'])
         result = {}
     else:
         result = _ready().mutate_player(side, value)
@@ -104,6 +111,12 @@ def reserve_roster(value):
     return _output({'reservation': result})
 
 
+def release_start_reservation(value):
+    _ready().release_start_reservation(value['id'])
+    _live.bump()
+    return _output()
+
+
 def release_roster(value):
     _ready().release_roster(value['id'])
     _live.bump()
@@ -116,9 +129,59 @@ def complete_lesson(value):
     return _output({'result': result})
 
 
+def economy_snapshot():
+    return _ready().economy_snapshot()
+
+def economy_command(value):
+    result=_ready().save_prices(value)
+    _live.bump()
+    return {**economy_snapshot(),'result':result}
+
+def event_snapshot():
+    return progress_snapshot()
+
+
+def event_preview(value):
+    _ready().event_preview(value)
+    return _output()
+
+
+def event_command(value):
+    result=_ready().event_command(value);_live.bump()
+    return _output({'result':result,**_ready().snapshot()})
+
+
+def bind_game_atoms(value):
+    result=_ready().bind_atoms(value);_live.bump()
+    return _output({'game':result})
+
+
+def advance_level(value):
+    result=_ready().advance_level(value);_live.bump()
+    return _output({'attempt':result})
+
+
 def control_policy(side):
     """Read-only server capability contract; never accepts browser claims."""
     return _output(_ready().control_policy(side))
+
+
+def saved_game_command(value):
+    """Game serializes this between-match operation with Start and transitions."""
+    result = _ready().game_command(value)
+    _live.bump()
+    return _output({'result': result})
+
+
+def saved_game_preview(value):
+    _ready().game_preview(value)
+    return _output()
+
+
+def prepare_game():
+    _ready().prepare_game()
+    _live.bump()
+    return progress_snapshot()
 
 
 def hub_init(ctx):
@@ -221,6 +284,13 @@ def export_api():
     response = jsonify(backup)
     response.headers['Content-Disposition'] = 'attachment; filename=ltz-player-progress.json'
     return response
+
+
+@bp.route('/api/event-results')
+def event_results_api():
+    # Prepared data only. Public web access is a separate, future feature.
+    _admin()
+    return jsonify(event_results_snapshot(request.args))
 
 
 @bp.route('/api/backup', methods=['POST'])

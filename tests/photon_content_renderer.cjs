@@ -36,11 +36,12 @@ const state = {
   assert.equal(requested[0].url, '/s/gamemaster/p/content-owner/assets/test.png?v=one');
   view.applyState(state);
   assert.equal(requested.length, 1, 'unchanged snapshots do not refetch images');
+  const obsoleteLoad = requested[0].onload;
   view.applyState({...state, presentation: {...state.presentation, revision: 'two', assets: {'map/test': 'test.png?v=two'}}});
   assert.equal(requested.length, 2, 'art-only revision loads at unchanged layout revision');
   requested[1].onload();
   await new Promise(resolve => setImmediate(resolve));
-  requested[0].onload();
+  obsoleteLoad();
   await new Promise(resolve => setImmediate(resolve));
   assert.ok(drawn.includes('/s/gamemaster/p/content-owner/assets/test.png?v=two'));
   assert.ok(!drawn.includes('/s/gamemaster/p/content-owner/assets/test.png?v=one'), 'late old image cannot overwrite new art');

@@ -15,6 +15,7 @@ no-ops that accept their args and return (0, "").
 
 Stdlib only (urllib + json + threading); no new dependencies.
 """
+from shared import delay_trace as trace
 
 import json
 import math
@@ -30,6 +31,7 @@ import urllib.request
 RELAY_PATH = "/s/gamemaster/p/dobot-mg400-relay"
 HEARTBEAT_SECS = 0.7    # refresh the ~2 s lease comfortably ahead of expiry
 HTTP_TIMEOUT = 8.0      # per-request timeout (seconds)
+FEEDBACK_TIMEOUT = 1.0  # bound stream reads and teardown; freshness stays at 1.5 s
 
 
 class RelayError(Exception):
@@ -79,8 +81,12 @@ class RelayClient:
         self._hb_running = False
         self._hb_ok = False           # last heartbeat succeeded
         self._relay_state = None      # cached relay state object (see contract)
+        self._feedback_stop = threading.Event()
+        self._feedback_thread = None
+        self._feedback_error = None
 
     # -- HTTP plumbing --------------------------------------------------------
+    @trace.traced('adapter.purple.post')
     def _post(self, path, payload=None):
         """POST JSON to the relay; return (status_code, parsed_json_or_None)."""
         url = self.base + path
@@ -108,6 +114,7 @@ class RelayClient:
         except (urllib.error.URLError, OSError, ValueError):
             return None, None
 
+    @trace.traced('adapter.purple.get')
     def _get(self, path):
         url = self.base + path
         headers = {"X-HHH-Auth": self.auth} if self.auth else {}
@@ -134,9 +141,10 @@ class RelayClient:
             raise RelayError((body or {}).get("error", "relay arm connect failed"),
                              status=status)
 
+    @trace.traced('adapter.purple.store_state')
     def _store_state(self, body):
         """A delayed heartbeat must not undo a newer connection/Enable snapshot."""
-        with self._lock:
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
             old, _ = self._our_arm_and_lease(self._relay_state)
             new, _ = self._our_arm_and_lease(body)
             old_epoch, new_epoch = old.get('motion_epoch'), new.get('motion_epoch')
@@ -169,7 +177,7 @@ class RelayClient:
         if not body or not body.get("ok"):
             raise RelayError((body or {}).get("error", "acquire failed"),
                              holder=(body or {}).get("holder"), status=status)
-        with self._lock:
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
             self._token = body.get("token")
             self._motion_epoch = body.get("motion_epoch")
             self._hb_ok = True
@@ -178,9 +186,61 @@ class RelayClient:
 
     def _start_heartbeat(self):
         self._hb_running = True
+        self._feedback_stop.clear()
         self._hb_thread = threading.Thread(
             target=self._heartbeat_loop, name="relay-heartbeat", daemon=True)
         self._hb_thread.start()
+        self._feedback_thread = threading.Thread(
+            target=self._feedback_loop, name="relay-feedback-" + self.side, daemon=True)
+        self._feedback_thread.start()
+
+    def _feedback_loop(self):
+        """Receive measured state independently of HTTP heartbeat/monitor delays.
+
+        This stream cannot acquire, renew or enable a lease. The existing
+        heartbeat and every motion check remain authoritative.
+        """
+        headers = {"Accept": "text/event-stream"}
+        if self.auth:
+            headers["X-HHH-Auth"] = self.auth
+        req = urllib.request.Request(self.base + "/api/feedback?side=" + self.side,
+                                     headers=headers)
+        while not self._feedback_stop.is_set():
+            try:
+                with urllib.request.urlopen(req, timeout=FEEDBACK_TIMEOUT) as response:
+                    while not self._feedback_stop.is_set():
+                        line = response.readline(65537)
+                        if not line or len(line) > 65536:
+                            raise ValueError("Relay feedback stream ended or exceeded its frame limit")
+                        if not line.startswith(b"data: "):
+                            continue
+                        value = json.loads(line[6:])
+                        if (not isinstance(value, dict)
+                                or value.get('contract') != 'hhh.relay.feedback'
+                                or type(value.get('version')) is not int or value['version'] != 1
+                                or value.get('status') != 'ready'
+                                or not isinstance(value.get('arms'), dict)
+                                or not isinstance(value['arms'].get(self.side), dict)):
+                            raise ValueError("Relay feedback contract unavailable")
+                        arm = value['arms'][self.side]
+                        if (any(type(arm.get(key)) is not bool for key in
+                                ('connected', 'enabled', 'feedback_ok', 'motion_ready'))
+                                or type(arm.get('feedback_at')) not in (int, float)
+                                or not math.isfinite(arm['feedback_at']) or arm['feedback_at'] < 0
+                                or type(arm.get('robot_mode')) is not int
+                                or arm.get('motion_epoch') is not None and type(arm['motion_epoch']) is not int
+                                or any(not isinstance(arm.get(key), list) or len(arm[key]) != 4
+                                       or any(type(v) not in (int, float) or not math.isfinite(v) for v in arm[key])
+                                       for key in ('pose', 'joints'))):
+                            raise ValueError("Relay feedback measurements unavailable")
+                        if self._feedback_stop.is_set():
+                            break
+                        trace.measure('adapter.feedback_age', max(0, (time.time()-arm['feedback_at'])*1000), side=self.side, feedback_at=arm['feedback_at'])
+                        self._store_state(value)
+                        self._feedback_error = None
+            except (OSError, ValueError, urllib.error.URLError) as exc:
+                self._feedback_error = str(exc)
+            self._feedback_stop.wait(.5)
 
     def _heartbeat_loop(self):
         """Refresh the lease ~every HEARTBEAT_SECS and cache the returned state."""
@@ -189,23 +249,23 @@ class RelayClient:
             if token is None:
                 break
             status, body = self._post("/api/heartbeat",
-                                      {"side": self.side, "token": token})
+                                      {"side": self.side, "token": token, "feedback_only": True})
             if status is not None and body and body.get("ok"):
-                with self._lock:
+                with trace.locked(self._lock, 'adapter.purple.state_lock'):
                     self._hb_ok = True
                 if body.get("state"):
                     self._store_state(body["state"])
             else:
                 # Lost the lease (expired / revoked / unreachable): stop holding it.
-                with self._lock:
+                with trace.locked(self._lock, 'adapter.purple.state_lock'):
                     self._hb_ok = False
                     if status is not None:      # a definite rejection, not a blip
                         self._token = None
-            time.sleep(HEARTBEAT_SECS)
+            self._feedback_stop.wait(HEARTBEAT_SECS)
 
     def is_connected(self):
         """True while we hold a valid token and heartbeats are succeeding."""
-        with self._lock:
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
             return self._token is not None and self._hb_ok
 
     # -- state mapping --------------------------------------------------------
@@ -248,12 +308,13 @@ class RelayClient:
         code, value = self._get('/api/z-limits')
         return self.validate_z_limits(value if code == 200 else None)
 
+    @trace.traced('adapter.purple.get_state')
     def get_state(self):
         """Return the controller-shaped status dict derived from the cached relay
         state, sourced from OUR side's arm + lease. Shape matches the direct driver's
         get_state() so _status_dict and the existing UI keep working. Degrades
         gracefully (connected=False) when no relay state has arrived yet."""
-        with self._lock:
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
             rs = dict(self._relay_state) if self._relay_state else None
             have_token = self._token is not None
             hb_ok = self._hb_ok
@@ -285,6 +346,8 @@ class RelayClient:
             "last_feedback": stamp if fresh else 0.0,
             "feedback_ok": fresh,
             "motion_epoch": arm.get("motion_epoch"),
+            "motion_invalidation": arm.get("motion_invalidation"),
+            "feedback_stream_error": self._feedback_error,
             "motion_ready": bool(fresh and arm.get("motion_ready") is True
                                  and arm.get("robot_mode") in (5, 7)
                                  and type(self._motion_epoch) is int
@@ -301,7 +364,7 @@ class RelayClient:
 
     def get_target(self):
         """OUR side's commanded target ([x,y,z,r]) or None."""
-        with self._lock:
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
             rs = dict(self._relay_state) if self._relay_state else None
         arm, _ = self._our_arm_and_lease(rs)
         return arm.get("target")
@@ -334,7 +397,7 @@ class RelayClient:
             float(clamped.get("z", z)),
             float(clamped.get("r", r)),
         ]
-        with self._lock:
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
             arm, _ = self._our_arm_and_lease(self._relay_state)
             if self._token != token or self._motion_epoch != epoch or arm.get('motion_epoch') != epoch:
                 return False, "Arm changed while moving. Reconnect to synchronize controls."
@@ -369,7 +432,7 @@ class RelayClient:
         clamped = body.get("clamped") or {}
         target = [float(clamped.get(f"j{index + 1}", joints[index]))
                   for index in range(4)]
-        with self._lock:
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
             arm, _ = self._our_arm_and_lease(self._relay_state)
             if self._token != token or self._motion_epoch != epoch or arm.get('motion_epoch') != epoch:
                 return False, {"error": "Arm changed while moving. Reconnect to synchronize controls."}
@@ -440,15 +503,21 @@ class RelayClient:
 
     # -- teardown -------------------------------------------------------------
     def close(self):
-        """Stop heartbeating and release the floor."""
+        """Release the lease immediately, then stop owned transport resources."""
         self._hb_running = False
+        self._feedback_stop.set()
+        with trace.locked(self._lock, 'adapter.purple.state_lock'):
+            token, self._token = self._token, None
+            self._hb_ok = False
+        if token is not None:
+            self._post("/api/release", {"side": self.side, "token": token})
+        # The reader owns its HTTPResponse. Closing it from here races with
+        # http.client's chunk parser; its one-second socket timeout bounds exit.
+        thread = self._feedback_thread
+        if thread and thread.is_alive() and threading.current_thread() is not thread:
+            thread.join(timeout=FEEDBACK_TIMEOUT + .5)
+        self._feedback_thread = None
         thread = self._hb_thread
         if thread and thread.is_alive() and threading.current_thread() is not thread:
             thread.join(timeout=1.0)
         self._hb_thread = None
-        token = self._token
-        if token is not None:
-            self._post("/api/release", {"side": self.side, "token": token})
-        with self._lock:
-            self._token = None
-            self._hb_ok = False

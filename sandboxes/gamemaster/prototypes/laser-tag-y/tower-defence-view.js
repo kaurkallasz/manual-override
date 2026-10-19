@@ -1,6 +1,7 @@
 (function (global) {
   "use strict";
 
+  const breakerArt = global.BreakerRenderer || (typeof require === 'function' ? require('./breaker-renderer.js') : null);
   const WIDTH = 1696;
   const HEIGHT = 960;
   const LIVE_POD_SIZE = 112;
@@ -15,6 +16,7 @@
   const TOWER_ACTIVATION_FPS = 24;
   const TOWER_ACTIVATION_DURATION_S = 3;
   const TOWER_DEPLOYMENT_FLASH_S = 0.8;
+  const TOWER_ATOM_POWER_DOWN_S = 0.6;
   const TOWER_REPLENISH_PULSE_S = 0.35;
   const ARUCO_FIELD_CLEARANCE = 20;
   const CORE_MARKER_VISUAL_SIZE = 116;
@@ -69,7 +71,7 @@
     dense: Object.freeze({
       name: "dense",
       targetFps: 60,
-      trailSamples: 2,
+      trailSamples: 1,
       burnFrameDivisor: 2,
       flameSegments: 9,
       machineGunBullets: 2,
@@ -91,6 +93,14 @@
     return EFFECT_QUALITY_PROFILES.full;
   }
 
+  // Dropping JS references alone leaves Safari's canvas/decoded-image backing
+  // stores alive until a later GC, which can exceed a phone's process budget.
+  function releaseRaster(value) {
+    if (!value) return;
+    if (typeof value.getContext === 'function') value.width = value.height = 0;
+    else value.removeAttribute?.('src');
+  }
+
   // Pixel budgets bound memory even when the Gamemaster changes sprite sizes.
   function rasterCache(maxPixels) {
     const entries = new Map();
@@ -98,8 +108,14 @@
     return {
       get: key => entries.get(key),
       has: key => entries.has(key),
-      clear() { entries.clear(); pixels = 0; },
+      clear() { for (const value of entries.values()) releaseRaster(value); entries.clear(); pixels = 0; },
       set(key, canvas) {
+        const previous = entries.get(key);
+        if (previous === canvas) return;
+        if (previous) {
+          pixels -= previous.width * previous.height;
+          entries.delete(key); releaseRaster(previous);
+        }
         const cost = canvas.width * canvas.height;
         if (cost > maxPixels) return;
         while (entries.size && (pixels + cost > maxPixels || entries.size >= 512)) {
@@ -107,6 +123,7 @@
           const removed = entries.get(oldest);
           pixels -= removed.width * removed.height;
           entries.delete(oldest);
+          releaseRaster(removed);
         }
         entries.set(key, canvas);
         pixels += cost;
@@ -681,16 +698,20 @@
     }
 
     const images = new Map();
+    const loadedAssets = new Map(), ownedAssets = new Set();
+    const imageQueue = [], pendingImages = new Set();
+    let activeImages = 0;
     const gameImages = new Map();
     const sceneImages = new Map();
     const markerImages = new Map();
-    const tintedEffectCache = new Map();
+    const tintedEffectCache = rasterCache(2 * 1024 * 1024);
     const enemySpriteCache = rasterCache(3 * 1024 * 1024);
     const effectRasterCache = rasterCache(2 * 1024 * 1024);
     const enemyGlowCache = rasterCache(4 * 1024 * 1024);
     const scaledImageIds = new WeakMap();
     let nextScaledImageId = 0;
     let visualStateCache = null;
+    let rowBarrierRaster = null, rowBarrierRasterKey = null;
     const motion = enemyMotion({delay:options.enemyInterpolationDelay});
     const fieldGeometryCache = new Map();
     let geometrySignature = "";
@@ -698,6 +719,7 @@
     const enemyTrailHistory = new Map();
     const towerRenderAngles = new Map();
     const towerDeploymentFlashes = new Map();
+    const towerAtomGlows = new Map();
     let socketRecordCache = null;
     let socketRecordMapCache = null;
     let staticFieldKeepOutCache = null;
@@ -756,38 +778,80 @@
       try { options.onAssetStatus?.({...assetLoads, base:assetRoot, revision:assetRevision}); }
       catch(error) { console.warn("Asset diagnostics unavailable", error); }
     }
-    function loadImage(url) {
+    function releaseUnusedAssets() {
+      const keep = new Set([...gameImages.values(), ...sceneImages.values(), ...markerImages.values(),
+        ...[...loadedAssets.values()].flat()]);
+      for (const value of ownedAssets) if (!keep.has(value)) {
+        releaseRaster(value); ownedAssets.delete(value);
+      }
+    }
+    function pumpImages() {
+      while (activeImages < 4 && imageQueue.length) imageQueue.shift()();
+    }
+    function cancelImageLoads() {
+      // Empty the queue before cancelling active work: cancellations free slots.
+      imageQueue.length = 0;
+      for (const cancel of [...pendingImages]) cancel();
+    }
+    function loadImage(url, prepare = null) {
       if (!url) return Promise.reject(new Error("asset unavailable"));
       if (images.has(url)) return images.get(url);
+      const generation = assetGeneration;
       const promise = new Promise((resolve, reject) => {
-        const generation = assetGeneration;
-        const image = new Image();
+        let image = null, started = false, finished = false;
         assetLoads.requested++; assetLoads.pending++; assetLoads.last_url=url;
         reportAssetLoads();
-        image.onload = () => {
-          if(destroyed || generation !== assetGeneration) { reject(new Error("superseded asset request")); return; }
-          assetLoads.loaded++; assetLoads.pending--; assetLoads.last_url=url;
-          assetFailures.delete(url);
-          assetLoads.failed = assetFailures.size;
-          assetLoads.last_error = [...assetFailures.values()].at(-1) || null;
-          reportAssetLoads(); resolve(image);
-        };
-        image.onerror = () => {
+        const finish = (error, value) => {
+          if (finished) return;
+          finished = true;
+          if (image) image.onload = image.onerror = null;
+          pendingImages.delete(cancel);
+          if (started) activeImages--;
+          if (error || prepare) releaseRaster(image);
           if (!destroyed && generation === assetGeneration) {
-            images.delete(url);
             assetLoads.pending--; assetLoads.last_url=url;
-            assetLoads.last_error=`Artwork failed to load: ${url}`;
-            assetFailures.set(url, assetLoads.last_error);
+            if (error) {
+              images.delete(url);
+              assetFailures.set(url, `Artwork failed to load: ${url}`);
+              (options.onAssetError || console.warn)(`Artwork failed to load: ${url}`);
+            } else {
+              const resources = Array.isArray(value) ? value : [value];
+              loadedAssets.set(url, resources);
+              for (const resource of resources) ownedAssets.add(resource);
+              assetLoads.loaded++; assetFailures.delete(url);
+            }
             assetLoads.failed = assetFailures.size;
+            assetLoads.last_error = [...assetFailures.values()].at(-1) || null;
             reportAssetLoads();
-            const report = options.onAssetError || console.warn;
-            report(`Artwork failed to load: ${url}`);
           }
-          reject(new Error(`asset failed: ${url}`));
+          if (error) reject(error); else resolve(value);
+          pumpImages();
         };
-        image.src = url;
+        const cancel = () => finish(new Error('superseded asset request'));
+        pendingImages.add(cancel);
+        imageQueue.push(() => {
+          if (finished) return;
+          started = true; activeImages++;
+          image = new Image();
+          image.onload = () => {
+            if (destroyed || generation !== assetGeneration) { cancel(); return; }
+            const scratch = new Set();
+            const makeCanvas = () => {
+              const canvas = document.createElement('canvas'); scratch.add(canvas); return canvas;
+            };
+            try {
+              const value = prepare ? prepare(image, makeCanvas) : image;
+              for (const retained of (Array.isArray(value) ? value : [value])) scratch.delete(retained);
+              finish(null, value);
+            } catch (error) { finish(error); }
+            finally { for (const canvas of scratch) releaseRaster(canvas); }
+          };
+          image.onerror = () => finish(new Error(`asset failed: ${url}`));
+          image.src = url;
+        });
       });
       images.set(url, promise);
+      pumpImages();
       return promise;
     }
 
@@ -803,9 +867,12 @@
       if (revision === assetRevision) return false;
       assetRevision = revision;
       assetGeneration += 1;
+      cancelImageLoads();
       assetRoot = next.base ? sandboxRoot + String(next.base).replace(/\/$/, "") : "";
       assetPaths = next.assets || {};
       images.clear();
+      loadedAssets.clear();
+      releaseUnusedAssets();
       assetFailures.clear();
       gameImagesLoading = null;
       if (levelRetryTimer != null) clearTimeout(levelRetryTimer);
@@ -845,14 +912,20 @@
       if (!assetRoot) return {game:nextGameImages, markers:nextMarkerImages};
       const pending = [];
       for (const assetId of Object.keys(assetPaths)) {
+        if (assetId === 'enemy/breaker/archer-atlas' && breakerArt) {
+          pending.push(loadImage(assetUrl(assetId), (image, makeCanvas) => breakerArt.frames(image, makeCanvas)).then(frames => {
+            frames.forEach((frame, index) => nextGameImages.set(`enemy:breaker-archer:${index}`, frame));
+          }));
+          continue;
+        }
         const upgrade = assetId.match(/^tower\/([^/]+)\/upgrade\/([234])$/);
         if (upgrade) {
-          pending.push(loadImage(assetUrl(assetId)).then((image) => {
-            if (!image) return;
+          pending.push(loadImage(assetUrl(assetId), (image, makeCanvas) => {
+            const textures = [];
             // Decode the two-cell art once, removing its magenta matte and borders.
             const cell = Math.floor(image.naturalWidth / 2);
             for (const [index, layer] of ['base', 'head'].entries()) {
-              const raw = document.createElement('canvas');
+              const raw = makeCanvas();
               raw.width = cell - 8; raw.height = image.naturalHeight - 8;
               const ctx = raw.getContext('2d', {willReadFrequently: true});
               ctx.drawImage(image, index * cell + 4, 4, raw.width, raw.height, 0, 0, raw.width, raw.height);
@@ -868,7 +941,7 @@
                 }
               }
               ctx.putImageData(pixels, 0, 0);
-              const texture = document.createElement('canvas');
+              const texture = makeCanvas();
               texture.width = texture.height = 256;
               if (layer === 'base' && right >= left && bottom >= top) {
                 // Fill the existing 88 px sprite box with the pedestal, not atlas padding.
@@ -884,22 +957,28 @@
               } else {
                 texture.getContext('2d').drawImage(raw, 0, 0, 256, 256);
               }
-              raw.width = raw.height = 1;
-              nextGameImages.set(`tower:${upgrade[1]}:${layer}:${upgrade[2]}`, texture);
+              releaseRaster(raw);
+              textures.push(texture);
             }
+            return textures;
+          }).then(textures => {
+            textures.forEach((texture, index) => nextGameImages.set(`tower:${upgrade[1]}:${['base', 'head'][index]}:${upgrade[2]}`, texture));
           }));
           continue;
         }
         if (assetId === 'field/upgrade-atlas') {
-          pending.push(loadImage(assetUrl(assetId)).then(image => {
-            if (!image) return;
+          pending.push(loadImage(assetUrl(assetId), (image, makeCanvas) => {
+            const textures = [];
             for (let tier = 2; tier <= 4; tier++) {
-              const texture = document.createElement('canvas');
+              const texture = makeCanvas();
               texture.width = 512; texture.height = 96;
               texture.getContext('2d').drawImage(image, 0, (tier - 2) * image.naturalHeight / 3,
                 image.naturalWidth, image.naturalHeight / 3, 0, 0, 512, 96);
-              nextGameImages.set(`field:${tier}`, texture);
+              textures.push(texture);
             }
+            return textures;
+          }).then(textures => {
+            textures.forEach((texture, index) => nextGameImages.set(`field:${index + 2}`, texture));
           }));
           continue;
         }
@@ -1197,14 +1276,15 @@
       return 44 / 3 * ENEMY_VISUAL_SCALE * enemyVisualScale(enemyType);
     }
 
-    function cachedEnemySprite(enemyType, frame, facingX, facingY) {
+    function cachedEnemySprite(enemyType, frame, facingX, facingY, variant = enemyType) {
       const directions = 16;
       const rotation = Math.atan2(facingY, facingX) - Math.PI / 2;
       const direction = ((Math.round(rotation / (Math.PI * 2) * directions) % directions) + directions) % directions;
       const drawSize = enemyVisualSize(enemyType);
-      const key = `${enemyType}:${frame}:${direction}:${drawSize}`;
-      if (enemySpriteCache.has(key)) return enemySpriteCache.get(key);
-      const source = gameImages.get(`enemy:${enemyType}:${frame}`);
+      const key = `${variant}:${frame}:${direction}:${drawSize}`;
+      const cached = enemySpriteCache.get(key);
+      if (cached) return cached;
+      const source = gameImages.get(`enemy:${variant}:${frame}`);
       if (!source) return null;
       const canvasSize = Math.ceil(drawSize * Math.SQRT2) + 2;
       const sprite = document.createElement("canvas");
@@ -1231,7 +1311,9 @@
       const shake = electrified ? 2.5 + intensity * 3.5 : 0;
       const x = rawX + (electrified ? Math.sin(visualTime * 61 + Number(enemy.id)) * shake : 0);
       const y = rawY + (electrified ? Math.cos(visualTime * 47 + Number(enemy.id) * 1.7) * shake : 0);
-      const sprite = cachedEnemySprite(enemy.enemy_type, frame, facingX, facingY);
+      const archerPose = breakerArt?.pose(enemy, visualTime);
+      const sprite = cachedEnemySprite(enemy.enemy_type, archerPose ?? frame, facingX, facingY,
+        archerPose == null ? enemy.enemy_type : 'breaker-archer');
       let history = [];
       if (electrified) {
         history = enemyTrailHistory.get(enemy.id) || [];
@@ -1252,7 +1334,7 @@
             const trail = history[index];
             const alpha = (index + 1) / history.length * 0.16 * intensity;
             context.globalAlpha = alpha;
-            context.drawImage(sprite, trail.x - sprite.width / 2, trail.y - sprite.height / 2);
+            context.drawImage(sprite, Math.round(trail.x - sprite.width / 2), Math.round(trail.y - sprite.height / 2));
           }
           context.globalAlpha = 0.65 + intensity * 0.35;
           // Applying a Canvas shadow for each enemy makes the browser rasterize
@@ -1260,10 +1342,10 @@
           const glow = effectQuality.shadowScale > 0
             ? electrifiedSprite(sprite, Math.round((9 + intensity * 15) * effectQuality.shadowScale / 4) * 4)
             : sprite;
-          context.drawImage(glow, x - glow.width / 2, y - glow.height / 2);
+          context.drawImage(glow, Math.round(x - glow.width / 2), Math.round(y - glow.height / 2));
           context.restore();
         } else {
-          context.drawImage(sprite, x - sprite.width / 2, y - sprite.height / 2);
+          context.drawImage(sprite, Math.round(x - sprite.width / 2), Math.round(y - sprite.height / 2));
         }
         if (Number(enemy.burn_until || 0) > visualTime) {
           // Lower detail slows the flicker animation; the burn cue stays
@@ -1279,6 +1361,7 @@
       context.beginPath();
       context.arc(x, y, size / 3, 0, Math.PI * 2);
       context.fill();
+      if (archerPose != null) breakerArt.fallback(context, enemy, x, y, size);
     }
 
     function towerPlacementId(tower) {
@@ -1313,7 +1396,7 @@
     }
 
     function drawTargetingOverlay(context, tower) {
-      if (tower.destroyed) return;
+      if ((tower.destroyed || tower.deactivated)) return;
       const targeting = towerTargeting(tower);
       const selected = String(tower.parent_placement_id || towerPlacementId(tower)) === selectedTowerId;
       const color = tower.owner === "green" ? "53,208,127" : "192,132,252";
@@ -1364,7 +1447,7 @@
     }
 
     function drawAimHandle(context, tower) {
-      if (!tower || tower.destroyed || towerPlacementId(tower) !== selectedTowerId) return;
+      if (!tower || (tower.destroyed || tower.deactivated) || towerPlacementId(tower) !== selectedTowerId) return;
       const handle = targetingHandlePoint(tower, towerTargeting(tower));
       const color = tower.owner === "green" ? "#35d07f" : "#c084fc";
       context.save();
@@ -1394,6 +1477,16 @@
       const height = Math.max(1, Math.round(size));
       const source = width <= 256 && height <= 256
         ? scaledImage(image, width, height) : image;
+      if (rotation === 0 && source !== image) {
+        // Cached pixel-art effects already have the destination dimensions.
+        // Re-scaling fractional sizes and pushing a transform for every burning
+        // enemy defeats that cache; stamp the raster directly instead.
+        const previousAlpha = context.globalAlpha;
+        context.globalAlpha = Math.max(0, Math.min(1, alpha));
+        context.drawImage(source, Math.round(x - width / 2), Math.round(y - height / 2));
+        context.globalAlpha = previousAlpha;
+        return;
+      }
       context.save();
       context.globalAlpha = Math.max(0, Math.min(1, alpha));
       context.translate(x, y);
@@ -1759,7 +1852,7 @@
 
     function towerIsActivating(tower, runtimeVisualTime, gameState = state) {
       const age = towerActivationAge(tower, runtimeVisualTime);
-      return !tower.destroyed && age >= 0 && age < towerActivationDuration(gameState);
+      return !(tower.destroyed || tower.deactivated) && age >= 0 && age < towerActivationDuration(gameState);
     }
 
     function drawTowerActivation(context, tower, runtimeVisualTime, gameState = state) {
@@ -1821,8 +1914,16 @@
       context.restore();
     }
 
-    function drawTowerAtomBuff(context, tower, visualTime) {
-      if (tower.destroyed || tower.atom_buff_state !== "active") return;
+    function drawTowerAtomBuff(context, tower, now) {
+      const glow = towerAtomGlows.get(towerPlacementId(tower));
+      if ((tower.destroyed || tower.deactivated) || !glow) return;
+      const progress = glow.active ? 0 : Math.max(0, (now - glow.endedAt) / (1000 * TOWER_ATOM_POWER_DOWN_S));
+      if (progress >= 1) return;
+      // Presentation time keeps the pulse moving during setup and pause, and
+      // lets a power-down finish even if no further snapshots arrive.
+      const pulse = glow.active ? 0.7 + 0.2 * Math.sin(now / 1000 * Math.PI * 1.5) : glow.endPulse;
+      const fade = (1 - progress) ** 2;
+      const contraction = 1 - 0.24 * progress;
       const scale = towerUnitScale(tower);
       context.save();
       // Clip using the authored marker footprints, accounting for companion scale.
@@ -1834,15 +1935,30 @@
           (box.right - box.left) / scale, (box.bottom - box.top) / scale);
       }
       context.clip("evenodd");
-      const pulse = 0.65 + 0.15 * Math.sin(visualTime * Math.PI * 1.5);
       for (const [radius, width, alpha] of [[49, 12, .1], [50, 7, .22], [51, 2, .85]]) {
-        context.strokeStyle = `rgba(73,255,136,${alpha * pulse})`;
-        context.lineWidth = width;
+        context.strokeStyle = `rgba(73,255,136,${alpha * pulse * fade})`;
+        context.lineWidth = width * contraction;
         context.beginPath();
-        context.arc(tower.x, tower.y, radius, 0, Math.PI * 2);
+        context.arc(tower.x, tower.y, radius * contraction, 0, Math.PI * 2);
         context.stroke();
       }
       context.restore();
+    }
+
+    function drawTowerHealthBars(context, tower, visualTime) {
+      const health = towerHealthBarMetrics(tower, visualTime);
+      health.barFractions.forEach((fraction, row) => {
+        context.fillStyle = "#240b10";
+        context.fillRect(tower.x - 34, tower.y - 51 + row * 8, TOWER_HEALTH_BAR_WIDTH, 6);
+        context.fillStyle = health.healthRatio > 0.5 ? "#35d07f" : health.healthRatio > 0.2 ? "#ffb347" : "#ff5367";
+        context.fillRect(tower.x - 34, tower.y - 51 + row * 8, TOWER_HEALTH_BAR_WIDTH * fraction, 6);
+      });
+      if (health.barFractions.length === 2) {
+        context.fillStyle = "#aaffbf";
+        context.font = "900 9px ui-monospace";
+        context.fillText("×2", tower.x + 44, tower.y - 42);
+      }
+      return health;
     }
 
     function drawTowerIdleStatus(context, tower, visualTime) {
@@ -2098,7 +2214,7 @@
     function drawTowerHealthEffects(context, tower, visualTime, effectQuality) {
       const maximum = Math.max(1, Number(tower.max_hp || 1));
       const ratio = Math.max(0, Math.min(1, Number(tower.hp || 0) / maximum));
-      if (ratio >= 0.5 || tower.destroyed) return;
+      if (ratio >= 0.5 || (tower.destroyed || tower.deactivated)) return;
       const frame = Math.floor(visualTime * 8 + Number(tower.aruco_id || 0));
       const crackFrame = ratio < 0.1 ? 2 : ratio < 0.3 ? 1 : 0;
       const crackAlpha = 0.62 + Math.min(0.32, (0.5 - ratio) * 0.9);
@@ -2223,7 +2339,7 @@
     ) {
       const firedAt = Number(tower.last_fire_at);
       const target = tower.last_fire_target;
-      if (!Number.isFinite(firedAt) || !target || tower.destroyed) return;
+      if (!Number.isFinite(firedAt) || !target || (tower.destroyed || tower.deactivated)) return;
       const age = visualTime - firedAt;
       if (age < 0 || age > 0.58) return;
       const tx = Number(target.x);
@@ -2360,6 +2476,31 @@
     }
 
     function drawRowBarriers(context, gameState, runtimeTime) {
+      if (!(gameState.row_barrier_geometry || []).length) return;
+      const rows = gameState.row_barriers || [];
+      // Only a breaking barrier animates. Keep its flash live; reuse the
+      // stable lines, arrows and text between topology changes.
+      if (rows.some(row => !row.powered && row.changed_at != null
+          && runtimeTime >= row.changed_at && runtimeTime - row.changed_at < .8)) {
+        paintRowBarriers(context, gameState, runtimeTime);
+        return;
+      }
+      const key = JSON.stringify([geometrySignature, gameState.row_barrier_geometry,
+        rows.map(row => [row.row_id, row.powered, row.active_count])]);
+      if (!rowBarrierRaster) {
+        rowBarrierRaster = document.createElement('canvas');
+        rowBarrierRaster.width = WIDTH; rowBarrierRaster.height = HEIGHT;
+      }
+      if (key !== rowBarrierRasterKey) {
+        rowBarrierRasterKey = key;
+        const paint = rowBarrierRaster.getContext('2d');
+        paint.clearRect(0, 0, WIDTH, HEIGHT);
+        paintRowBarriers(paint, gameState, runtimeTime);
+      }
+      context.drawImage(rowBarrierRaster, 0, 0);
+    }
+
+    function paintRowBarriers(context, gameState, runtimeTime) {
       const states = gameState.row_barriers || [];
       const keepOuts = arucoFieldKeepOuts();
       context.save();
@@ -2587,14 +2728,23 @@
         context.translate(tower.x, tower.y);
         context.scale(unitScale, unitScale);
         context.translate(-tower.x, -tower.y);
+        if (tower.deactivated) {
+          const base = gameImages.get(`tower:${tower.tower_type}:base:${tower.upgrade_level}`) || gameImages.get(`tower:${tower.tower_type}:base`);
+          context.globalAlpha = 0.5;
+          if (base) context.drawImage(base, tower.x - TOWER_VISUAL_SIZE / 2, tower.y - TOWER_VISUAL_SIZE / 2, TOWER_VISUAL_SIZE, TOWER_VISUAL_SIZE);
+          else { context.fillStyle = '#4d5966'; context.fillRect(tower.x - 28, tower.y - 28, 56, 56); }
+          context.restore();
+          continue;
+        }
         if (tower.destroyed) {
           drawTowerDestruction(context, tower, visualTime, effectQuality);
           context.restore();
           continue;
         }
         if (drawTowerActivation(context, tower, runtimeVisualTime, visualState)) {
-          drawTowerAtomBuff(context, tower, runtimeVisualTime);
+          drawTowerAtomBuff(context, tower, now);
           drawTowerDeploymentFlash(context, tower, runtimeVisualTime, now);
+          drawTowerHealthBars(context, tower, visualTime);
           context.restore();
           continue;
         }
@@ -2670,18 +2820,7 @@
         context.fillStyle = context.strokeStyle;
         context.font = "900 11px ui-monospace";
         context.fillText(linkBonus.label, tower.x, tower.y - 59);
-        const health = towerHealthBarMetrics(tower, visualTime);
-        health.barFractions.forEach((fraction, row) => {
-          context.fillStyle = "#240b10";
-          context.fillRect(tower.x - 34, tower.y - 51 + row * 7, TOWER_HEALTH_BAR_WIDTH, 6);
-          context.fillStyle = health.healthRatio > 0.5 ? "#35d07f" : health.healthRatio > 0.2 ? "#ffb347" : "#ff5367";
-          context.fillRect(tower.x - 34, tower.y - 51 + row * 7, TOWER_HEALTH_BAR_WIDTH * fraction, 6);
-        });
-        if (health.barFractions.length === 2) {
-          context.fillStyle = "#aaffbf";
-          context.font = "900 9px ui-monospace";
-          context.fillText("×2", tower.x + 44, tower.y - 42);
-        }
+        const health = drawTowerHealthBars(context, tower, visualTime);
         if (health.damageAlpha > 0) {
           const notchX = tower.x - 34 + Math.max(
             0,
@@ -2691,7 +2830,7 @@
             ),
           );
           context.fillStyle = `rgba(255,179,71,${0.72 + health.damageAlpha * 0.28})`;
-          context.fillRect(notchX, tower.y - 51 + health.damageRow * 7, health.damageNotchWidth, 6);
+          context.fillRect(notchX, tower.y - 51 + health.damageRow * 8, health.damageNotchWidth, 6);
           context.save();
           context.strokeStyle = `rgba(255,83,103,${health.damageAlpha * 0.9})`;
           context.shadowColor = "#ff5367";
@@ -2708,7 +2847,7 @@
           context, tower, runtimeVisualTime, effectQuality
         );
         drawTowerDeploymentFlash(context, tower, runtimeVisualTime, now);
-        drawTowerAtomBuff(context, tower, runtimeVisualTime);
+        drawTowerAtomBuff(context, tower, now);
         context.restore();
       }
       markPass("towerMs");
@@ -2732,6 +2871,7 @@
         effectQuality,
       );
       drawMortarEffects(context, visualState, visualTime, effectQuality);
+      breakerArt?.arrows(context, visualState, visualTime);
       for (const tower of visualState.towers || []) {
         drawTowerFireEffect(
           context, tower, visualTime, enemiesById, effectQuality
@@ -2788,7 +2928,7 @@
         reportDiagnostics({...motion.diagnostics(sampledAt), peakFrameMs, frameSpikes});
         if (options.onPerformance) {
           const passes = Object.fromEntries(Object.entries(profilingTotals).map(([key, total]) => [key, total / Math.max(1, profilingFrames)]));
-          try { options.onPerformance({...renderStats, ...passes, cacheBytes: 4 * (enemySpriteCache.pixels + effectRasterCache.pixels + enemyGlowCache.pixels)}); }
+          try { options.onPerformance({...renderStats, ...passes, cacheBytes: 4 * (enemySpriteCache.pixels + effectRasterCache.pixels + enemyGlowCache.pixels + (rowBarrierRaster ? WIDTH * HEIGHT : 0))}); }
           catch (error) { console.warn("Render diagnostics unavailable", error); }
         }
         profilingFrames = 0; profilingTotals = {};
@@ -2800,10 +2940,19 @@
     }
 
     function applyState(nextState) {
+      if (destroyed) return;
+      if (nextState?.enemy_combat?.breaker_mode === 'ranged'
+          && (!breakerArt || nextState.enemy_combat.contract !== 'photon.enemy-combat'
+              || nextState.enemy_combat.version !== breakerArt.version)) {
+        throw new Error('Breaker archer renderer unavailable; refresh this display.');
+      }
+
       if (!motion.push(nextState, performance.now())) return;
       if (nextState?.run_id !== state?.run_id
+          || nextState?.level_revision !== state?.level_revision
           || Number(nextState?.runtime_time) < Number(state?.runtime_time)) {
         towerDeploymentFlashes.clear();
+        towerAtomGlows.clear();
       }
       state = nextState;
       visualStateCache = null;
@@ -2817,6 +2966,21 @@
       for (const id of towerRenderAngles.keys()) if (!placements.has(id)) towerRenderAngles.delete(id);
       for (const id of towerAimPreview.keys()) if (!placements.has(id)) towerAimPreview.delete(id);
       for (const id of towerDeploymentFlashes.keys()) if (!placements.has(id)) towerDeploymentFlashes.delete(id);
+      for (const id of towerAtomGlows.keys()) if (!placements.has(id)) towerAtomGlows.delete(id);
+      const receivedAt = performance.now();
+      for (const tower of [...(state?.towers || []), ...(state?.companions || [])]) {
+        const id = towerPlacementId(tower);
+        const identity = `${tower.aim_instance || ""}:${tower.activation_started_at}`;
+        const previous = towerAtomGlows.get(id);
+        if ((tower.destroyed || tower.deactivated) || previous?.identity !== identity) towerAtomGlows.delete(id);
+        if ((tower.destroyed || tower.deactivated)) continue;
+        if (tower.atom_buff_state === "active") {
+          towerAtomGlows.set(id, {identity, active: true});
+        } else if (towerAtomGlows.get(id)?.active) {
+          towerAtomGlows.set(id, {identity, active: false, endedAt: receivedAt,
+            endPulse: 0.7 + 0.2 * Math.sin(receivedAt / 1000 * Math.PI * 1.5)});
+        }
+      }
       stateReceivedAt = performance.now();
       frozenVisualAge = 0;
       const assetsChanged = setPresentation(nextState?.presentation);
@@ -2828,6 +2992,7 @@
     }
 
     function invalidateSocketGeometry() {
+      rowBarrierRasterKey = null;
       socketRecordCache = null;
       socketRecordMapCache = null;
       staticFieldKeepOutCache = null;
@@ -2836,6 +3001,7 @@
     }
 
     function setLevel(nextLevel, revision = null) {
+      if (destroyed) return level;
       if (
         !nextLevel
         || !Number.isFinite(Number(nextLevel.width))
@@ -2868,6 +3034,7 @@
         for (const [target, source] of [[gameImages, game.game], [markerImages, game.markers], [sceneImages, scene]]) {
           target.clear(); for (const [key, value] of source) target.set(key, value);
         }
+        releaseUnusedAssets();
         tintedEffectCache.clear(); enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear();
         level = nextLevel;
         levelRevision = Number.isFinite(Number(revision)) ? Number(revision) : null;
@@ -2988,7 +3155,7 @@
 
     function aimHandle(placementId = selectedTowerId) {
       const tower = selectedAimTower(placementId);
-      if (!tower || tower.destroyed) return null;
+      if (!tower || (tower.destroyed || tower.deactivated)) return null;
       const targeting = towerTargeting(tower);
       const point = targetingHandlePoint(tower, targeting);
       return {
@@ -3006,7 +3173,7 @@
 
     function aimFromPoint(placementId, x, y) {
       const tower = selectedAimTower(placementId);
-      if (!tower || tower.destroyed) return null;
+      if (!tower || (tower.destroyed || tower.deactivated)) return null;
       const targeting = towerTargeting(tower);
       return towerAimFromPoint(
         targeting.control,
@@ -3038,13 +3205,21 @@
       applyState,
       destroy() {
         destroyed = true;
+        cancelImageLoads();
         if (levelRetryTimer != null) clearTimeout(levelRetryTimer);
         if (animationFrame) global.cancelAnimationFrame(animationFrame);
         document.removeEventListener?.("visibilitychange", resetFpsSample);
         enemySpriteCache.clear(); effectRasterCache.clear(); enemyGlowCache.clear(); tintedEffectCache.clear();
         enemyTrailHistory.clear(); towerRenderAngles.clear(); towerAimPreview.clear();
         towerDeploymentFlashes.clear();
+        towerAtomGlows.clear();
         motion.clear();
+        images.clear(); loadedAssets.clear(); gameImages.clear(); sceneImages.clear(); markerImages.clear();
+        gameImagesLoading = null;
+        releaseUnusedAssets();
+        releaseRaster(rowBarrierRaster);
+        rowBarrierRaster = null; rowBarrierRasterKey = null;
+        releaseRaster(mapCanvas); releaseRaster(gameCanvas);
       },
       get level() {
         return level;

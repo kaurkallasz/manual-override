@@ -8,7 +8,7 @@ const purple=[
 ].map(([u,v,x,y])=>({u,v,x,y}));
 const green=purple.map(p=>({...p,u:1-p.u,v:1-p.v,x:p.x+10,y:p.y+80}));
 function controller(team='purple',rotated=true){
- const c={TEAM:team,LTZ:false,gameRadiusMin:150,gameRadiusMax:450,AUTO_PP_BASE_SAFE_RADIUS:220,
+ const c={AUTO_PP_PHYSICAL_TAG_HEIGHT_MM:31.5,TEAM:team,LTZ:false,gameRadiusMin:150,gameRadiusMax:450,AUTO_PP_BASE_SAFE_RADIUS:220,
   gameReachWorkspace:{x:[-450,450],y:[-450,450]},ws:{z:[-150,230]},LTX:true,cal2JointGuardCache:null,
   gameCalibration2:{},cal2PlanningBoundaryCache:null,cal2ReachBoundaryCache:null,
   gameArmCal2:side=>({points:Object.fromEntries((side==='green'?green:purple).map((p,i)=>['p'+i,{camera:p,pose:{...p,set:true}}]))}),
@@ -190,6 +190,7 @@ test('tag 100 after the marker 42 drop is inside the expanded camera arc and can
   assert(c.pointInsideRobotPolygon(tag.u,tag.v,boundary.map(p=>[p.u,p.v]),0),'The visible raised tag is inside the expanded whole arc');
   // Use the real bridge eligibility check, not only its rendering or labels.
   c.cuePoseAt=c.cal2PoseEvaluator(fit);
+  c.autoPpxCueEndpointIssue=()=>''; // This geometry fixture supplies a ready camera.
   const bridge=fs.readFileSync('shared/mobile_ltz/arm-bridge.js','utf8');
   vm.runInContext(bridge.slice(bridge.indexOf('function cueTargetAvailability('),bridge.indexOf('function syncControlMode(')),c);
   const available=c.cueTargetAvailability({id:100,nx:tag.u,ny:tag.v,lastSeenAt:Date.now()});

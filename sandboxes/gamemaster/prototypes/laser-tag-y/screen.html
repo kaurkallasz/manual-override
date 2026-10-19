@@ -10,25 +10,38 @@
 </style>
 <link rel="stylesheet" href="calibration-display.css">
 <script src="calibration-display.js"></script>
-</head>
+<link rel="stylesheet" href="shop.css?v=8"><script src="score-feedback.js?v=2"></script><link rel="stylesheet" href="wave-timeline.css?v=4"><script src="wave-timeline.js?v=3"></script></head>
 <body>
-<main class="viewport" aria-label="Laser Tag Y external Photon Game screen"><section class="stage"><canvas id="mapCanvas" width="1696" height="960" aria-label="Photon Game playfield"></canvas><canvas id="gameCanvas" width="1696" height="960" aria-label="Live Photon Game presentation"></canvas><div id="status" class="status" role="status" aria-live="polite">Loading Photon Game output…</div></section></main>
-<script src="tower-defence-view.js?v=18"></script>
+<main class="viewport" aria-label="Laser Tag Y external Photon Game screen"><section class="stage"><div id="matchScoreHud" class="ltzScoreHud ltzYScore ltzFieldScore green" role="group" aria-label="Match kills">
+  <div class="ltzScoreFace green"><span class="ltzScoreKills" role="group" aria-label="Kills" title="Kills"><strong id="matchKillNumber">0</strong></span></div>
+</div>
+<div id="purpleScoreHud" class="ltzScoreHud ltzYScore ltzFieldScore purple" aria-hidden="true">
+  <div class="ltzScoreFace purple"><span class="ltzScoreKills"><strong id="purpleKillNumber">0</strong></span></div>
+</div><div id="waveTimeline" hidden></div><div id="purpleWaveTimeline" class="purple" hidden aria-hidden="true"></div><canvas id="mapCanvas" width="1696" height="960" aria-label="Photon Game playfield"></canvas><canvas id="gameCanvas" width="1696" height="960" aria-label="Live Photon Game presentation"></canvas><div id="status" class="status" role="status" aria-live="polite">Loading Photon Game output…</div></section></main>
+<script src="tower-defence-view.js?v=19"></script>
 
 <script>
 const ROOT=location.pathname.split('/p/')[0],SELF=`${ROOT}/p/laser-tag-y`,status=document.getElementById('status');let view=null,events=null,artError='',latestState=null,artStatus=null;
 async function json(url){const response=await fetch(url),text=await response.text();let data={};try{data=text?JSON.parse(text):{}}catch(error){status.textContent=`Invalid game snapshot: ${error.message}`;status.className='status error'}if(!response.ok)throw Error(data.error||text||`HTTP ${response.status}`);return data}
 const calibrationDisplay=CalibrationDisplay.create(document.querySelector('.viewport'),ROOT);
-function paintStatus(){const state=latestState;if(!state)return;if(state.status!=='ready'){status.textContent=`Photon Game unavailable: ${state.error||'not ready'}`;status.className='status error';return}status.textContent=`${state.paused?'Paused':state.phase||'Setup'} · Wave ${state.wave||0} / ${state.wave_count||0} · ${state.active_enemies||0} orcs`;const warning=artError||(state.presentation?.status!=='ready'?(state.presentation?.error||'Artwork unavailable'):'');if(warning)status.textContent+=` · Artwork fallback: ${warning}`;const loading=artStatus&&!artStatus.ready;if(!warning&&loading)status.textContent+=` · Loading artwork (${artStatus.loaded}/${artStatus.loaded+artStatus.pending+artStatus.failed})`;status.className=warning?'status error':loading?'status':'status ready';document.title=`Laser Tag Y · ${state.level?.name||'Photon Game'}`}
-function applyState(state){latestState=state;calibrationDisplay.update(state);view?.applyState(state);paintStatus()}
+function paintStatus(){const state=latestState;if(!state)return;if(state.status!=='ready'){status.textContent=`Photon Game unavailable: ${state.error||'not ready'}`;status.className='status error';return}status.textContent=`${state.paused?'Paused':state.phase||'Setup'} · Wave ${state.wave||0} / ${state.wave_count||0} · ${state.active_enemies||0} orcs`;const warning=artError||(state.presentation?.status!=='ready'?(state.presentation?.error||'Artwork unavailable'):'');if(warning)status.textContent+=` · Artwork fallback: ${warning}`;const loading=artStatus&&!artStatus.ready;if(!warning&&loading)status.textContent+=` · Loading artwork (${artStatus.loaded}/${artStatus.loaded+artStatus.pending+artStatus.failed})`;status.className=warning?'status error':loading?'status':'status ready';if(state.phase==='won'&&state.contract_control_tier===4){status.textContent='You Win! Game Over · Stats and replay choices are on your player screens';status.className='status';}document.title=`Laser Tag Y · ${state.level?.name||'Photon Game'}`}
+const waveTimeline=new LTZWaveTimeline(document.getElementById('waveTimeline'));
+const purpleWaveTimeline=new LTZWaveTimeline(document.getElementById('purpleWaveTimeline'));
+const waveTimelines=[waveTimeline,purpleWaveTimeline];
+const matchScoreFeedback=new LTZScoreFeedback(null,null,null,{
+ killNumber:document.getElementById('matchKillNumber'),
+ copies:[{killNumber:document.getElementById('purpleKillNumber')}]
+});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)matchScoreFeedback.reconnect();});
+function applyState(state){waveTimelines.forEach(timeline=>timeline.update(state));matchScoreFeedback.update(state);document.getElementById('matchScoreHud').hidden=state.journey?.phase==='calibration';document.getElementById('purpleScoreHud').hidden=document.getElementById('matchScoreHud').hidden;latestState=state;calibrationDisplay.update(state);view?.applyState(state);paintStatus()}
 function connectGameEvents(){
  if(events||artStatus?.pending>0)return;
  const receive=TowerDefenceView.presentation.snapshotReceiver(applyState);
  const source=events=new EventSource(`${SELF}/api/events`);
  source.addEventListener('update',event=>{try{receive.update(JSON.parse(event.data))}catch(error){status.textContent=`Invalid game update: ${error.message}`;status.className='status error'}});
- source.onopen=()=>view.setFeedConnected(true);
+ source.onopen=()=>{matchScoreFeedback.reconnect();view.setFeedConnected(true)};
  source.onmessage=event=>{try{view.setFeedConnected(true);receive.full(JSON.parse(event.data))}catch(error){status.textContent=`Invalid game snapshot: ${error.message}`;status.className='status error'}};
- source.onerror=()=>{if(events!==source)return;view.setFeedConnected(false);status.textContent='Photon Game stream reconnecting…';status.className='status'};
+ source.onerror=()=>{if(events!==source)return;waveTimelines.forEach(timeline=>timeline.setConnected(false));view.setFeedConnected(false);status.textContent='Photon Game stream reconnecting…';status.className='status'};
 }
 function artworkStatus(assets){
  artStatus=assets;
@@ -44,7 +57,7 @@ async function boot(){
  try{applyState(await json(`${SELF}/api/state`))}catch(error){status.textContent=`Game feed unavailable: ${error.message}`;status.className='status error'}
  connectGameEvents();
 }
-window.addEventListener('beforeunload',()=>{events?.close();view?.destroy()});boot();
+window.addEventListener('beforeunload',()=>{events?.close();waveTimelines.forEach(timeline=>timeline.destroy());view?.destroy()});boot();
 </script>
 </body>
 </html>

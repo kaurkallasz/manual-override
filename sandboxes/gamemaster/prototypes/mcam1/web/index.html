@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>MCAM1 · XIAO USB Camera</title>
+<link rel="icon" href="data:,"><link rel="stylesheet" href="style.css">
+<script src="app.js" type="module"></script>
+</head>
+<body>
+<header><a class="brand" href="./"><span class="mark">◉</span> MCAM1 <span>GAMEMASTER CAMERA</span></a><span class="local"><i></i> HUB · USB</span></header>
+<main>
+<div class="intro"><div><p class="eyebrow">OV3660 / ESP32-S3 SENSE</p><h1>XIAO USB Webcam<br>LL Bulk</h1><p class="sub">Live preview, manual controls and <a href="#firmwareUtility">firmware updates ↓</a></p></div><div class="connect-box"><span id="connection" class="badge">Controls disconnected</span><button id="connect" class="primary">Connect USB controls <span>↗</span></button><p id="connectHint">Controls connect through the gamemaster hub. No extension required.</p></div></div>
+<div id="message" role="status" aria-live="polite">Connect USB controls to read the camera’s settings.</div>
+<div class="workspace">
+<section class="viewer">
+<div class="panel-head"><span><i id="liveDot"></i> LIVE VIEW</span><span id="videoState">PREVIEW OFF</span></div>
+<div class="view-tools"><label>Camera<select id="camera"><option value="">XIAO USB Webcam LL Bulk</option></select></label><label>Capture mode<select id="mode"><option value="480,320,30">480 × 320 · 30 fps</option><option value="640,480,15">640 × 480 · 15 fps</option><option value="320,240,30">320 × 240 · 30 fps</option></select></label><button id="preview" class="primary">Start preview</button></div>
+<div class="screen"><img id="sharedPreview" alt="MCAM1 XIAO live preview" hidden><canvas id="aiOverlayCanvas" aria-hidden="true" hidden></canvas><div class="guides" aria-hidden="true"></div><div id="placeholder"><div class="lens">◎</div><h2>Your camera, live.</h2><p>Start the preview to frame your shot<br>and see adjustments as you make them.</p></div><span class="screen-label">OV3660 · FIXED FOCUS</span><span id="frameSize" class="frame-size">— × —</span></div>
+<div class="view-bottom"><span id="cadence">Waiting for frames</span><div><button id="snapshot" disabled>Capture still</button><button id="record" disabled>Record video</button><button id="fullscreen" disabled aria-label="Fullscreen preview">⛶</button></div></div>
+<p class="capture-note">480 × 320 at 30 fps is the preferred balance from the earlier camera tests. Use 640 × 480 at 15 fps for more detail. Turn night mode off for steadier motion; use manual exposure and gain under stable lighting.</p><p id="captureNote" class="capture-note">Stills and recordings use the active capture resolution.</p><div class="note"><span>↳</span><p>These controls change the camera’s output in other apps too. The lens is fixed focus; move the subject or camera to find a sharp distance.</p></div>
+<div class="recovery"><button id="recover" disabled aria-describedby="recoveryHint">Reconnect camera</button><p id="recoveryHint">Reopens the XIAO video stream. If no frames arrive, close other XIAO previews or unplug USB for five seconds.</p></div>
+<section class="ai-panel" aria-label="On-device detection">
+<div class="ai-heading"><div><span class="eyebrow">ON-DEVICE AI</span><h2>Object detection</h2></div><span class="badge" id="aiModel">Bundled model · people</span></div>
+<p id="aiStatus" role="status">Connect USB controls to check for AI firmware.</p>
+<div class="ai-toggles"><label><input id="aiEnabled" type="checkbox" disabled> Run on ESP32-S3</label><label><input id="aiOverlay" type="checkbox" checked> Show detection boxes</label><label><input id="aiLabels" type="checkbox" checked> Show confidence labels</label></div>
+<details class="ai-settings"><summary>Detection settings</summary><div id="aiSettings"></div><button id="aiDefaults" disabled>Reset detection settings</button></details>
+<p id="aiTiming" class="capture-note">Waiting for device measurements.</p>
+<p class="capture-note">Boxes appear in this preview, captured stills and recordings. They show the latest result and may trail motion; stale results disappear. Other webcam apps receive the unmodified video. Save preset includes detection settings.</p>
+<a class="ai-reference" href="https://github.com/espressif/esp-dl/tree/master/models/pedestrian_detect" target="_blank" rel="noopener">Pretrained pedestrian model · runs locally on the ESP32-S3 ↗</a>
+</section>
+</section>
+<aside class="adjustments"><div class="panel-head"><span>IMAGE CONTROLS</span><button id="refresh" disabled>Read camera ↻</button></div><div class="preset-bar"><button id="savePreset" disabled>Save preset</button><button id="loadPreset" disabled>Load preset</button><button id="defaults" disabled>Reset image</button></div><p class="control-hint">Release a slider to apply. Values below are confirmed by the camera.</p><div id="groups"></div><div class="control-footer"><span id="firmware">Awaiting camera</span><span>22 SENSOR CONTROLS</span></div></aside>
+</div>
+<section id="firmwareUtility" class="firmware-utility" aria-labelledby="fwTitle">
+<div class="fw-heading"><div><p class="eyebrow">INSTALL / RECOVER / UPDATE AI</p><h2 id="fwTitle">Camera firmware</h2><p>Install MCAM1 on another XIAO camera, restore the tested release, or update a compiled AI model.</p></div><span id="fwStatus" class="badge" role="status">Loading utility…</span></div>
+<div class="fw-grid">
+<div class="fw-step"><span class="fw-number">01 / FIRMWARE</span><label for="fwBundle">Choose a release</label><select id="fwBundle"><option value="builtin">Bundled ai-v1 · tested camera release</option></select><div id="fwBundleInfo" class="fw-info">Validating bundled images…</div><a href="api/firmware/builtin" download>Download recovery bundle ↗</a>
+<details><summary>Upload firmware with your AI model</summary><p>Use a ZIP containing the compiled application, bootloader, partition table and manifest. The model is embedded in the application; a raw .espdl, .tflite or .onnx file cannot be flashed here.</p><label for="fwFile">Firmware ZIP · up to 32 MiB</label><input id="fwFile" type="file" accept=".zip,application/zip"><button id="fwUpload">Validate upload</button><p id="fwUploadMessage" role="status">Compatible XIAO ESP32S3 Sense / OV3660 builds only. Uploading does not flash.</p></details>
+</div>
+<div class="fw-step"><span class="fw-number">02 / USB TARGET</span><div class="fw-actions"><button id="fwRelease">Release camera USB</button><button id="fwRefresh">Refresh USB devices ↻</button></div><p>On the camera you want to flash: hold <strong>BOOT</strong>, press and release <strong>RESET</strong>, then release BOOT. Refresh the list after its USB port changes.</p><label for="fwDevice">Device connected to the hub</label><select id="fwDevice"><option value="">Choose a USB device…</option></select><p id="fwDeviceInfo">USB identity alone cannot distinguish an Atom from a XIAO. Select the physical camera you put in download mode.</p><p class="fw-small">Close other serial tools. Flashing pauses MCAM1 video and controls. Keep USB connected and the hub running until verification finishes.</p></div>
+<div class="fw-step"><span class="fw-number">03 / FLASH & VERIFY</span><label class="fw-check"><input id="fwBoard" type="checkbox"> I checked that the selected board is a XIAO ESP32S3 Sense with OV3660, 8MB flash and 8MB PSRAM.</label><label for="fwConfirm">Type the target confirmation shown below</label><code id="fwConfirmation">Select a device first</code><input id="fwConfirm" type="text" autocomplete="off" spellcheck="false" placeholder="XIAO followed by USB serial"><p>Replaces the bootloader, partition table and application. Existing firmware will be overwritten; NVS is retained.</p><button id="fwFlash" class="primary" disabled>Flash selected camera</button><p id="fwActionMessage" role="status" aria-live="polite">Select a device and confirm its identity to enable flashing.</p></div>
+</div>
+<div class="fw-job"><div class="fw-actions"><strong id="fwJobStatus">No flash job started</strong><progress id="fwProgress" hidden aria-label="Firmware operation in progress"></progress><button id="fwDownloadLog" disabled>Save flash log</button></div><pre id="fwLog" tabindex="0" aria-label="Firmware flash log">The flash log will appear here.</pre></div>
+<details class="fw-format"><summary>Preparing a trained-model update</summary><p>Train and quantize a model for ESP32-S3, integrate its inference code into the XIAO firmware, and compile a complete build. Keep the bulk UVC descriptors, controls protocol 1, detection protocol 1 and the 4 MiB factory partition. MCAM1 supports model and class names from compatible detection replies.</p><p>Package those compiled images with the module’s <code>tools/package_firmware.py</code>, or upload the original Lab release ZIP. The validator checks hashes and image layout; it cannot establish a custom model’s accuracy or hardware compatibility. Use builds from a source you trust. The bundled ai-v1 remains available for recovery.</p><p>This utility targets the XIAO ESP32S3 Sense / OV3660. Firmware for ESP32-CAM, other sensors, encrypted boards, OTA or separate model partitions needs a different flashing profile.</p></details>
+</section>
+<footer><span>MCAM1 <span class="muted">/ 01</span></span><span>USB camera on the hub Mac. Downloads and presets stay in this browser.</span></footer>
+</main></body></html>

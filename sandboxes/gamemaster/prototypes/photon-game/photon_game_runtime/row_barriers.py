@@ -96,7 +96,7 @@ class RowBarrierRuntime:
         mask = 0
         for i, row in enumerate(self.level.row_barriers):
             count = sum(1 for s in row['socket_ids'] if (t := self.placements.get(s))
-                        and not t.get('destroyed') and t.get('hp', 0) > 0
+                        and not self._tower_inactive(t) and t.get('hp', 0) > 0
                         and self.runtime_time >= float(t.get('activation_complete_at', math.inf)))
             state = self._row_states[i]
             powered = count == 3

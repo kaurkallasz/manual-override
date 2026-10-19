@@ -1,21 +1,93 @@
 # Laser Tag Y
 
+
+## Turret controls on the detected camera overlay
+
+The Game Master camera overlay places only the configured Atom IDs (default
+100, 101, 102, 103) and X beside each detected turret ArUco. A compact two-column
+Atom group sits on the left, X on the right, leaving the code unobscured. There
+are no G/P buttons. The below-field ArUco management/virtual placement chips retain
+their original layout and behavior. The external screen has no operator controls.
+
+Board marker diagnostics supply normalized positions, including established fixed
+marker locations while an Atom covers the code. The SVG camera transform maps
+those positions through letterboxing and 1.15× zoom into the gamefield overlay;
+resize and same-ID coordinate changes reposition controls. No control is created
+from authored level coordinates alone. Offscreen targets are hidden; controls are
+clamped near a viewport edge. Narrow operator screens retain a 960px field and
+allow horizontal panning, keeping neighboring button groups separate. Calibration, virtual view and unavailable camera
+pixels hide this physical overlay, without moving its controls into another panel.
+
+Game's `photon.game.turret-controls` v1 descriptor owns the highlighted Atom and
+its Physical/Manual source (exposed in the button tooltip). Each unblocked turret
+number click is a momentary activation using that Atom's team and fixed weapon
+role, followed by an immediate simulated lift. Existing weapons and their original
+owners are retained; a click replenishes a live turret or rebuilds a destroyed one.
+No manual occupancy, pressed highlight or Atom health/damage boost remains after
+the click. Repeating the number activates again instead of toggling occupancy.
+Physical occupancy still highlights the detected Atom and grants its normal boost
+after accepted placement. It prevents overriding the physical Atom or assigning it
+to another socket. A cached
+fixed target location is display geometry, never physical Atom occupancy.
+
+Detected core ArUco 38 has the same four numbers on its left and X on its right.
+It uses Game's existing core sequence, unlocked during a running game after the
+8–16-turret ring is complete. The first number activates layer one; a number from
+the opposing team activates layer two and starts the normal purge/victory sequence.
+The same Atom or a second Atom of the same team is rejected without changing the
+first layer. Both accepted numbers stay highlighted through completion and reload.
+X clears the pending first layer so another first Atom can be selected; it cannot
+cancel detonation or reverse a completed game. Physical first-layer detection
+overrides a manual first layer, and a valid physical opposing-team cover can
+complete either source of first layer. These controls also work in scored games.
+
+X destroys the installed turret through the normal Game destruction path: HP zero,
+`destroyed` true, destruction effects, companion destruction and topology updates.
+It is black initially and white after destruction, disabled for empty/destroyed
+sockets. The command consumes the current resting Atom visit so repeated camera
+frames cannot immediately rebuild it. Normal departure and return can activate it
+again. Existing projectiles retain their normal lifecycle.
+
+These referee controls use existing Game Master authorization and work in setup,
+running event matches, including paused play. Other scored-match
+placement/loadout restrictions remain unchanged. Calibration and finished games
+reject intervention. Buttons
+wait for authoritative response/SSE, show pending/errors on the gamefield, and expose
+keyboard focus and pressed state. Disconnected feeds disable interaction; diagnostic
+repaints cannot re-enable it.
+
+Browser verification: run `tests/operator_turret_fixture.py`, then
+`node tests/operator_turrets_browser.cjs output/operator-click-fix-2026-10-13` with
+Playwright on NODE_PATH. The fixture uses synthetic camera frames and occupancy,
+without hardware or real score persistence. It checks actual turret activation,
+normal unboosted health/damage after clicks, X/rebuild, and physical priority during
+running event play.
+Core checks cover placement beside 38, ring gating, same-team rejection, X/clear,
+reload, opposite-team completion in either order and external-screen victory.
+
 ## Atom buff display
 
 Both displays render Game's explicit `atom_buff_state`. Active turrets keep a
-green halo for both teams, including their L4 companions. The inexpensive halo
+continuously pulsing green halo for both teams, including their L4 companions.
+The pulse uses presentation time so setup, pause and sparse snapshots do not
+freeze it. The inexpensive halo
 survives dense effect quality and clips against authored ArUco keep-out regions.
 An active health bar has two equal stacked rows within the existing width and
-a ×2 indicator; together they represent the effective doubled maximum. Damage
-drains the bonus row before the base row. Inactive/unavailable states restore
-the single bar and remove the halo. The selected defense details show
+a ×2 indicator, also during the three-second deployment animation; together
+they represent the effective doubled maximum. Damage drains the bonus row before
+the base row. Inactive/unavailable states immediately restore the single bar and
+start a 0.6-second contracting, fading green power-down. Repeated snapshots do not
+restart the fade; it finishes without further updates, and a return resumes the
+pulse immediately. First inactive snapshots never invent an animation. Reset,
+level changes, replacement, deletion and destruction clear old glow history.
+The selected defense details show
 `Health ×2 · Damage ×2` only while active.
 
 The Virtual Atom controls provide **Lift selected Atom**, forwarding the existing
 Game `place` command with null `socket_id`. It removes occupancy, not the installed
 turret. The renderer cannot decide presence, heal, or calculate weapon damage.
 Full and incremental snapshots, including reconnects, carry explicit clearing
-through the existing SSE transport. Both pages use renderer revision 18.
+through the existing SSE transport. Both pages use renderer revision 19.
 
 ## L4 companion display
 
@@ -29,7 +101,7 @@ and marker squares render above effects and aiming handles to remain readable.
 
 Clicking either member in Virtual play selects the parent's existing controls.
 Aim previews use shared inputs at both origins. The Run panel shows primary and
-companion counts separately. Virtual test unlocks explain the L4 companion and
+companion counts separately. The equipment view explains the T4 companion and
 middle-line exception; changing L4 to L3 removes the corresponding companions
 through Game, and reconnect/reset snapshots clear stale units. No browser-side
 unlock or damage calculation is added.
@@ -185,7 +257,7 @@ is 12 in both the gamemaster and external-screen pages.
 
 ## LTZ progress presentation
 
-The operator view offers physical scored play or practice, reports Game's frozen
+The operator view offers event-based physical play, reports Game's frozen
 participants/result/save status, and links to Green/Purple performance below the
 LTZ Score upgrades table. It never writes credits or completion counts.
 
@@ -201,34 +273,21 @@ Muzzle, Tesla and mortar launch visuals follow the raised head; socket size,
 placement, targeting and simulation geometry are unchanged. Base-level art
 keeps its existing composition.
 
-The **Unlocks** panel sits directly below Aruco MNGMNT (Virtual Atom controls
-in virtual play). It remains visible and editable in both virtual and physical
-practice. Active scored runs cannot change overrides, and a scored game cannot
-start until test overrides are disabled. Gamemaster can enable test overrides, lock turret types for
-placement, choose turret/Force Field levels 1–4, apply a complete selection,
-unlock all L4, or return everything to base level. The UI preserves unsaved
-selections during unrelated SSE updates and shows the server's applied loadout
-after refresh. Changes affect existing defenses and subsequent placements on
-both shared map views. The form forwards one Game command and owns no upgrades.
-
-
-### Mobile control test unlocks
-
-The same Unlocks form includes **Mobile control unlock**: Joint (1),
-Cartesian XYZ (2), Targeting (3), and Cue autonomy (4). Apply sends
-`virtual_test_loadout` with `levels` plus `control` (integer 1–4, or null when the
-override is off). The selection unlocks through that tier for Green mobile practice, including the
-calibrated physical controller embedded in Mobile LTZ. Relay authorization and
-physical workspace checks still apply.
-Unlock all L4 includes tier 4; All base levels restores tier 1. Targeting enables finger dragging; Cue autonomy enables queued pickup and placement. Unsaved dropdown edits survive unrelated SSE updates.
-These overrides do not write saved players, credits, wins, or physical-arm settings.
+The Event dropdown creates/selects an event. Starting Atom selectors provide
+camera fallback before the first match and stay fixed for the saved pair through
+L3. Game Master End match preserves the score and buys one next turret tier per
+player, including negative credit. Unlock next control level advances both controls
+and force fields once. Continue opens required calibration or next-match readiness.
+The old practice/test-unlock and player-credit panels are removed. Manual Atom/core
+shortcuts stay available, obeying Atom availability and the combat/ring objectives.
+All effects are validated by Game and Progress; the browser owns no progression.
 
 ## Physical ArUco management
 
 Physical operator play labels the Atom/target panel **Aruco MNGMNT**. Current
 Board detections light its read-only Atom, socket and core chips green with
 “Found”; remembered detections show an explicit last-seen age and dashed border.
-Virtual play keeps **Virtual Atom controls** and its existing commands.
+Virtual controls are not exposed in event gameplay.
 
 The camera image and SVG marker overlay share one fitted full-frame rectangle
 and one centered **1.15×** transform during gameplay, clipped by the operator
@@ -353,3 +412,164 @@ the historical overlay and pauses the camera preview. No extra polling or
 hardware control path is introduced. Closing preview returns to the existing
 physical/virtual presentation. New captures become the newest history record;
 applying an old record never changes its original capture time.
+
+## Ranged Breaker presentation
+
+The owner-served renderer bundle prefixes `breaker-renderer.js` to
+`tower-defence-view.js` for Y, authenticated Mobile and the hosted exporter.
+It revalidates with `Cache-Control: no-cache`; the renderer contract advertises
+integer `enemy_combat_version: 1`. Incompatible ranged combat snapshots raise
+a refresh diagnostic. The helper reads authoritative aim/release/recovery
+timestamps, slices Level's 4×2 red archer atlas and draws straight arrows with
+red fletching. Sprite caches include variant, pose and facing. Missing art
+uses a red/bow fallback plus the existing asset diagnostic. Arrow/impact
+effects are presentation only; impact sparks are capped at 64 per frame.
+
+Both Y displays and landscape Mobile (844×390 and 1180×820 viewports) were
+checked against the real owner-served bundle with isolated practice data.
+Mobile's enemy projection retains `combat`, and the existing asset allowlist
+and exporter include the atlas. Browser checks are in
+`tests/ranged_breaker_browser.cjs`; start `tests/ranged_breaker_fixture.py`
+first. These checks use fake hardware and temporary data.
+
+
+## LTZ score HUD (2026-10-10)
+
+The Game Master window shows one upright 440 × 72 px counter with animated
+raw-kill and earned-credit numbers. The projected playfield shows only raw kills,
+in two 220 × 72 px counters anchored inside its `.stage`: Green's upright counter
+at the bottom left and Purple's 180-degree rotated copy at the top right. Each
+counter is centered horizontally in the gap between its neighboring wave strip
+and the outer playfield edge; shared CSS dimensions keep this responsive.
+The wave timeline remains at the top left; a second, 180-degree rotated timeline
+sits at the bottom right, at the top of the board from Purple's viewpoint. Both
+use the same game snapshots and freeze on disconnect. This keeps both wave strips
+clear of the counters and ArUco markers. Field counters are capped at 24% of the
+stage width on smaller displays, and follow the playfield bounds rather than the
+browser viewport. There are no visible counter labels or gain/bonus messages;
+accessible labels identify the counters. Fixed columns and tabular figures prevent
+digit growth from changing its bounds; very long totals shrink within their slots.
+Both copies share one animation clock and retain the 40 px type where it fits.
+Saved stack bonuses count into credits only after the terminal receipt arrives.
+Duplicate/stale sequences do not replay gains; reconnect establishes a baseline.
+Reduced motion uses direct changes. The HUD hides during calibration. At level
+end, the projector keeps the field and kill counters visible without a statistics
+overlay; level-result overlays remain on the player screens. The shorter window
+keeps the lower ArUco codes visible. Phone feedback retains its existing labels
+and merged gain messages.
+The operator page adds save/outcome, shared Ready state, actual next preset and next
+player loadouts. Browser coverage: `tests/wave_timeline_browser.cjs`; counter logic:
+`node tests/ltz_score_feedback.cjs`.
+
+
+## Operator test flow and credit grants (2026-10-11)
+
+The Game Master page includes **Test matches & player credits**. End match →
+shop works at any wave, before the first kill, and while paused when a built-in
+Test player participates. Both selected players see the shared shop. Next
+level prepares the following test tier and purchased loadouts; Start begins it
+through the ordinary Game checks. At tier 4 the button says Replay level 4.
+
+The recipient selector includes all saved players and labels selected sides.
+Add credits grants 1–100,000 credits to the selected player, with a balance
+receipt and explicit exclusion from the overall scorecard. Duplicate retries
+reuse the same operation ID. This panel forwards validated Game commands and
+the authenticated Game admin facade; Y does not own currency or progression.
+
+## Camera label continuity (2026-10-11)
+
+The camera monitor shares `LTZMarkerPresence` with both Mobile LTZ clients.
+Previously valid marker outlines and labels stay bright for one second from
+the actual sighting, avoiding per-frame flicker. Recent labels are identified
+in their tooltips, then fall back to the existing fixed-table cache. Unavailable
+feeds, camera/correction changes and explicit size/geometry rejection clear
+this short display memory. A single frame without size consensus does not
+erase earlier valid sightings. This helper never supplies buff or robot evidence.
+
+## Unlocks and saved orc intensity (2026-10-11)
+
+The control selector labels tiers L1–L4 and previews the saved map/tier's orc
+total, wave gap, release pace and preset name. Apply test unlocks sends the
+control tier to Game, which changes remaining practice spawns immediately.
+The panel also shows the active intensity during a match. Its counts include
+already released enemies, so a retuned match can differ from a fresh run at
+that tier. L4 Cue uses the selected L4 preset; no tuning is duplicated in Y.
+Browser regression: `node tests/practice_intensity_browser.cjs` with the
+isolated `tests/ltz_admin_fixture.py --port 56054` server.
+
+## Top-edge wave timeline (2026-10-11)
+
+The external playfield shows a centered timeline on its top edge, readable
+from the same orientation as the bottom match credits. Game Master mirrors
+it above the camera/playfield. The shared `LTZWaveTimeline` consumes Game's
+versioned `wave_timeline`: proportional spawn windows, elapsed-time playhead,
+current wave and next-wave countdown. Durations and queued orcs remain in the
+accessible timeline description.
+The retro meter borrows Photon Board's green/orange tag-consideration colors,
+square segments and inset highlight. Future time is a dim pixel track; elapsed
+time stays solid behind the playhead and grows through the gaps between waves.
+The fill is green outside releases, progressively turns orange in the final
+30 seconds before a wave, stays orange while any wave is spawning, and returns
+to green after release (unless the next wave is already within its warning).
+The single track is 48 SVG units high with a 32-unit elapsed fill, four times
+the previous 12/8-unit bar. Its bottom aligns with the former wave-number boxes,
+moving the bar upward. Release windows appear as amber/orange/muted-green marks
+along the bar's edges. Wave, countdown and clock labels are inside the bar at
+22 actual CSS pixels at every viewport size;
+there are no separate heading, wave boxes or labels below the track. Game-screen
+score totals use the fixed numeric layout described above, with up to 40 px type.
+The playhead pauses with Game,
+freezes on disconnect/stale state, resets for setup and hides in calibration.
+Final enemy cleanup can extend beyond the release schedule. No client-side
+wave scheduling or hardware commands are introduced.
+
+Browser regression: `node tests/wave_timeline_browser.cjs` against isolated
+`tests/ltz_admin_fixture.py --port 56055`; unit checks:
+`node --test tests/wave_timeline.test.js`.
+
+## Operator controls and advisory readiness (2026-10-11)
+
+Start is available during shopping when Game is in setup. Next level is beside
+Start/Pause/Reset and prepares a saved match's next setup immediately, for both
+regular and test-player shops. Both actions are independent of player Ready
+acknowledgements. The nearby Green/Purple readiness readout compares current
+profile IDs and revisions, so a new purchase cannot leave a stale Ready label.
+`tests/operator_start_browser.cjs` covers both player displays and these controls
+against `tests/ltz_admin_fixture.py --port 56056`.
+
+
+## Shared fixed-board display (2026-10-12)
+
+The marker diagnostics stream also carries `fixed_board`, the Board's
+`photon.board.cue-targets` v2 descriptor scoped with the same pure run/layout
+request as Mobile LTZ. Contract, version, scope and fixed IDs are validated.
+Gamemaster renders confirmed `fixed_tags` even during detection/geometry gaps;
+it does not substitute its older browser table cache for owner coordinates.
+New run/map epochs replace the display atomically, and late IDs can join.
+Fixed 30–59 labels use a one-second display grace measured from `last_seen`,
+independent of Board's 350 ms `visible` cutoff. Repeated packets cannot renew
+that grace, and unavailable/stale mapping immediately uses cached styling.
+The SVG is only rebuilt when its rendered geometry, text or styling changes;
+visible-to-recent transitions still update diagnostics without repainting it.
+Moving labels retain only bounded fresh-sighting display grace. This projection
+never provides commands or gameplay placement evidence. Calibration keeps its
+existing display path. Legacy camera-only display recognizes the separate core
+and raised-Atom size roles rather than comparing them to socket size.
+
+
+## Live Ready cards (2026-10-18)
+
+During setup, Green and Purple cards above Start display the selected player and
+Ready / Waiting / No selection / Calibration required, using Game's authoritative
+`journey.readiness` projection over the existing SSE feed. When both confirm,
+show “Both players ready · press Start”, or the remaining Start blocker. Cards
+hide after Start. The Game Master retains authority to Start before confirmation;
+readiness does not bypass camera, calibration, motion-stop or event checks.
+
+
+Unexpected Game command exceptions are logged and returned as JSON HTTP 500, with
+instructions to check the live state before retrying. The client also gives a
+readable status for non-JSON failures instead of showing an HTML error page.
+`tests/event_progression_browser.cjs` runs the fixture with `--isolate-imports`
+to match the production hub's helper cleanup, verifies a failed-response retry,
+and completes the event flow through the real Game Master endpoint.

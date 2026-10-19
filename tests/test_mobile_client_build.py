@@ -27,8 +27,11 @@ class ClientBuildTests(unittest.TestCase):
         (self.root/'turret-overlay.js').write_text((self.ui.HERE/'turret-overlay.js').read_text())
         (self.root/'physical-arm.js').write_text((self.ui.HERE/'physical-arm.js').read_text())
         (self.root/'journey.js').write_text((self.ui.HERE/'journey.js').read_text())
+        (self.root/'mission-countdown.js').write_text((self.ui.HERE/'mission-countdown.js').read_text())
         (self.root/'operation-id.js').write_text((self.ui.HERE/'operation-id.js').read_text())
         (self.root/'connection-log.js').write_text((self.ui.HERE/'connection-log.js').read_text())
+        (self.root/'delay-trace.js').write_text((self.ui.HERE/'delay-trace.js').read_text())
+        (self.root/'mcam1.js').write_text((self.ui.HERE/'mcam1.js').read_text())
         self.ui.HERE = self.root
         self.ui.hub_init(None)
         self.addCleanup(self.ui.hub_stop)
@@ -59,7 +62,9 @@ class ClientBuildTests(unittest.TestCase):
         build = self.ui.client_contract()['build']
         html = self.client.get('/').text
         self.assertIn(f'mobile.js?v={build}', html)
-        self.assertIn('id="score">0</b></span><span class="fps"', html)
+        self.assertIn('id="score">0</b>', html)
+        self.assertIn('id="scoreBurst"', html)
+        self.assertIn('class="fps"', html)
         for file in ['prototype.py', 'bridge-config.php', 'hub-config.json', '../mobile.js']:
             self.assertEqual(self.client.get(f'/api/client/{build}/{file}').status_code, 404)
         self.ui.hub_stop()

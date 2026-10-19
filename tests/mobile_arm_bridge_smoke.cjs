@@ -15,7 +15,8 @@ const ctx={TEAM,MOBILE_LTZ:true,URLSearchParams,location:{search:'?ltz=1&mobile=
  cal2PoseEvaluator:()=>()=>({x:300,y:0}),pointInsideConvexCalibration:()=>true,pointInsideRobotPolygon:()=>true,compensateCal2Parallax:(u,v)=>({u,v}),cal2CameraTargetPose:p=>p,autoPpxPlanningRadiusMin:()=>220,cal2CameraForRobotPose:(_,p)=>displayPoint(p.x/1000,p.y/1000),gameDisplayPoint:displayPoint,clickToPose:(u,v,id)=>{clickedTags.push(id);const p=displayPoint(u,v);return {x:p.u*1000,y:p.v*1000,z:50,r:9};},assertAutoPpxPoseSafe(){},
  mobileGameAt:now,mobileGame:{server_time:10000,mobile_camera:{status:'ready',frame_at:10000,width:1280,height:720,matrix:[1,0,0,0,1,0,0,0]},virtual_test_control:4,mobile_arm:{tags:[{id:101}]},mobile_safety:{status:'ready'}},latestVisibleArucoTags:[],autoPpxCueRunning:false,autoPpxRunning:false,autoPpxPaused:false,autoPpxAbort:false,activeOperation:null,cal2BoundaryStop:null,
  autoPpxVisionWait:null,autoPpxCueOutcome:'idle',autoPpxCueError:null,autoPpxClickOverride:null,
- autoPpxTransportZ:()=>80,autoPpxCueMapReady:()=>true,autoPpxCueDisplayTags:()=>ctx.latestVisibleArucoTags,autoPpxCueCandidates:()=>({sources:[{id:101}],destinations:[{id:42,cached:true}]}),refreshAutoPpxTags:async()=>[],
+ autoPpxTransportZ:()=>80,autoPpxCueMapReady:()=>true,autoPpxCueEndpointIssue:()=>'',autoPpxCueDisplayTags:()=>ctx.latestVisibleArucoTags,autoPpxCueCandidates:()=>({sources:[{id:101}],destinations:[{id:42,cached:true}]}),refreshAutoPpxTags:async()=>[],
+ readAutoPpxCueTargets:async force=>{assert.equal(force,true);return ctx.latestVisibleArucoTags;},
  ltzTier:4,mobileControlChoice:1,mobileRobotReady:()=>true,pauseUserMoves(){},cancelAutoPpxClickOverride(){},applyStatus(){},
  api:async(path,data)=>{calls.push({path,data});if(path==='/api/stop'&&holdWait)await holdWait;if(path==='/api/joint-move'&&jointWait)await jointWait;if(path==='/api/connect'){robot={...robot,control_session:'relay:'+calls.length,motion_epoch:robot.motion_epoch+1,last_feedback:Date.now()/1000};return {ok:true,control_session:robot.control_session};}return path==='/api/status'?{...robot}:path==='/api/joint-move'&&jointFailure?{ok:false,error:jointFailure}:path==='/api/stop'&&holdFailure?{ok:false,error:holdFailure}:{ok:true};},moveToPose:async(p,label,wait,options)=>{if(moveFailure)throw typeof moveFailure==='string'?Error(moveFailure):moveFailure;calls.push({path:'planned',p,label,options});if(moveWait)await moveWait;},
 };vm.createContext(ctx);
@@ -29,6 +30,18 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
 (async()=>{
  await flush();assert.equal(posted.at(-1).status,'ready');
  assert.equal(posted.at(-1).arm.position_at,robot.last_feedback,'Position timestamp is the measurement time');
+ const boardEvidence={status:'partial',epoch:7,pending_fixed_ids:[48],verification:{anchor_ids:[40,41,42,43],hull:[[0,0],[1,0],[0,1]]}};
+ ctx.autoPpxCueEvidence=()=>({data:boardEvidence});parent.performance={now:()=>now};
+ ctx.window.mobileArmDiagnostic('cue_motion_held','off',{tag_id:49});
+ assert.equal(posted.pop().context.board,undefined,'Extra decision evidence is off with recording');
+ parent.mobileDelay={active:true,begin:()=>null,end:()=>{}};ctx.applyStatus({...robot,servo_error:'Fixture IPC timeout'});
+ ctx.window.mobileArmDiagnostic('cue_motion_held','on',{tag_id:49});
+ const captured=posted.pop();assert.deepEqual(captured.context.board.verification,boardEvidence.verification);
+ assert.equal(captured.context.servo_error,'Fixture IPC timeout');
+ ctx.autoPpxCueEvidence=()=>{throw Error('unavailable evidence');};
+ ctx.window.mobileArmDiagnostic('cue_motion_held','still reported',{tag_id:49});
+ assert.equal(posted.pop().reason,'still reported');
+ delete parent.mobileDelay;ctx.applyStatus(robot);
  const publishedAt=posted.at(-1).arm.position_at;
  listener({source:parent,origin:'http://test',data:{contract:TEAM+'.mobile-arm',version:1,type:'ping'}});await flush();
  assert.equal(posted.at(-1).arm.position_at,publishedAt,'Republishing cannot retimestamp a measurement');
@@ -123,7 +136,7 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  assert.equal(calls.filter(c=>c.path==='/api/connect').length,connectCount);
  jointFailure='could not verify joint target against Auto PP Cal 2: feedback unavailable';
  reply=await command({action:'joints',joints:[1,22,25],control_revision:revision});assert(!reply.ok);assert.notEqual(reply.code,'motion_limit','Unknown/FK faults are not recoverable boundary events');jointFailure=null;
- const beforeModeRevision=revision;reply=await command({action:'control_mode',mode:'targeting'});assert(reply.ok);assert.equal(reply.arm.control_revision,beforeModeRevision+1);
+ ctx.ltzTier=3;const beforeModeRevision=revision;reply=await command({action:'control_mode',mode:'targeting'});assert(reply.ok);assert.equal(reply.arm.control_revision,beforeModeRevision+1);
  reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60},control_revision:revision});assert(reply.ok);assert(Math.abs(calls.find(c=>c.path==='planned').p.x-300)<1e-9);assert(Math.abs(calls.find(c=>c.path==='planned').p.y-400)<1e-9);assert.equal(calls.find(c=>c.path==='planned').p.z,60);
  // XYZ goals also reset to measured feedback after reconnection.
  const beforeXYZReconnect={...robot};
@@ -136,9 +149,41 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  assert.equal(calls.find(c=>c.path==='planned').options.allowDetour,true,'Targeting can route around an excluded area');
  ctx.mobileGame.movable_piece_codes={[TEAM]:[own]};ctx.latestVisibleArucoTags=[{id:own,nx:tagPoint.u,ny:tagPoint.v,lastSeenAt:Date.now(),missing:0}];
  reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(reply.ok);assert.equal(clickedTags.at(-1),own,'Visible owned Atom reaches the raised-tag correction once');
- reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own+1},control_revision:revision});assert(!reply.ok,'A forged foreign Atom cannot grant a pickup target');
+ // Reproduce Go between the 500 ms expiry and the 750 ms background poll:
+ // the latest owner observation is fresh even though the polled list is stale.
+ const readTags=ctx.readAutoPpxCueTargets;
  ctx.latestVisibleArucoTags[0].lastSeenAt=Date.now()-600;
- reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(!reply.ok,'Stale Atom capture has no flat-target fallback');ctx.latestVisibleArucoTags=[];
+ ctx.readAutoPpxCueTargets=async force=>{assert.equal(force,true);return [{...ctx.latestVisibleArucoTags[0],lastSeenAt:Date.now()}];};
+ reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(reply.ok,'Go refreshes acquisition instead of rejecting a healthy preview');assert.equal(clickedTags.at(-1),own);
+ const freshTag={...ctx.latestVisibleArucoTags[0],lastSeenAt:Date.now()};
+ for(const [label,tag] of [['foreign',{...freshTag,id:own+1}],['stale',{...freshTag,lastSeenAt:Date.now()-600}],['hidden',{...freshTag,obscured:true}],['moved',{...freshTag,nx:tagPoint.u+.1}],['future',{...freshTag,lastSeenAt:Date.now()+1000}],['invalid',{...freshTag,nx:NaN}]]){
+  ctx.readAutoPpxCueTargets=async()=>[tag];
+  const before=calls.length,clicked=clickedTags.length;
+  reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});
+  assert(!reply.ok,label);assert.equal(reply.code,'target_unavailable',label);assert.equal(reply.arm.session,session);assert(reply.arm.connected);
+  assert.equal(clickedTags.length,clicked,'Rejected '+label+' target has no untagged fallback');
+  assert(calls.slice(before).some(c=>c.path==='/api/stop'),'Rejecting '+label+' holds the previous goal');
+  assert(!calls.slice(before).some(c=>['planned','/api/move','/api/pump','/api/disconnect','/api/connect'].includes(c.path)),label+' preserves pump and session without movement');
+ }
+ ctx.readAutoPpxCueTargets=async()=>{throw Error('Camera owner unavailable');};
+ reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(!reply.ok);assert.notEqual(reply.code,'target_unavailable','Unknown camera/transport faults are not recoverable target rejections');
+ ctx.readAutoPpxCueTargets=async()=>[freshTag];ctx.autoPpxCueMapReady=()=>false;
+ reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(!reply.ok);assert.notEqual(reply.code,'target_unavailable','Unverified mapping stays fail-closed');ctx.autoPpxCueMapReady=()=>true;
+ ctx.autoPpxCueEndpointIssue=()=> 'quarantined';
+ reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(!reply.ok);assert.equal(reply.code,'target_unavailable');assert.equal(reply.arm.session,session);
+ ctx.autoPpxCueEndpointIssue=()=> 'camera';
+ reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(!reply.ok);assert.notEqual(reply.code,'target_unavailable');ctx.autoPpxCueEndpointIssue=()=>'';
+ ctx.readAutoPpxCueTargets=async()=>[];holdFailure='Relay connection lost';
+ reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});assert(!reply.ok);assert.notEqual(reply.code,'target_unavailable');assert.equal(reply.arm.session,null,'A target rejection cannot retain control when its hold fails');
+ holdFailure=null;reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
+ // A delayed camera read must not restart a target after the player presses Stop.
+ let finishTags;ctx.readAutoPpxCueTargets=()=>new Promise(resolve=>finishTags=resolve);
+ const pendingTagId=String(id+1),beforeTagMoves=calls.filter(c=>c.path==='planned').length;
+ await command({action:'xyz',xyz:{x:.3,y:.4,z:60,tag_id:own},control_revision:revision});
+ await command({action:'stop'});finishTags([{...freshTag,lastSeenAt:Date.now()}]);await flush();
+ assert.equal(posted.find(p=>p.id===pendingTagId).ok,false);assert.equal(calls.filter(c=>c.path==='planned').length,beforeTagMoves);
+ ctx.readAutoPpxCueTargets=readTags;ctx.latestVisibleArucoTags=[];
+ reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
  reply=await command({action:'xyz',xyz:{x:2,y:.4,z:60},control_revision:revision});assert(!reply.ok);assert.equal(reply.code,'motion_limit');assert.match(reply.detail,/outside/);assert.equal(reply.arm.session,session);
  holdFailure='Relay connection lost';
  reply=await command({action:'xyz',xyz:{x:2,y:.4,z:60},control_revision:revision});assert(!reply.ok);assert.notEqual(reply.code,'motion_limit');assert.equal(reply.arm.session,null,'Failed safe hold releases the mobile session');
@@ -344,6 +389,10 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  reply=await command({action:'cue_play',rows:clearRows,view_rotation:180});assert(reply.ok);
  assert.equal(receivedProgram[1].action,'clear_view');assert.equal(receivedOptions.viewRotation,180);
  assert.equal(receivedProgram[1].direction,'left');assert.equal(receivedProgram[1].distance_cm,5,'Legacy rows preserve the default move');
+ reply=await command({action:'cue_play',rows:clearRows});assert(reply.ok);
+ assert.equal(receivedOptions.viewRotation,TEAM==='purple'?180:0,'A legacy Play must retain the player side, not assume Green camera orientation');
+ reply=await command({action:'cue_play',rows:clearRows,view_rotation:0});assert(reply.ok);
+ assert.equal(receivedOptions.viewRotation,0,'An explicit unrotated view still overrides the player default');
  const customRows=[clearRows[0],{action:'clear_view',direction:'right',distance_cm:7.5}];
  reply=await command({action:'cue_set',rows:customRows});assert(reply.ok);
  reply=await command({action:'cue_play',rows:clearRows});assert(!reply.ok,'An old distance/direction receipt cannot execute changed rows');
@@ -446,10 +495,18 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  let timerId=0;const timers=new Map(),advance=ms=>{now+=ms;for(const [id,t] of [...timers])if(t.at<=now){timers.delete(id);t.fn();}};
  const pc={window:{addEventListener:(k,f)=>receive=f},location:{origin:'http://test',pathname:'/s/'+TEAM+'/'},performance:{now:()=>now},Date,document:{hidden:false},setTimeout:(fn,ms)=>{const id=++timerId;timers.set(id,{fn,at:now+ms});return id;},clearTimeout:id=>timers.delete(id)};vm.createContext(pc);vm.runInContext(fs.readFileSync('shared/mobile_ltz/physical-arm.js','utf8')+'\nthis.Adapter=MobilePhysicalArm;',pc);
  const adapterLogs=[];
- const adapter=new pc.Adapter({frame,overlay,viewport:{w:1000,h:500},team:TEAM,diagnostic:(...args)=>{adapterLogs.push(args);throw Error('test unavailable logger');}});adapter.active=true;
+ const adapter=new pc.Adapter({frame,overlay,viewport:{w:1000,h:500,rotation:TEAM==='purple'?180:0},team:TEAM,diagnostic:(...args)=>{adapterLogs.push(args);throw Error('test unavailable logger');}});adapter.active=true;
  const snapshot=posted.find(p=>p.status==='ready'&&p.arm?.session&&p.arm.motion_ready);receive({source:frame.contentWindow,origin:'http://test',data:{...snapshot,contract:(TEAM==='green'?'purple':'green')+'.mobile-arm'}});assert.equal(adapter.arm(),null,'Opposite-team feedback is ignored');
  receive({source:frame.contentWindow,origin:'http://evil',data:snapshot});assert.equal(adapter.arm(),null);
  receive({source:frame.contentWindow,origin:'http://test',data:{...snapshot,type:'state'}});assert(Math.abs(adapter.arm().tip.x-300)<1e-9);assert(Math.abs(adapter.arm().tip.y-50)<1e-9);assert.equal(hidden,false);assert.match(shade.d,/M0.00,0.00/);assert.match(line.d,/100.00,50.00/);
+ for(const rotation of [0,180]){
+  adapter.viewport.rotation=rotation;
+  for(const stale of [undefined,180-rotation]){
+   const play=adapter.command({action:'cue_play',view_rotation:stale}),id=output.at(-1).id;
+   assert.equal(output.at(-1).data.view_rotation,rotation,'Clear view always uses the current player viewport at dispatch');
+   receive({source:frame.contentWindow,origin:'http://test',data:{...snapshot,type:'reply',id,ok:true}});await play;
+  }
+ }
  const limited=adapter.command({action:'joints',joints:[1,2,3]});const limitedId=output.at(-1).id;
  receive({source:frame.contentWindow,origin:'http://test',data:{...snapshot,type:'reply',id:limitedId,ok:false,code:'motion_limit',error:'Safety limit reached.'}});
  await assert.rejects(limited,e=>e.code==='motion_limit'&&e.arm.connected&&e.arm.session===snapshot.arm.session);

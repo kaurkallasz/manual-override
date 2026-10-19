@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Delay Analysis · Game Master</title><link rel="stylesheet" href="delay-analysis.css"><script src="delay-analysis.js" defer></script></head>
+<body><main>
+<header><div><a href="./">← Delivery diagnostics</a><p class="eyebrow">GAME MASTER / OBSERVABILITY</p><h1>Delay Analysis</h1><p>Follow a slow update from its source to the player.</p></div><span id="state" class="badge">Connecting…</span></header>
+<section class="controls" aria-label="Recording controls">
+<label>Players <select id="side"><option value="both">Both players</option><option value="green">Green</option><option value="purple">Purple</option></select></label>
+<label>Stop after <select id="seconds"><option value="0" selected>Until I turn it off</option><option value="60">1 minute</option><option value="300">5 minutes</option><option value="900">15 minutes</option><option value="1800">30 minutes</option></select></label>
+<button id="start" class="primary" disabled>Start recording</button><button id="stop" disabled>Stop recording</button><button id="mark" disabled>Mark incident</button>
+<a id="export" href="api/delay/export">Export timings</a><a href="api/delay/export?format=csv">Summary CSV</a><button id="clear" disabled>Clear results</button>
+</section>
+<p id="error" role="alert" hidden></p><p id="recordingNote" class="note">Recording is off by default. Starting and stopping does not restart the game.</p>
+<div id="coverageWarning" role="status" hidden></div>
+<section class="metrics" aria-label="Capture summary"><article><span>Capture duration</span><strong id="elapsed">—</strong></article><article><span>Mobile build · p95</span><strong id="build">—</strong></article><article><span>Largest observed delay</span><strong id="peak">—</strong></article><article><span>Records / dropped</span><strong id="records">—</strong></article></section>
+<section><div class="section-head"><h2>Slow operations</h2><label>Filter <input id="filter" type="search" placeholder="camera, lock, feedback…"></label></div>
+<p class="note">Statistics cover the entire recording. Percentiles are approximate (5% timing buckets); counts and maxima are exact for received records. Nested totals overlap. Gaps and ages are observations, not execution time. Locks shorter than 1 ms contribute to statistics without individual detail records.</p>
+<div class="scroll"><table><thead><tr><th>Operation / source</th><th>Count</th><th>Median</th><th>p95</th><th>p99</th><th>Maximum</th><th>CPU total</th><th>Own time total</th></tr></thead><tbody id="operations"><tr><td colspan="8">Start recording, then use the game normally.</td></tr></tbody></table></div></section>
+<section><div class="section-head"><h2>Incident timeline</h2><button id="live">Return to live view</button></div>
+<div id="incidents" class="incidents"></div><p id="timelineNote" class="note">Select a stall, movement hold or disconnect, or mark an incident during play.</p>
+<div id="evidence"></div><div id="timeline"></div></section>
+<section><h2>Recording coverage</h2><p class="note">Host timing uses one clock. Each browser has its own clock; positions across these groups do not imply exact network latency. Delivery sequence numbers connect related updates.</p><div id="participants"></div><p id="storage" class="note"></p></section>
+<footer>Recording continues with this window closed. Stop preserves the capture. Full-session summaries are saved every five seconds and at stop; incident details have the separate budget shown above. The last three captures are retained. After a server restart the saved results reopen with recording off.</footer>
+</main></body></html>

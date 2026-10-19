@@ -30,6 +30,7 @@ move/pump fail cleanly with "Not connected".
 Put each robot in API mode first — see ../../docs/operations/dobot-api-mode.md.
 Safety: keep the hardware E-stop within reach; start with a low speed.
 """
+from shared import delay_trace as trace
 
 import json
 import math
@@ -50,6 +51,7 @@ ARM_CONTRACT = "hhh.relay.arms"
 ARM_VERSION = 1
 sys.path.insert(0, HERE)  # so the sibling driver imports cleanly
 from relay_arm import DobotMG400, DobotError  # noqa: E402
+from arm_worker import ArmWorker  # noqa: E402
 
 MANIFEST = {
     "name": "Dobot MG400 Relay",
@@ -220,10 +222,11 @@ def _redact_payload(value):
     return value
 
 
+@trace.traced('relay.log_command')
 def _log_command(direction, side, command, payload=None, ok=None, error=None):
     """Append one command monitor entry to memory/disk and wake the SSE stream."""
     global _command_log_seq, _command_log_file_error_reported
-    with _command_log_lock:
+    with trace.locked(_command_log_lock, 'logging.command_lock'):
         _command_log_seq += 1
         entry = {
             "id": _command_log_seq,
@@ -251,7 +254,7 @@ def _log_command(direction, side, command, payload=None, ok=None, error=None):
 
 
 def _command_log_snapshot():
-    with _command_log_lock:
+    with trace.locked(_command_log_lock, 'logging.command_lock'):
         return list(_command_log)
 
 
@@ -841,6 +844,7 @@ def _arm_dict(side):
         "feedback_ok": raw.get("feedback_ok") is True,
         "feedback_age": age,
         "motion_epoch": raw.get("motion_epoch"),
+        "motion_invalidation": raw.get("motion_invalidation"),
         "motion_ready": raw.get("motion_ready", False),
         "servo_active": raw["servo_active"],
         "servo_error": raw["servo_error"],
@@ -856,6 +860,18 @@ def _arm_dict(side):
     }
 
 
+@trace.traced('relay.feedback_snapshot', side='argument')
+def _feedback_snapshot(side):
+    """Compact, read-only player telemetry; never waits for command-log I/O."""
+    with _arb_lock:
+        lease = {"present": _sides[side]["present"],
+                 "lease_secs": round(_lease_secs_left_locked(side), 3)}
+    return {"contract": "hhh.relay.feedback", "version": 1, "status": "ready",
+            "z_limits": z_limits_snapshot(), "sides": {side: lease},
+            "arms": {side: _arm_dict(side)}}
+
+
+@trace.traced('relay.state_dict')
 def _state_dict():
     """The full relay state (GET /api/state and the SSE stream)."""
     arms = {s: _arm_dict(s) for s in SIDES}
@@ -870,8 +886,9 @@ def _state_dict():
         state = {
             "arms": arms,
             "sides": sides,
-            "command_log": _command_log_snapshot(),
         }
+    # Disk-backed monitor logging must not hold the lease/watchdog lock.
+    state["command_log"] = _command_log_snapshot()
     with _z_lock:
         state["z_floor"] = {
             "value": _z_floor,
@@ -924,6 +941,15 @@ def events():
     """Push the relay state (both arms' feedback, sides, leases) ~5x/s while it
     changes; the leases count down so it changes every sample."""
     return _live.stream(_state_dict, interval=0.2)
+
+
+@bp.route("/api/feedback")
+def feedback_events():
+    """Push one side's feedback independently of its lease heartbeat."""
+    side = request.args.get('side')
+    if side not in SIDES:
+        return _fail("side must be 'purple' or 'green'"), 400
+    return _live.stream(lambda: _feedback_snapshot(side), interval=0.1)
 
 
 @bp.route("/api/z-floor", methods=["GET", "POST"])
@@ -1053,11 +1079,13 @@ def connect():
         if _robots[side] is not None:
             _robots[side].close()
             _robots[side] = None
-        robot = DobotMG400(ip, iface=iface, local_ip=local_ip)
+        robot = ArmWorker(ip, iface=iface, local_ip=local_ip)
+        robot.side = side
         try:
             robot.connect()
             _apply_motion(robot)
         except DobotError as e:
+            robot.close()
             _log_command("robot", side, "connect", link, ok=False, error=str(e))
             return _fail(f"Could not connect to {ip} via {local_ip}: {e}")
         _robots[side] = robot
@@ -1272,7 +1300,8 @@ def heartbeat():
     if err:
         _log_incoming('heartbeat_rejected', request.json or {}, ok=False, error=err)
         return _fail(err)
-    return _ok(state=_state_dict())
+    return _ok(state=_feedback_snapshot(side) if (request.json or {}).get('feedback_only') is True
+               else _state_dict())
 
 
 @bp.route("/api/move", methods=["POST"])
@@ -1491,6 +1520,14 @@ def hub_stop():
     if _watchdog_thread:
         _watchdog_thread.join(timeout=3)
         _watchdog_thread = None
+    for side in SIDES:
+        with _arm_locks[side]:
+            robot, _robots[side] = _robots[side], None
+            if robot is not None:
+                robot.close()
+    with _arb_lock:
+        for side in SIDES:
+            _sides[side].update(token=None, present=False, motion_epoch=None)
     _hub_ctx = None
 
 
@@ -1503,11 +1540,11 @@ def _ltz_motion_error(side, data):
         if not isinstance(scope,dict) or scope.get('contract') != 'photon.game.motion' or type(scope.get('version')) is not int or scope['version'] != 1 or scope.get('status') != 'ready':
             return 'Cannot verify the current game control session'
         if scope.get('scope') == 'waiting' or scope.get('blocked'):
-            return 'Wait for the other player or shared game transition'
-        if scope.get('scope') in ('practice','tutorial'):
+            return scope.get('error') or 'Wait for the other player or shared game transition'
+        if scope.get('scope') == 'tutorial':
             tier = scope.get('tier')
             if type(tier) is not int or not 1<=tier<=4:
-                raise ValueError('invalid test/tutorial tier')
+                raise ValueError('invalid calibration tier')
         elif scope.get('scope')=='player':
             module = _hub_ctx.get_prototype('photon-progress') if _hub_ctx.is_prototype_enabled('photon-progress') else None
             policy = module.control_policy(side) if module else {}

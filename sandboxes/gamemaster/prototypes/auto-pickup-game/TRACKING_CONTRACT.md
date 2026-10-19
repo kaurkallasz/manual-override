@@ -305,3 +305,13 @@ camera coordinates. The physical sample is a 100-series ArUco tag held 30 mm
 above the corresponding ground reference. No image tap sends a robot command.
 The numbered quick-capture controls stay visible when instructions are folded:
 six arm points first, then four raised references, with saved checkmarks.
+
+## L1/L2 camera mismatch (2026-10-17)
+
+`calibration_safety_snapshot(side)` accepts an otherwise valid saved calibration
+with a different camera correction for authoritative L1/L2 controls. It resolves
+the tier through Game motion policy v1 and Progress control policy v2, never
+through browser claims. It returns an approximate-positioning warning with
+`camera_compatibility.manual_only=true`. L3/L4 still require a current camera
+association. Arm identity, path/reach/height bounds, feedback and lease checks
+remain enforced. No calibration data is rewritten by this exception.

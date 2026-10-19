@@ -132,13 +132,22 @@
   function renderTable(data) {
     const rows=[];
     const gamePlacement=data.game_placement||{}, gameRelations=Array.isArray(gamePlacement.relations)?gamePlacement.relations:[];
+    const reasons={target_not_learned:'target not learned',target_position_disputed:'target position disputed',
+      atom_not_detected:'Atom not detected',arm_not_ready:'arm not ready / suction on',
+      no_nearby_target:'no eligible target within activation radius',waiting_for_stable_placement:'waiting for stable placement',stable:'stable'};
+    const issues=(gamePlacement.target_states||[]).filter(item=>item.status!=='ready');
+    $('placementStatus').textContent=gamePlacement.status!=='ready'?`Activation unavailable: ${gamePlacement.error||'waiting for evidence'}`:
+      issues.length?issues.map(item=>`#${item.marker_id}: ${reasons[item.status]||item.status}`).join(' · '):
+      gamePlacement.layout_scope?'Confirmed game map ready. Fixed positions persist while hidden; Atoms require fresh observations.':'Using recent camera marker positions.';
     for(const tag of data.tags || []) {
       if(tag.kind!=="movable"&&!$("markers").checked) continue;
       const row=element("tr"); row.append(element("td",`#${tag.id}`),element("td",tag.visible?"Visible":Number.isFinite(tag.age_s)?`Last seen ${tag.age_s}s ago`:"Last known / stale"));
       const stage=element("td");stage.append(element("span",stageNames[tag.stage]||tag.stage,"stage"+(tag.stage==="placement_stable"?" good":tag.stage==="unknown"?" bad":"")));
       const relations=gameRelations.filter(relation=>Number(relation.movable_id)===Number(tag.id));
       const stable=relations.find(relation=>relation.stable), nearest=stable||relations.find(relation=>Number(relation.rank)===0)||relations[0];
-      const gameEvidence=gamePlacement.status!=="ready"?`Unavailable · ${gamePlacement.error||"no fresh evidence"}`:nearest?`${nearest.stable?"Stable":"Dwelling"} near #${nearest.marker_id} via ${nearest.arm}`:"No relationship";
+      const states=(gamePlacement.atom_states||[]).filter(item=>item.movable_id===Number(tag.id));
+      const explanation=[...new Set(states.map(item=>reasons[item.status]||item.status))].join(' · ')||'Atom not detected';
+      const gameEvidence=gamePlacement.status!=="ready"?`Unavailable · ${gamePlacement.error||"no fresh evidence"}`:nearest?`${nearest.stable?"Stable":"Dwelling"} near #${nearest.marker_id} via ${nearest.arm}`:explanation;
       row.append(stage,element("td",tag.arm||"—"),element("td",tag.target_id!=null?`#${tag.target_id}`:"—"),element("td",gameEvidence,stable?"good":gamePlacement.status!=="ready"?"bad":""),element("td",`${tag.confidence} · ${tag.evidence}`)); rows.push(row);
     }
     if(!rows.length){const row=element("tr"),td=element("td","No movable tags observed. IDs 100+ identify raised hardware tags; enable fixed markers to see other detections.");td.colSpan=7;row.append(td);rows.push(row);}

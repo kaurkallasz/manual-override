@@ -1,6 +1,7 @@
 """Transactional progress tests use temporary databases; never venue players."""
 import importlib.util
 import json
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,9 +9,14 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def scored_profile(player):
+    return {k:v for k,v in player.items() if k not in ('credits','lifetime_practice_credits','revision')}
 spec = importlib.util.spec_from_file_location('ltz_test_store', ROOT / 'sandboxes/gamemaster/prototypes/photon-progress/store.py')
 module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+sys.path.insert(0, str(ROOT / 'sandboxes/gamemaster/prototypes/photon-progress'))
+try:spec.loader.exec_module(module)
+finally:sys.path.pop(0)
 
 
 class ProgressTests(unittest.TestCase):
@@ -66,7 +72,8 @@ class ProgressTests(unittest.TestCase):
         self.store.recover()
         self.store.recover()
         p = self.player()
-        self.assertEqual((p['credits'], p['wins'], p['attempts']), (15, 0, 2))
+        self.assertEqual((p['credits'], p['wins'], p['attempts']), (1015, 0, 2))
+        self.assertEqual((p['lifetime_practice_credits'],p['lifetime_credits_earned']),(1000,15))
         self.assertEqual(self.store.history(self.green, {'dataset': 'practice'})['total'], 1)
 
     def test_newer_durable_final_supersedes_recovery_once(self):
@@ -103,7 +110,7 @@ class ProgressTests(unittest.TestCase):
         def buy(track):
             try:
                 return self.store.mutate_player('green', {'action': 'purchase', 'track': track, 'level': 2,
-                    'revision': p['revision'], 'operation_id': uuid.uuid4().hex})
+                    'revision': p['revision'], 'catalog_revision':1, 'operation_id': uuid.uuid4().hex})
             except ValueError:
                 return None
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -121,7 +128,7 @@ class ProgressTests(unittest.TestCase):
         self.finish(a)
         p = self.player()
         with self.assertRaises(ValueError):
-            self.store.mutate_player('green', {'action': 'control', 'level': 4, 'revision': p['revision'], 'operation_id': uuid.uuid4().hex})
+            self.store.mutate_player('green', {'action': 'control', 'level': 4, 'revision': p['revision'], 'catalog_revision':1, 'operation_id': uuid.uuid4().hex})
 
     def test_backup_roundtrip_preview_conflict_and_restart(self):
         self.finish(self.start())
@@ -202,7 +209,7 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(before, self.store.export()['tables']['players'])
         self.assertEqual(len(self.store.snapshot()['players']), 4)
 
-    def test_mixed_test_roster_never_rewards_either_player_or_scored_history(self):
+    def test_mixed_test_roster_banks_credits_without_scored_progress(self):
         self.finish(self.start(), kills=10)
         real_before = self.store.snapshot('purple')['player']
         self.store.select_player('green', 'ltz-test-green')
@@ -217,8 +224,9 @@ class ProgressTests(unittest.TestCase):
             self.store.record({'run_id': attempt['run_id'], 'kills': 100, 'sequence': 1})
             result = self.finish(attempt, kills=300, sequence=2)
             self.store.record(result, final=True)
-        self.assertEqual(self.player(), test_before)
-        self.assertEqual(self.store.snapshot('purple')['player'], real_before)
+        self.assertEqual(scored_profile(self.player()), scored_profile(test_before))
+        self.assertEqual(scored_profile(self.store.snapshot('purple')['player']), scored_profile(real_before))
+        self.assertEqual((self.player()['credits'],self.store.snapshot('purple')['player']['credits']),(900,910))
         scored = self.store.history(None, {'combined': True})
         practice = self.store.history(None, {'combined': True, 'dataset': 'practice'})
         self.assertEqual((scored['total'], scored['summary']['best_score']), (1, 10))
@@ -227,7 +235,7 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(self.store.history('ltz-test-green', {})['total'], 0)
         with self.assertRaisesRegex(ValueError, 'test profiles'):
             self.store.mutate_player('green', {'action': 'control', 'level': 1,
-                'revision': test_before['revision'], 'operation_id': uuid.uuid4().hex})
+                'revision': self.player()['revision'], 'operation_id': uuid.uuid4().hex})
 
     def test_two_test_profiles_and_interrupted_test_results_are_practice(self):
         for side in ('green', 'purple'):
@@ -236,7 +244,7 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(set(attempt['test_player_ids']), set(module.TEST_PLAYERS))
         self.store.record({'run_id': attempt['run_id'], 'kills': 99, 'sequence': 1})
         self.store.recover()
-        self.assertEqual((self.player()['attempts'], self.player()['credits']), (0, 0))
+        self.assertEqual((self.player()['attempts'], self.player()['credits']), (0, 99))
         self.assertEqual(self.store.history(None, {'combined': True})['total'], 0)
         self.assertEqual(self.store.history(None, {'combined': True, 'dataset': 'practice'})['total'], 1)
 
@@ -275,7 +283,7 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(other.history(None, {'combined': True, 'dataset': 'practice'})['total'], 1)
         corrupt = json.loads(json.dumps(backup))
         row = corrupt['tables']['attempts'][0]
-        attempt = json.loads(row['data']); attempt['reward_enabled'] = True; row['data'] = json.dumps(attempt)
+        attempt = json.loads(row['data']); attempt['reward_enabled'] = True; attempt['practice_credits_enabled']=False; row['data'] = json.dumps(attempt)
         with self.assertRaisesRegex(ValueError, 'cannot be scored'):
             other.import_backup(corrupt)
         corrupt = json.loads(json.dumps(backup))

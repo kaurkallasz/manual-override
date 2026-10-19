@@ -44,6 +44,15 @@ test('a camera-map hold explains blocked Play while leaving completed cue editin
  assert.equal(c.$('cuePlay').disabled,false);await c.cueAction('cue_play');
  assert.equal(c.commands.at(-1).data.rows[0].destination,42);
 });
+test('an unrelated disputed edge allows Play while disputed or unverified selected endpoints explain the hold',async()=>{
+ const c=context();c.state.mobile_cue_targets={status:'partial',quarantined_tags:[{id:48}]};
+ c.updateCueControls();assert.equal(c.$('cuePlay').disabled,false);
+ await c.cueAction('cue_play');assert.equal(c.commands.at(-1).action,'cue_play');
+ c.cueNotice='';c.cueDraft[0].destination=48;c.updateCueControls();
+ assert(c.$('cuePlay').disabled);assert.match(c.$('cueHint').textContent,/#48 is disputed/);
+ c.cueDraft[0].destination=45;c.state.mobile_arm.cue.destinations=[{id:45,mapping_ready:false,mapping_error:'Endpoint #45 is outside the verified board region.'}];
+ c.updateCueControls();assert(c.$('cuePlay').disabled);assert.match(c.$('cueHint').textContent,/outside the verified board region/);
+});
 test('disabled Play shows the game/connection/calibration reason without a command',async()=>{
  for(const reason of ['paused','disconnected','calibration','missing-row']){
   const c=context();
@@ -197,6 +206,20 @@ test('Clear view rows and current camera rotation travel intact with Play',async
  assert(!c.cueRowsEqual([{action:'clear_view'}],[{piece:100,destination:40}]));
  c.cueDraft=[{action:'clear_view'}];c.commands.length=0;await c.cueAction('cue_play');
  assert.equal(c.commands.length,0);assert.match(c.cueNotice,/must follow a placement/);
+});
+test('view rotation cannot reverse Clear view directions during startup, playback, waiting or pause',()=>{
+ const c=context();c.controlPointers=new Set();c.mapPointers=new Map();
+ c.viewport.setRotation=value=>{c.viewport.rotation=value;};
+ c.preference={set(){}};c.syncRotationControl=()=>{};c.syncViewport=()=>{};c.updateXYZ=()=>{};
+ vm.runInContext(source.slice(source.indexOf("$('rotateView').onclick="),source.indexOf('const feedbackLines=')),c);
+ for(const status of ['running','waiting','paused']){
+  c.state.mobile_arm.cue.status=status;c.updateCueControls();assert.equal(c.$('rotateView').disabled,true);
+  c.$('rotateView').onclick();assert.equal(c.viewport.rotation,0);
+ }
+ c.state.mobile_arm.cue.status='idle';c.cueBusy=true;c.updateCueControls();assert.equal(c.$('rotateView').disabled,true);
+ c.$('rotateView').onclick();assert.equal(c.viewport.rotation,0);
+ c.cueBusy=false;c.state.mobile_arm.cue.status='completed';c.updateCueControls();assert.equal(c.$('rotateView').disabled,false);
+ c.$('rotateView').onclick();assert.equal(c.viewport.rotation,180);
 });
 test('custom Clear view fields are sent and invalid distances block Play',async()=>{
  const c=context();c.cueDraft.push({action:'clear_view',direction:'right',distance_cm:7.5});

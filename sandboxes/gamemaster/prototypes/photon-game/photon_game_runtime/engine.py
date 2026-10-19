@@ -1,6 +1,8 @@
 """Presentation-free Photon Game simulation copied from proven Laser Tag Z."""
 
 from __future__ import annotations
+from shared import delay_trace as trace
+from . import particle_contacts, turret_controls, upgrades, event_rules
 
 import heapq
 import json
@@ -15,7 +17,7 @@ from itertools import combinations
 from typing import Any, Callable
 
 from .row_barriers import RowBarrierRuntime, validate_rows, validate_wave_routes
-from . import companions
+from . import companions, ranged_enemies, rewards, practice_intensity, wave_timeline
 from .mobile_arm import MobileArm
 
 
@@ -105,6 +107,9 @@ CORE_MARKER_ID = 38
 CORE_DETONATION_DURATION_S = 2.4
 PIECE_KEYS = ('green_piece_1', 'green_piece_2', 'purple_piece_1', 'purple_piece_2')
 DEFAULT_SETTINGS = {
+    **upgrades.DEFAULTS,
+    **ranged_enemies.DEFAULTS,
+    **rewards.DEFAULTS,
     **dict(zip(PIECE_KEYS, (100, 101, 102, 103))),
     "wave_count": 12,
     "wave_interval_s": 45.0,
@@ -426,6 +431,7 @@ class _CollisionGrid:
         self.cells: dict[tuple[int, int], set[int]] = defaultdict(set)
         self.entries: dict[int, tuple[float, float, float]] = {}
         self.entry_cells: dict[int, tuple[int, int]] = {}
+        self.pressure_neighbors = {}
         for enemy in enemies:
             self.add(enemy["id"], enemy["x"], enemy["y"], enemy["collision_radius"])
 
@@ -437,11 +443,13 @@ class _CollisionGrid:
         self, enemy_id: int, x: float, y: float, radius: float
     ) -> None:
         cell = self._cell(x, y)
+        self.pressure_neighbors.clear()
         self.entries[enemy_id] = (x, y, radius)
         self.entry_cells[enemy_id] = cell
         self.cells[cell].add(enemy_id)
 
     def remove(self, enemy_id: int) -> None:
+        self.pressure_neighbors.clear()
         cell = self.entry_cells.pop(enemy_id, None)
         self.entries.pop(enemy_id, None)
         if cell is not None:
@@ -464,27 +472,28 @@ class _CollisionGrid:
         """Return a smooth separation force before hard-disc contact occurs."""
         force_x = force_y = 0.0
         cell_x, cell_y = self._cell(x, y)
-        for offset_y in (-1, 0, 1):
-            for offset_x in (-1, 0, 1):
-                for other_id in self.cells.get((cell_x + offset_x, cell_y + offset_y), ()):
-                    if other_id == enemy_id:
-                        continue
-                    other_x, other_y, other_radius = self.entries[other_id]
-                    dx, dy = x - other_x, y - other_y
-                    preferred = radius + other_radius + FLOW_NEIGHBOR_MARGIN
-                    distance_sq = dx * dx + dy * dy
-                    if distance_sq >= preferred * preferred:
-                        continue
-                    if distance_sq <= 1e-18:
-                        angle = (enemy_id * 2.399963229728653 + other_id) % (math.pi * 2.0)
-                        direction_x, direction_y = math.cos(angle), math.sin(angle)
-                        distance = 0.0
-                    else:
-                        distance = math.sqrt(distance_sq)
-                        direction_x, direction_y = dx / distance, dy / distance
-                    strength = (preferred - distance) / preferred
-                    force_x += direction_x * strength
-                    force_y += direction_y * strength
+        key=(cell_x,cell_y)
+        neighbors=self.pressure_neighbors.get(key)
+        if neighbors is None:
+            neighbors=tuple((other_id,*self.entries[other_id]) for oy in (-1,0,1) for ox in (-1,0,1) for other_id in self.cells.get((cell_x+ox,cell_y+oy),()))
+            self.pressure_neighbors[key]=neighbors
+        for other_id,other_x,other_y,other_radius in neighbors:
+            if other_id==enemy_id:continue
+            dx, dy = x - other_x, y - other_y
+            preferred = radius + other_radius + FLOW_NEIGHBOR_MARGIN
+            distance_sq = dx * dx + dy * dy
+            if distance_sq >= preferred * preferred:
+                continue
+            if distance_sq <= 1e-18:
+                angle = (enemy_id * 2.399963229728653 + other_id) % (math.pi * 2.0)
+                direction_x, direction_y = math.cos(angle), math.sin(angle)
+                distance = 0.0
+            else:
+                distance = math.sqrt(distance_sq)
+                direction_x, direction_y = dx / distance, dy / distance
+            strength = (preferred - distance) / preferred
+            force_x += direction_x * strength
+            force_y += direction_y * strength
         return force_x, force_y
 
 
@@ -861,6 +870,8 @@ class DefenseEngine(RowBarrierRuntime):
             self.sim_time = 0.0
             self.runtime_time = 0.0
             self.run_started_at = None
+            self.start_countdown_duration_s = 0.0
+            self.start_countdown_remaining_s = 0.0
             self.core_hp = float(DEFAULT_SETTINGS["core_hp"])
             self.core_max_hp = float(DEFAULT_SETTINGS["core_hp"])
             self.settings = dict(DEFAULT_SETTINGS)
@@ -877,7 +888,9 @@ class DefenseEngine(RowBarrierRuntime):
             self.next_projectile_id = 1
             self.kills = 0
             self.player_progression = {}
+            self.event_game = None
             self.contract_control_tier = 1
+            self.spawn_intensity = None
             self.breaches = 0
             self.placements: dict[str, dict[str, Any]] = {}
             self.activation_order: list[str] = []
@@ -890,11 +903,14 @@ class DefenseEngine(RowBarrierRuntime):
             self.next_force_field_impact_id = 1
             self.physical_relation_tokens: dict[int, str] = {}
             self.atom_presence: dict[int, str] = {}
+            turret_controls.reset(self)
             self.atom_visits: dict[int, dict[str, Any]] = {}
             self.occupancy_error: str | None = 'Waiting for Atom occupancy'
             self._physical_sampled_at = 0.0
             self._placement_sampled_at = 0.0
             self.physical_input_error: str | None = None
+            self.ring_notice = None
+            self.ring_notice_sequence = 0
             self.ring_completed_at: float | None = None
             self.ring_completed_wall_at: float | None = None
             self.ring_socket_ids: list[str] = []
@@ -909,11 +925,17 @@ class DefenseEngine(RowBarrierRuntime):
             self.telemetry={'version':1,'first_placement_s':{'green':None,'purple':None},
                             'placements':{'green':0,'purple':0},'pickup_to_placement_s':{'green':[],'purple':[]},
                             'pause_count':0,'outcome_reason':None}
+            self.ranged = ranged_enemies.RangedCombat(self, CORE_OCTAGON_PLANES)
+            self.rewards = rewards.MatchRewards(self)
             self.pickup_times={}
             self.core_stage = "locked"
             self.core_first_tag: int | None = None
             self.core_first_team: str | None = None
             self.core_first_tag_wall_at: float | None = None
+            self.core_first_source: str | None = None
+            self.core_second_tag: int | None = None
+            self.core_second_source: str | None = None
+            self.core_reset_wall_at: float | None = None
             self.core_detonation_started_at: float | None = None
             self.core_purge_target_ids: set[int] = set()
             self.core_purge_ignited_ids: set[int] = set()
@@ -936,7 +958,7 @@ class DefenseEngine(RowBarrierRuntime):
         waves: list[dict[str, Any]] | None = None,
     ) -> None:
         """Install validated setup geometry while preserving operator choices."""
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             if self.phase != "setup":
                 raise ValueError("turret positions can only be changed before a run")
             if not isinstance(next_level, ContractLevelModel):
@@ -974,6 +996,7 @@ class DefenseEngine(RowBarrierRuntime):
         deadline = last + 0.05
         while not self._stop.wait(max(0.0, deadline-time.monotonic())):
             now = time.monotonic()
+            trace.measure('simulation.schedule_lag', max(0, now-deadline)*1000)
             dt = min(0.1, now - last)
             last = now
             if self._physical_source and not self.virtual_play:
@@ -991,12 +1014,16 @@ class DefenseEngine(RowBarrierRuntime):
             # a second 50 ms delay after the work. Never burst to catch up.
             deadline = max(deadline+0.05, time.monotonic())
 
-    def start(self, settings: dict[str, Any] | None = None, *, progression=None) -> None:
-        with self.lock:
+    def start(self, settings: dict[str, Any] | None = None, *, progression=None, reward_enabled=True, preset=None, countdown_s=0.0, event_game=None) -> None:
+        if not math.isfinite(float(countdown_s)) or not 0 <= countdown_s <= 5:
+            raise ValueError('start countdown must be between zero and five seconds')
+        with trace.locked(self.lock, 'simulation.lock'):
             mobile_arms = self.mobile_arms
             virtual_play = self.virtual_play
             atom_presence = dict(self.atom_presence) if virtual_play else {}
             atom_visits = {tag: dict(visit) for tag, visit in self.atom_visits.items()}
+            manual_atoms = dict(self.manual_atom_presence)
+            turret_states = dict(self.turret_states)
             runtime_time = self.runtime_time
             loadout = dict(self.loadout)
             placements = {
@@ -1036,6 +1063,9 @@ class DefenseEngine(RowBarrierRuntime):
             self.loadout = loadout
             self.placements = placements
             self.atom_presence = atom_presence
+            self.manual_atom_presence = manual_atoms
+            self.atom_presence.update(manual_atoms)
+            self.turret_states = turret_states
             self.atom_visits = atom_visits
             self.occupancy_error = None if virtual_play else 'Waiting for fresh Atom occupancy'
             for tower in placements.values():
@@ -1047,7 +1077,13 @@ class DefenseEngine(RowBarrierRuntime):
             self.placement_link_attempts = placement_link_attempts
             if settings:
                 self.settings.update(settings)
+            self.ranged.start(orc_schedule(self.settings, self.wave_source, self.contract_control_tier))
+            self.rewards.start(orc_schedule(self.settings, self.wave_source, self.contract_control_tier))
+            self.spawn_intensity = practice_intensity.describe(orc_schedule(self.settings, self.wave_source, self.contract_control_tier), preset)
+            self.rewards.eligible=reward_enabled
             self.configure_piece_codes(self.settings)
+            self.event_game=json.loads(json.dumps(event_game)) if event_game else None
+            for tower in self.placements.values():event_rules.require_atom(self,tower['atom_tag_id'])
             for arm in self.mobile_arms.values():
                 arm.cue.stop(arm)
             self.settings["max_active_enemies"] = min(MAX_ACTIVE_ENEMIES, int(self.settings["max_active_enemies"]))
@@ -1056,7 +1092,7 @@ class DefenseEngine(RowBarrierRuntime):
                 tower.pop('companion', None)
                 if not (self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0):
                     tower['upgrade_level'] = self._unit_level(tower['owner'], tower['tower_type'])
-                tower['upgrade_multiplier'] = 1 + .1 * (tower['upgrade_level'] - 1)
+                tower['upgrade_multiplier'] = upgrades.multiplier(self.settings, tower['upgrade_level'])
                 tower_base_max_hp = self._tower_max_hp() * tower['upgrade_multiplier']
                 tower_max_hp = tower_base_max_hp * self._link_multiplier_for_count(1)
                 tower["base_max_hp"] = tower_base_max_hp
@@ -1075,6 +1111,7 @@ class DefenseEngine(RowBarrierRuntime):
             self.phase = "running"
             self._sync_companions(create=True, installed=True)
             self.run_started_at = time.time()
+            self.start_countdown_duration_s = self.start_countdown_remaining_s = float(countdown_s)
             for topology in field_topology:
                 self._create_force_field(
                     topology["from_socket"],
@@ -1087,13 +1124,23 @@ class DefenseEngine(RowBarrierRuntime):
             self._evaluate_ring_topology()
             if float(self.settings.get('first_wave_delay_s',0)) > 0:
                 self.next_wave_at = float(self.settings['first_wave_delay_s'])
-            else:
+            elif not self.start_countdown_remaining_s:
                 self._launch_wave(1)
             self._event("run_started", wave=self.current_wave)
         self._changed()
 
+    def end_match(self) -> None:
+        """Operator termination preserves actual combat evidence for settlement."""
+        with trace.locked(self.lock,'simulation.lock'):
+            if self.phase!='running':raise ValueError('The match has already ended')
+            for arm in self.mobile_arms.values():arm.halt('Match ended by Game Master')
+            self.phase='operator_ended';self.paused=False
+            self.telemetry['outcome_reason']='gamemaster_end'
+            self._event('operator_match_ended')
+        self._changed()
+
     def pause(self, paused: bool = True) -> None:
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             if paused:
                 for arm in self.mobile_arms.values():
                     arm.halt('Game paused. Connect after resuming.')
@@ -1103,9 +1150,11 @@ class DefenseEngine(RowBarrierRuntime):
         self._changed()
 
     def set_virtual_play(self, enabled: bool) -> None:
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             if bool(enabled) != self.virtual_play:
                 self.atom_presence.clear()
+                self.manual_atom_presence.clear()
+                self.physical_atom_presence.clear()
                 self.occupancy_error = None if enabled else 'Waiting for fresh Atom occupancy'
             if not enabled:
                 for arm in self.mobile_arms.values():
@@ -1115,11 +1164,13 @@ class DefenseEngine(RowBarrierRuntime):
             self._event("input_mode", virtual_play=self.virtual_play)
         self._changed()
 
-    def set_virtual_test_loadout(self, levels, control=...) -> None:
+    def set_virtual_test_loadout(self, levels, control=..., *, spawn_settings=None, spawn_tier=None, spawn_preset=None) -> None:
         """Practice-only overrides; no saved player or currency mutations."""
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             if self.phase not in ('setup', 'running'):
                 raise ValueError('reset the finished game before changing test unlocks')
+            if spawn_settings is not None and self.phase == 'running' and self.rewards.eligible:
+                raise ValueError('end the scored attempt before changing test unlocks')
             if control is not ... and control is not None and (type(control) is not int or not 1 <= control <= 4):
                 raise ValueError('mobile control unlock must be an integer from 1 to 4, or null')
             if levels is not None:
@@ -1130,6 +1181,8 @@ class DefenseEngine(RowBarrierRuntime):
                     minimum = 1 if track == 'forcefield' else 0
                     if type(level) is not int or not minimum <= level <= 4:
                         raise ValueError(f'{track} must be an integer from {minimum} to 4')
+            if spawn_settings is not None:
+                practice_intensity.apply(self, spawn_settings, spawn_tier, spawn_preset, orc_schedule)
             if control is not ...:
                 self.virtual_test_control = control
                 for arm in self.mobile_arms.values():
@@ -1145,7 +1198,7 @@ class DefenseEngine(RowBarrierRuntime):
             if self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[tower['tower_type']]] == 0:
                 continue
             level = self._unit_level(tower['owner'], tower['tower_type'])
-            tower.update(upgrade_level=level, upgrade_multiplier=1 + .1 * (level - 1))
+            tower.update(upgrade_level=level, upgrade_multiplier=upgrades.multiplier(self.settings, level))
         self._sync_tower_link_bonuses()
         self._sync_companions(create=True)
         for field in self.force_fields.values():
@@ -1163,7 +1216,7 @@ class DefenseEngine(RowBarrierRuntime):
         return codes
 
     def configure_piece_codes(self, settings):
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             codes = self.validate_piece_codes(settings)
             owners = dict(zip(codes, ('green', 'green', 'purple', 'purple')))
             if self.atom_owners == owners and all(list(self.mobile_arms[side].tags) == codes[i:i+2] for side, i in (('green', 0), ('purple', 2))):
@@ -1178,6 +1231,8 @@ class DefenseEngine(RowBarrierRuntime):
                 tower['atom_tag_id'] = by_role[tower['tower_type']]
             self.physical_relation_tokens.clear()
             self.atom_presence.clear()
+            self.manual_atom_presence.clear()
+            self.physical_atom_presence.clear()
             self.atom_visits.clear()
             self.settings.update(dict(zip(PIECE_KEYS, codes)))
 
@@ -1188,11 +1243,30 @@ class DefenseEngine(RowBarrierRuntime):
             raise ValueError(
                 "Atom roles are fixed by the configured team piece slots"
             )
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             self.loadout[atom_tag_id] = expected
 
+    @staticmethod
+    def _tower_inactive(tower):
+        return bool(tower.get('destroyed') or tower.get('deactivated'))
+
+    def operator_turret_command(self, action, socket_id, value):
+        with trace.locked(self.lock, 'simulation.lock'):
+            if action == 'operator_atom':
+                turret_controls.select_atom(self, socket_id, value)
+            elif action == 'operator_turret':
+                turret_controls.set_activation(self, socket_id, value)
+            elif action == 'operator_core':
+                turret_controls.select_core(self, value)
+            else:
+                raise ValueError('Unknown turret command')
+            self._sync_tower_link_bonuses()
+            self._sync_companions()
+        self._changed()
+
     def _sync_companion(self, tower, *, create=False, installed=False):
-        return companions.synchronize(tower, self.level.sockets[tower['socket_id']].get('companion'),
+        descriptor = self.level.sockets[tower['socket_id']].get('companion') if self.settings['l4_turrets_per_socket'] == 2 else None
+        return companions.synchronize(tower, descriptor,
                                       self.runtime_time, TOWER_ACTIVATION_DURATION_S,
                                       1 / TOWER_STATS[tower['tower_type']]['rate'],
                                       create=create, installed=installed)
@@ -1238,7 +1312,7 @@ class DefenseEngine(RowBarrierRuntime):
         living_socket_ids = {
             str(socket_id)
             for socket_id, tower in self.placements.items()
-            if not tower.get("destroyed")
+            if not self._tower_inactive(tower)
         }
         adjacency = {
             socket_id: set() for socket_id in living_socket_ids
@@ -1294,9 +1368,9 @@ class DefenseEngine(RowBarrierRuntime):
             present_tag = next((tag for tag, sid in self.atom_presence.items()
                                 if sid == socket_id and self.atom_visits.get(tag, {}).get('socket_id') == sid
                                 and not self.atom_visits[tag]['departed']), None)
-            active = present_tag is not None and not tower.get('destroyed')
+            active = present_tag is not None and not self._tower_inactive(tower)
             multiplier = 2.0 if active else 1.0
-            tower.update(atom_buff_state='active' if active else 'unavailable' if self.occupancy_error and not tower.get('destroyed') else 'inactive',
+            tower.update(atom_buff_state='active' if active else 'unavailable' if self.occupancy_error and not self._tower_inactive(tower) else 'inactive',
                          occupying_atom_id=present_tag if active else None,
                          atom_health_multiplier=multiplier, atom_damage_multiplier=multiplier,
                          normal_max_hp=base_max_hp * float(bonus['link_multiplier']))
@@ -1325,8 +1399,9 @@ class DefenseEngine(RowBarrierRuntime):
             raise ValueError('Unknown Atom')
         if team and self.atom_owners[atom_tag_id] != team:
             raise PermissionError('Atom belongs to the other team')
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             self.atom_presence.pop(atom_tag_id, None)
+            self.manual_atom_presence.pop(atom_tag_id, None)
             if atom_tag_id in self.atom_visits:
                 self.atom_visits[atom_tag_id]['departed'] = True
             self._sync_tower_link_bonuses()
@@ -1334,6 +1409,10 @@ class DefenseEngine(RowBarrierRuntime):
         self._changed()
 
     def _ingest_occupancy(self, value):
+        self._ingest_physical_occupancy(value)
+        turret_controls.reconcile_physical(self)
+
+    def _ingest_physical_occupancy(self, value):
         """Consume validated camera relationships independently of arm readiness."""
         self.atom_presence.clear()
         if not isinstance(value, dict) or value.get('status') != 'ready':
@@ -1347,12 +1426,13 @@ class DefenseEngine(RowBarrierRuntime):
         self.occupancy_error = None
         for relation in value['relations']:
             tag = relation['movable_id']
-            if tag not in self.atom_owners:
+            if tag not in self.atom_owners or not event_rules.allowed(self,tag):
                 continue
             visit = self.atom_visits.get(tag)
             departure = relation['departed_at']
             if visit and departure is not None and departure > visit['accepted_at']:
                 visit['departed'] = True
+                visit.pop('operator_pending',None)
             if relation['state'] == 'present':
                 socket_id = self.level.socket_by_marker.get(relation['marker_id'])
                 if socket_id is not None:
@@ -1381,12 +1461,13 @@ class DefenseEngine(RowBarrierRuntime):
         source: str,
     ) -> dict[str, Any]:
         socket = self.level.sockets[socket_id]
+        turret_controls.activated(self, socket_id, owner)
         aim_angle = math.atan2(
             float(self.level.core["y"]) - socket["y"],
             float(self.level.core["x"]) - socket["x"],
         )
         upgrade_level = self._unit_level(owner, kind)
-        upgrade_multiplier = 1 + .1 * (upgrade_level - 1)
+        upgrade_multiplier = upgrades.multiplier(self.settings, upgrade_level)
         base_max_hp = self._tower_max_hp() * upgrade_multiplier
         link_multiplier = self._link_multiplier_for_count(1)
         max_hp = base_max_hp * link_multiplier
@@ -1422,6 +1503,7 @@ class DefenseEngine(RowBarrierRuntime):
             "linked_turret_count": 1,
             "link_multiplier": link_multiplier,
             "destroyed": False,
+            "deactivated": False,
             "destroyed_at": None,
         }
         self._sync_companion(tower, create=True, installed=True)
@@ -1430,6 +1512,13 @@ class DefenseEngine(RowBarrierRuntime):
     def _replenish_tower(self, tower: dict[str, Any], activation_tag: int) -> None:
         if tower.get("destroyed"):
             raise ValueError("destroyed defenses must be replaced")
+        turret_controls.activated(self, tower['socket_id'], self.atom_owners[activation_tag])
+        if tower.get('deactivated'):
+            tower['deactivated'] = False
+            tower['activation_started_at'] = self.runtime_time
+            tower['activation_complete_at'] = self.runtime_time + TOWER_ACTIVATION_DURATION_S
+            tower.pop('companion', None)
+            self._sync_companion(tower, create=True, installed=True)
         tower["cooldown"] = 0.0
         tower["last_damage_at"] = None
         tower["last_damage_amount"] = 0.0
@@ -1482,7 +1571,7 @@ class DefenseEngine(RowBarrierRuntime):
         socket_id: str | None = None,
     ) -> dict[str, Any]:
         atom_tag_id = int(atom_tag_id)
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             if socket_id not in (None, ""):
                 tower = self.placements.get(str(socket_id))
                 if tower and int(tower["atom_tag_id"]) != atom_tag_id:
@@ -1497,8 +1586,8 @@ class DefenseEngine(RowBarrierRuntime):
                 tower = matches[0] if matches else None
             if tower is None:
                 raise ValueError("defense unit is not placed")
-            if tower.get("destroyed"):
-                raise ValueError("destroyed defense unit must be reset before aiming")
+            if self._tower_inactive(tower):
+                raise ValueError("Activate this defense before aiming")
             angle = float(angle_degrees)
             reach = float(spread)
             if not math.isfinite(angle) or not math.isfinite(reach) or not 0.0 <= reach <= 1.0:
@@ -1516,6 +1605,7 @@ class DefenseEngine(RowBarrierRuntime):
         atom_tag_id = int(atom_tag_id)
         if atom_tag_id not in self.atom_owners:
             raise ValueError("Atom tag must be a configured movable piece")
+        event_rules.require_atom(self,atom_tag_id)
         owner = self.atom_owners[atom_tag_id]
         if team and team != owner:
             raise PermissionError(f"tag {atom_tag_id} belongs to {owner}")
@@ -1523,12 +1613,13 @@ class DefenseEngine(RowBarrierRuntime):
             raise PermissionError("Virtual play is not enabled")
         if source not in {"virtual", "physical"}:
             raise ValueError("invalid placement source")
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             if socket_id is None:
                 self.remove_atom(atom_tag_id, source=source, team=team)
                 return
             if socket_id not in self.level.sockets:
                 raise ValueError("unknown socket")
+            event_rules.require_atom(self,atom_tag_id)
             kind = self.piece_roles[atom_tag_id]
             if self.virtual_test_loadout is not None and self.virtual_test_loadout[UPGRADE_TRACKS[kind]] == 0:
                 raise ValueError(f'{kind.replace("_", " ")} is locked in the practice loadout')
@@ -1547,6 +1638,8 @@ class DefenseEngine(RowBarrierRuntime):
                 'accepted_at': (self._placement_sampled_at or time.time()) if source == 'physical' else time.time(),
             }
             if source == 'virtual':
+                self.manual_atom_presence = {tag: sid for tag, sid in self.manual_atom_presence.items()
+                                             if tag != atom_tag_id and sid != socket_id}
                 for tag, sid in self.atom_presence.items():
                     if sid == socket_id and tag != atom_tag_id and tag in self.atom_visits:
                         self.atom_visits[tag]['departed'] = True
@@ -1575,7 +1668,7 @@ class DefenseEngine(RowBarrierRuntime):
                     candidate_socket
                     for candidate_socket in reversed(self.activation_order)
                     if candidate_socket in self.placements
-                    and not self.placements[candidate_socket].get("destroyed")
+                    and not self._tower_inactive(self.placements[candidate_socket])
                 ),
                 None,
             )
@@ -1594,27 +1687,32 @@ class DefenseEngine(RowBarrierRuntime):
         self._changed()
 
     def activate_core_tag(
-        self, atom_tag_id: int, *, source: str, team: str | None = None
+        self, atom_tag_id: int, *, source: str, team: str | None = None,
+        replace_manual_first: bool = False,
     ) -> None:
         atom_tag_id = int(atom_tag_id)
         if atom_tag_id not in self.atom_owners:
             raise ValueError("Core activation requires a configured movable piece")
+        event_rules.require_atom(self,atom_tag_id)
         owner = self.atom_owners[atom_tag_id]
         if team and team != owner:
             raise PermissionError(f"tag {atom_tag_id} belongs to {owner}")
         if source == "virtual" and not self.virtual_play:
             raise PermissionError("Virtual play is not enabled")
-        if source not in {"virtual", "physical"}:
+        if source not in {"virtual", "physical", "operator"}:
             raise ValueError("invalid core activation source")
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             if self.phase != "running":
                 raise ValueError("Start the run before activating ArUco 38")
+            self._check_ring_integrity()
             if self.ring_completed_at is None:
                 raise ValueError("Complete a force-field ring with 8-16 turrets first")
-            if self.core_stage == "ring_ready":
+            if self.core_stage == "ring_ready" or (replace_manual_first and source == 'physical'
+                    and self.core_stage == 'first_tag' and self.core_first_source == 'operator'):
                 self.core_first_tag = atom_tag_id
                 self.core_first_team = owner
                 self.core_first_tag_wall_at = time.time()
+                self.core_first_source = source
                 self.core_stage = "first_tag"
                 self._event(
                     "core_first_tag",
@@ -1626,7 +1724,11 @@ class DefenseEngine(RowBarrierRuntime):
             elif self.core_stage == "first_tag":
                 if owner == self.core_first_team:
                     raise ValueError("The second core tag must belong to the opposing team")
+                self.core_second_tag = atom_tag_id
+                self.core_second_source = source
                 self.core_stage = "detonating"
+                self.telemetry["core_health_at_stack"] = {"hp": self.core_hp, "max_hp": self.core_max_hp}
+                self.ranged.clear()
                 self.core_detonation_started_at = self.sim_time
                 self.core_purge_target_ids = set(self.enemies)
                 self.core_purge_ignited_ids.clear()
@@ -1643,16 +1745,23 @@ class DefenseEngine(RowBarrierRuntime):
                 raise ValueError("The ArUco 38 sequence is already complete")
             if source == 'virtual':
                 self.remove_atom(atom_tag_id, source=source, team=team)
+            elif source == 'operator':
+                self.manual_atom_presence.pop(atom_tag_id, None)
+                self.atom_presence.pop(atom_tag_id, None)
+                if atom_tag_id in self.atom_visits:
+                    self.atom_visits[atom_tag_id]['departed'] = True
         self._changed()
 
     def _buff_signature(self):
-        return (self.occupancy_error, self.physical_input_error, tuple(
+        return (self.occupancy_error, self.physical_input_error,
+                tuple(sorted(self.atom_presence.items())), tuple(sorted(self.physical_atom_presence.items())), tuple(
             (sid, t.get('hp'), t.get('max_hp'), t.get('atom_buff_state'), t.get('occupying_atom_id'))
             for sid, t in self.placements.items()))
 
+    @trace.traced('simulation.ingest_physical')
     def ingest_physical(self, placement: dict[str, Any]) -> None:
         """Apply Board-owned stable relationships through Game-owned rules."""
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             previous_buffs = self._buff_signature()
             self._ingest_occupancy(placement.get('occupancy') if isinstance(placement, dict) else None)
             if not isinstance(placement, dict) or placement.get("status") != "ready":
@@ -1668,9 +1777,12 @@ class DefenseEngine(RowBarrierRuntime):
                 return
             self.physical_input_error = None
             relations = placement.get("relations") or []
+            occupancy = placement.get('occupancy') or {}
+            occupied = {r['movable_id']: r for r in occupancy.get('relations', [])}
             sampled_at = float(placement["sampled_at"])
             self._placement_sampled_at = sampled_at
             for atom_tag_id, owner in self.atom_owners.items():
+                if not event_rules.allowed(self,atom_tag_id):continue
                 candidates = [
                     (float(relation["distance"]), "socket", int(relation["marker_id"]), relation)
                     for relation in relations
@@ -1681,7 +1793,8 @@ class DefenseEngine(RowBarrierRuntime):
                 ]
                 if (
                     self.ring_completed_at is not None
-                    and self.core_stage == "ring_ready"
+                    and (self.core_stage == "ring_ready" or
+                         self.core_stage == 'first_tag' and self.core_first_source == 'operator')
                 ):
                     candidates.extend(
                         (float(relation["distance"]), "core", CORE_MARKER_ID, relation)
@@ -1698,6 +1811,14 @@ class DefenseEngine(RowBarrierRuntime):
                 if marker is None or relation is None:
                     self.physical_relation_tokens.pop(atom_tag_id, None)
                     continue
+                observed = occupied.get(atom_tag_id)
+                if (target_kind == 'socket' and observed is not None
+                        and (observed['state'] != 'present' or observed['marker_id'] != marker)):
+                    # Placement's cached overlap can outlive a camera-confirmed
+                    # uncovering (e.g. the Atom is lifted vertically). It must
+                    # not consume the return visit or heal until presence returns.
+                    self.physical_relation_tokens.pop(atom_tag_id, None)
+                    continue
                 # A relation that was already stable before a new run/ring must
                 # still provide one full Board-defined evidence window after
                 # that gameplay gate opens. Game does not infer tag stability.
@@ -1709,6 +1830,8 @@ class DefenseEngine(RowBarrierRuntime):
                 gate_at = self.run_started_at
                 if target_kind == "core":
                     gate_at = self.ring_completed_wall_at
+                    if self.core_reset_wall_at is not None and relation['observed_since'] <= self.core_reset_wall_at:
+                        continue  # X consumes the resting first layer until a new physical visit.
                 if gate_at is None or sampled_at < gate_at + duration:
                     continue
                 relation_id = str(relation["relation_id"])
@@ -1718,7 +1841,7 @@ class DefenseEngine(RowBarrierRuntime):
                 try:
                     if target_kind == "core":
                         self.activate_core_tag(
-                            atom_tag_id, source="physical", team=owner
+                            atom_tag_id, source="physical", team=owner, replace_manual_first=True
                         )
                         self.core_first_tag_wall_at = sampled_at
                     else:
@@ -1729,7 +1852,9 @@ class DefenseEngine(RowBarrierRuntime):
                             team=owner,
                         )
                 except (PermissionError, ValueError):
-                    pass
+                    # Rejected evidence has not been consumed. A later frame
+                    # can succeed once the gameplay condition changes.
+                    continue
                 self.physical_relation_tokens[atom_tag_id] = relation_id
             self._ingest_core_stack(placement.get("stacking"))
             self._sync_tower_link_bonuses()
@@ -1747,7 +1872,7 @@ class DefenseEngine(RowBarrierRuntime):
             owner = self.atom_owners.get(upper)
             if (relation.get("stable") is not True
                 or relation["lower_id"] != self.core_first_tag
-                or owner is None or owner == self.core_first_team
+                or owner is None or owner == self.core_first_team or not event_rules.allowed(self,upper)
                 or relation["observed_since"] <= self.core_first_tag_wall_at):
                 continue
             self.activate_core_tag(upper, source="physical", team=owner)
@@ -1773,6 +1898,8 @@ class DefenseEngine(RowBarrierRuntime):
             group = {
                 **source_group, "count": count, "spawned": 0,
                 "spawn_offset": spawn_offset,
+                "release_end_s": self.sim_time + max(.1, float(source_group.get('duration_s', 1)) /
+                    max(.05, float(self.settings['release_rate_multiplier'])*float(self.settings.get(CONTROL_PACE_KEYS[self.contract_control_tier-1], 1)))),
                 "brute_interval": (
                     REGULAR_ORCS_PER_BRUTE + 1 if number >= first_brute_wave else 0
                 ),
@@ -1815,7 +1942,12 @@ class DefenseEngine(RowBarrierRuntime):
             for group in wave["groups"]:
                 duration = max(0.1, float(group.get("duration_s", 1.0)) / max(0.05, float(self.settings["release_rate_multiplier"])*float(self.settings.get(CONTROL_PACE_KEYS[self.contract_control_tier-1],1))))
                 count = int(group["count"])
-                target = min(count, max(1 if count else 0, int(count * min(1.0, elapsed / duration))))
+                if 'release_at' in group:
+                    baseline = group['release_start']
+                    fraction = min(1., max(0., (self.sim_time-group['release_at'])/group['release_duration_s']))
+                    target = min(count, baseline+int((count-baseline)*fraction))
+                else:
+                    target = min(count, max(1 if count else 0, int(count * min(1.0, elapsed / duration))))
                 while group["spawned"] < target:
                     if len(self.enemies) < active_limit and self._spawn_enemy(
                         self._wave_enemy_type(group, group["spawned"]),
@@ -1838,6 +1970,8 @@ class DefenseEngine(RowBarrierRuntime):
                     # Keep overflow in this source group for the next tick.
                     group["spawned"] += accepted
                     break
+                if group['spawned'] >= count and 'released_at' not in group:
+                    group['released_at'] = self.sim_time
         if self.current_wave < min(int(self.settings["wave_count"]), len(self.wave_source)) and self.sim_time >= self.next_wave_at:
             self._launch_wave(self.current_wave + 1)
 
@@ -1970,6 +2104,7 @@ class DefenseEngine(RowBarrierRuntime):
             "electrocution_depth": 0,
             "electrocution_intensity": 0.0,
         }
+        self.ranged.spawned(self.enemies[enemy_id])
         if collision_grid is not None:
             collision_grid.add(enemy_id, spawn_x, spawn_y, radius)
         return True
@@ -2209,7 +2344,7 @@ class DefenseEngine(RowBarrierRuntime):
 
     def _admit_ready_particles(self, living: list[dict[str, Any]]) -> None:
         for enemy in living:
-            if enemy["attacking"]:
+            if enemy["attacking"] or self.ranged.holding(enemy):
                 continue
             if (self.level.row_barriers
                     and enemy.get('row_route_revision') != self.row_topology_revision):
@@ -2224,68 +2359,7 @@ class DefenseEngine(RowBarrierRuntime):
             self.breaches += 1
 
     def _resolve_particle_contacts(self, living: list[dict[str, Any]]) -> None:
-        by_id = {enemy["id"]: enemy for enemy in living}
-        population = len(living)
-        solver_iterations = (
-            2 if population >= 800 else
-            4 if population >= 600 else
-            8 if population >= 450 else
-            PARTICLE_SOLVER_ITERATIONS
-        )
-        for _ in range(solver_iterations):
-            cells: dict[tuple[int, int], list[int]] = defaultdict(list)
-            for enemy in living:
-                cell = (
-                    math.floor(enemy["x"] / COLLISION_CELL_SIZE),
-                    math.floor(enemy["y"] / COLLISION_CELL_SIZE),
-                )
-                cells[cell].append(enemy["id"])
-            contacts = 0
-            for enemy in living:
-                cell_x = math.floor(enemy["x"] / COLLISION_CELL_SIZE)
-                cell_y = math.floor(enemy["y"] / COLLISION_CELL_SIZE)
-                for offset_y in (-1, 0, 1):
-                    for offset_x in (-1, 0, 1):
-                        for other_id in cells.get((cell_x + offset_x, cell_y + offset_y), ()):
-                            if other_id <= enemy["id"]:
-                                continue
-                            other = by_id[other_id]
-                            dx, dy = other["x"] - enemy["x"], other["y"] - enemy["y"]
-                            minimum = (
-                                enemy["collision_radius"] + other["collision_radius"]
-                                + COLLISION_PADDING
-                            )
-                            distance_sq = dx * dx + dy * dy
-                            if distance_sq >= (minimum - 1e-6) ** 2:
-                                continue
-                            if distance_sq <= 1e-18:
-                                angle = (enemy["id"] * 2.399963229728653 + other_id) % (math.pi * 2.0)
-                                normal_x, normal_y = math.cos(angle), math.sin(angle)
-                                distance = 0.0
-                            else:
-                                distance = math.sqrt(distance_sq)
-                                normal_x, normal_y = dx / distance, dy / distance
-                            # A small deterministic oblique component prevents
-                            # wall contacts from crystallizing into one-dimensional
-                            # rows; compression then spills into the open basin.
-                            jitter = math.sin(
-                                enemy["id"] * 12.9898 + other_id * 78.233
-                            ) * 0.24
-                            cosine, sine = math.cos(jitter), math.sin(jitter)
-                            normal_x, normal_y = (
-                                normal_x * cosine - normal_y * sine,
-                                normal_x * sine + normal_y * cosine,
-                            )
-                            correction = (minimum - distance) * 0.74
-                            enemy["x"] -= normal_x * correction
-                            enemy["y"] -= normal_y * correction
-                            other["x"] += normal_x * correction
-                            other["y"] += normal_y * correction
-                            self._constrain_particle(enemy)
-                            self._constrain_particle(other)
-                            contacts += 1
-            if contacts == 0:
-                break
+        particle_contacts.resolve_contacts(self,living,COLLISION_CELL_SIZE,COLLISION_PADDING,PARTICLE_SOLVER_ITERATIONS)
 
     def _integrate_particles(
         self, living: list[dict[str, Any]], dt: float, slow_by_enemy: dict[int, float]
@@ -2294,6 +2368,9 @@ class DefenseEngine(RowBarrierRuntime):
         origins = {enemy["id"]: (enemy["x"], enemy["y"]) for enemy in living}
         origin_segments = {enemy['id']: enemy['segment'] for enemy in living} if self._active_rows else {}
         for enemy in living:
+            if self.ranged.holding(enemy):
+                enemy["vx"] = enemy["vy"] = 0.0
+                continue
             if enemy["attacking"]:
                 self._basin_particle_velocity(enemy, grid, dt)
                 speed_cap = CORE_BASIN_SPEED * PARTICLE_MAX_SPEED_SCALE
@@ -2341,7 +2418,7 @@ class DefenseEngine(RowBarrierRuntime):
                 enemy["blocked_steps"] = 0
             else:
                 enemy["blocked_steps"] += 1
-            if not enemy["attacking"]:
+            if not enemy["attacking"] and not self.ranged.holding(enemy):
                 self._update_road_progress(enemy)
 
     def _tower_targeting(self, tower: dict[str, Any]) -> dict[str, Any]:
@@ -2615,6 +2692,7 @@ class DefenseEngine(RowBarrierRuntime):
                 reason=reason,
             )
         if retired_ring_boundary:
+            self._invalidate_ring(reason)
             self.ring_completed_at = None
             self.ring_completed_wall_at = None
             self.ring_socket_ids = []
@@ -2770,8 +2848,8 @@ class DefenseEngine(RowBarrierRuntime):
             if (
                 first is None
                 or second is None
-                or first.get("destroyed")
-                or second.get("destroyed")
+                or self._tower_inactive(first)
+                or self._tower_inactive(second)
             ):
                 attempt["status"] = "pending_endpoint"
                 attempt["blocker_ids"] = []
@@ -2837,7 +2915,7 @@ class DefenseEngine(RowBarrierRuntime):
     def _field_endpoints_alive(self, field: dict[str, Any]) -> bool:
         return all(
             socket_id in self.placements
-            and not self.placements[socket_id].get("destroyed")
+            and not self._tower_inactive(self.placements[socket_id])
             for socket_id in (field["from_socket"], field["to_socket"])
         )
 
@@ -2866,12 +2944,38 @@ class DefenseEngine(RowBarrierRuntime):
     def _active_living_socket_ids(self) -> set[str]:
         return {
             socket_id for socket_id, tower in self.placements.items()
-            if not tower.get("destroyed")
+            if not self._tower_inactive(tower)
         }
+
+    def _invalidate_ring(self, reason):
+        if self.ring_completed_at is None or self.core_stage in ('detonating','complete'):
+            return
+        self.ring_completed_at = self.ring_completed_wall_at = None
+        self.ring_socket_ids = []
+        self.field_immunity_until = 0.0
+        self.core_stage = 'locked'
+        self.core_first_tag = self.core_first_team = self.core_first_tag_wall_at = None
+        self.core_first_source = self.core_second_tag = self.core_second_source = None
+        self._ring_message('incomplete')
+        self._event('ring_incomplete', reason=reason)
+
+    def _ring_message(self, kind):
+        self.ring_notice_sequence += 1
+        self.ring_notice = {'sequence':self.ring_notice_sequence,'kind':kind,'at':time.time(),
+                           'message':'Ring activated! The center is now active.' if kind=='activated' else
+                           'Ring incomplete! Complete the ring again before the center reactivates.'}
+
+    def _check_ring_integrity(self):
+        if self.ring_completed_at is not None and self.ring_socket_ids and any(
+                (field := self._field_between(a,b)) is None or not self._field_operational(field)
+                for a,b in self._ring_pairs(self.ring_socket_ids)):
+            self._invalidate_ring('boundary_unavailable')
 
     def _evaluate_ring_topology(self) -> None:
         """Atomically close the best valid ring in the live turret geometry."""
+        self._check_ring_integrity()
         self._try_establish_ring()
+        self._maybe_complete_ring()
         self._sync_tower_link_bonuses()
 
     def _analyze_ring_candidate(
@@ -3417,7 +3521,7 @@ class DefenseEngine(RowBarrierRuntime):
         if self.ring_completed_at is not None or self.phase != "running":
             return
         order = list(self.ring_candidate_socket_ids)
-        if not order:
+        if not order or any(s not in self.placements for s in order):
             return
         points = [
             (float(self.placements[socket_id]["x"]), float(self.placements[socket_id]["y"]))
@@ -3444,6 +3548,7 @@ class DefenseEngine(RowBarrierRuntime):
             self.settings["ring_field_immunity_s"]
         )
         self.core_stage = "ring_ready"
+        self._ring_message("activated")
         self._event(
             "ring_completed",
             turret_count=len(order),
@@ -3592,7 +3697,7 @@ class DefenseEngine(RowBarrierRuntime):
                 contacts[field["field_id"]] = self.sim_time + FIELD_CONTACT_REARM_S
                 field["last_hit_at"] = self.sim_time
                 impact = self._record_force_field_impact(field, enemy)
-                enemy["hp"] -= float(self.settings["force_field_damage_per_s"])
+                self._hurt_enemy(enemy, float(self.settings["force_field_damage_per_s"]), 'shared')
                 self._reroute_enemy(enemy)
                 handled.add(enemy["id"])
                 counted = enemy["id"] not in field["impacted_enemy_ids"] and not immune
@@ -3627,6 +3732,8 @@ class DefenseEngine(RowBarrierRuntime):
         topology_changed = False
         samples = []
         for enemy in enemies:
+            if self.ranged.enabled(enemy):
+                continue
             x,y = float(enemy['x']),float(enemy['y'])
             previous = (previous_positions.get(int(enemy['id']))
                         if previous_positions is not None and enemy.get('id') is not None else None)
@@ -3635,7 +3742,7 @@ class DefenseEngine(RowBarrierRuntime):
             dps = float(enemy.get('tower_dps',enemy.get('core_dps',0)))
             samples.append((x,y,px,py,radius,dps))
         for tower in self.placements.values():
-            if tower.get("destroyed"):
+            if self._tower_inactive(tower):
                 continue
             damage = 0.0
             tx,ty = float(tower['x']),float(tower['y'])
@@ -3659,21 +3766,30 @@ class DefenseEngine(RowBarrierRuntime):
                 damage += dps * dt * overlap
             if damage <= 0.0:
                 continue
-            previous_hp = max(0.0, float(tower["hp"]))
-            tower["hp"] = max(0.0, previous_hp - damage)
-            tower["last_damage_at"] = self.sim_time
-            tower["last_damage_amount"] = previous_hp - tower["hp"]
-            if tower["hp"] <= 0.0:
-                tower["destroyed"] = True
-                tower["destroyed_at"] = self.sim_time
-                tower["last_fire_target"] = None
-                tower["last_fire_chain"] = []
-                topology_changed = True
-                self._event("tower_destroyed", atom_tag_id=tower["atom_tag_id"], socket_id=tower["socket_id"])
+            topology_changed |= self._apply_tower_damage(tower, damage)
         if topology_changed:
-            self._reconcile_connections(reason="tower_destroyed")
-            self._evaluate_ring_topology()
-            self._refresh_row_barriers()
+            self._after_tower_destruction()
+
+    def _apply_tower_damage(self, tower: dict[str, Any], damage: float) -> bool:
+        if self._tower_inactive(tower) or damage <= 0:
+            return False
+        previous_hp = max(0.0, float(tower["hp"]))
+        tower["hp"] = max(0.0, previous_hp - damage)
+        tower["last_damage_at"] = self.sim_time
+        tower["last_damage_amount"] = previous_hp - tower["hp"]
+        if tower["hp"] > 0:
+            return False
+        tower["destroyed"] = True
+        tower["destroyed_at"] = self.sim_time
+        tower["last_fire_target"] = None
+        tower["last_fire_chain"] = []
+        self._event("tower_destroyed", atom_tag_id=tower["atom_tag_id"], socket_id=tower["socket_id"])
+        return True
+
+    def _after_tower_destruction(self) -> None:
+        self._reconcile_connections(reason="tower_destroyed")
+        self._evaluate_ring_topology()
+        self._refresh_row_barriers()
 
     def _connections_snapshot(
         self, ring_preview: dict[str, Any] | None = None
@@ -3709,7 +3825,7 @@ class DefenseEngine(RowBarrierRuntime):
             second = self.placements.get(second_socket)
             endpoints_alive = bool(
                 first is not None and second is not None
-                and not first.get("destroyed") and not second.get("destroyed")
+                and not self._tower_inactive(first) and not self._tower_inactive(second)
             )
             exists = field is not None
             provisional = bool(preview_edge is not None and not exists)
@@ -4005,10 +4121,9 @@ class DefenseEngine(RowBarrierRuntime):
             enemy["burn_until"] = max(
                 float(enemy.get("burn_until", 0.0)), self.sim_time + 3.0
             )
-            enemy["burn_damage_per_s"] = max(
-                float(enemy.get("burn_damage_per_s", 0.0)),
-                max(1.0, float(enemy["hp"])) / 0.35,
-            )
+            purge_dps = max(1.0, float(enemy["hp"])) / 0.35
+            enemy["purge_burn"] = purge_dps >= float(enemy.get("burn_damage_per_s", 0.0))
+            enemy["burn_damage_per_s"] = max(float(enemy.get("burn_damage_per_s", 0.0)), purge_dps)
 
     def _finish_core_detonation_if_ready(self) -> bool:
         if self.core_stage != "detonating" or self.core_detonation_started_at is None:
@@ -4024,15 +4139,25 @@ class DefenseEngine(RowBarrierRuntime):
         self._event("run_won", reason="core_tag_detonation")
         return True
 
+    @trace.traced('simulation.step')
     def step(self, dt: float) -> None:
         dt = max(0.0, min(float(dt), 0.1))
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             for arm in self.mobile_arms.values():
                 arm.step(dt, self)
             if dt > 0:
                 self.runtime_time += dt
             self._refresh_row_barriers()
             if self.phase != "running" or self.paused or dt <= 0:
+                return
+            if self.start_countdown_remaining_s > 0:
+                self.start_countdown_remaining_s = max(0.0, self.start_countdown_remaining_s - dt)
+                if self.start_countdown_remaining_s < 1e-9:
+                    self.start_countdown_remaining_s = 0.0
+                    if self.next_wave_at == 0:
+                        self._launch_wave(1)
+                    self._event('countdown_complete')
+                self._changed(force=False)
                 return
             self.sim_time += dt
             self._reroute_rows_batch()
@@ -4044,11 +4169,14 @@ class DefenseEngine(RowBarrierRuntime):
             if self.core_stage != "detonating":
                 self._spawn_due()
             self._advance_core_detonation()
+            self.ranged.advance_arrows()
             dead: set[int] = set()
             for enemy in self.enemies.values():
                 if self.sim_time < float(enemy.get("burn_until", 0.0)):
-                    enemy["hp"] -= float(enemy.get("burn_damage_per_s", 0.0)) * dt
+                    self._hurt_enemy(enemy, float(enemy.get("burn_damage_per_s", 0.0)) * dt,
+                                     'shared' if enemy.get('purge_burn') else enemy.get('burn_owner'))
                 if enemy["hp"] <= 0:
+                    enemy["death_cause"] = "core_purge" if enemy.get("purge_burn") else "combat"
                     dead.add(enemy["id"])
             self._resolve_mortar_rounds(dead)
             living = [
@@ -4060,6 +4188,7 @@ class DefenseEngine(RowBarrierRuntime):
                 if enemy["hp"] <= 0.0:
                     dead.add(enemy["id"])
             living = [enemy for enemy in living if enemy["id"] not in dead]
+            self.ranged.prepare(living, dt)
             previous_enemy_positions = {
                 int(enemy["id"]): (float(enemy["x"]), float(enemy["y"]))
                 for enemy in living
@@ -4085,25 +4214,43 @@ class DefenseEngine(RowBarrierRuntime):
                     # Routing contacts always project from the actual position;
                     # amortize this diagnostic edge/progress bookkeeping.
                     self._sync_enemy_road_edge(enemy)
+            self.ranged.fire(living)
             if self.core_stage != "detonating":
                 self.core_hp -= sum(
-                    enemy["core_dps"] * dt for enemy in living if enemy["attacking"]
+                    enemy["core_dps"] * dt for enemy in living if enemy["attacking"] and not self.ranged.enabled(enemy)
                 )
                 self._damage_towers(living, dt, previous_enemy_positions)
             self._fire_towers(dt, dead)
             for enemy_id in dead:
-                if self.enemies.pop(enemy_id, None):
+                removed = self.enemies.pop(enemy_id, None)
+                if removed:
+                    self.ranged.killed(removed)
+                    self.rewards.killed(removed)
                     self.kills += 1
+            self._check_ring_integrity()
+            self._maybe_complete_ring()
+            self.rewards.sample(dt)
             if self._finish_core_detonation_if_ready():
                 pass
             elif self.core_hp <= 0:
                 self.core_hp = 0.0
                 self.phase = "overrun"
+                self.ranged.clear()
                 self._event("core_destroyed")
-            elif self.core_stage != "detonating" and self.current_wave >= min(int(self.settings["wave_count"]), len(self.wave_source)) and all(group["spawned"] >= int(group["count"]) for wave in self.launched_waves for group in wave["groups"]) and not self.enemies and not self.pressure_bank:
+            elif self.core_stage != "detonating" and self.current_wave >= min(int(self.settings["wave_count"]), len(self.wave_source)) and all(group["spawned"] >= int(group["count"]) for wave in self.launched_waves for group in wave["groups"]) and not self.enemies and not self.pressure_bank and not any(a["damage"] > 0 for a in self.ranged.arrows):
                 self.phase = "won"
+                self.ranged.clear()  # harmless flights must not freeze on the results screen
                 self._event("run_won")
         self._changed(force=False)
+
+    @staticmethod
+    def _hurt_enemy(enemy, damage, owner):
+        # Freeze credit at the lethal hit; later damage cannot steal a kill.
+        if enemy['hp'] <= 0 or damage <= 0:
+            return
+        enemy['hp'] -= damage
+        if enemy['hp'] <= 0:
+            enemy['kill_owner'] = owner if owner in ('green', 'purple', 'shared') else 'unattributed'
 
     def _resolve_mortar_rounds(self, dead: set[int]) -> None:
         remaining: list[dict[str, Any]] = []
@@ -4119,7 +4266,7 @@ class DefenseEngine(RowBarrierRuntime):
                     enemy["y"] - projectile["target_y"],
                 ) > projectile["blast_radius"]:
                     continue
-                enemy["hp"] -= projectile["damage"]
+                self._hurt_enemy(enemy, projectile["damage"], projectile.get('owner'))
                 if enemy["hp"] <= 0.0:
                     dead.add(enemy["id"])
             self.mortar_impacts.append({
@@ -4146,6 +4293,7 @@ class DefenseEngine(RowBarrierRuntime):
         self.pending_mortar_rounds.append({
             "projectile_id": projectile_id,
             "tower_id": tower["placement_id"],
+            "owner": tower.get('owner'),
             "launch_at": self.sim_time,
             "impact_at": self.sim_time + MORTAR_FLIGHT_DURATION_S,
             "origin_x": tower["x"],
@@ -4214,7 +4362,7 @@ class DefenseEngine(RowBarrierRuntime):
         ]
         link_state = self._tower_link_state()
         for tower in [*self.placements.values(), *self._sync_companions()]:
-            if tower.get("destroyed"):
+            if self._tower_inactive(tower):
                 continue
             activation_complete_at = float(
                 tower.get("activation_complete_at", -math.inf)
@@ -4271,7 +4419,7 @@ class DefenseEngine(RowBarrierRuntime):
                         float(targeting["visual_intensity"])
                         * damage_intensity
                     )
-                    enemy["hp"] -= base_damage * damage_intensity
+                    self._hurt_enemy(enemy, base_damage * damage_intensity, tower.get('owner'))
                     enemy["electrocuted_until"] = self.sim_time + TESLA_EFFECT_DURATION_S
                     enemy["electrocution_depth"] = depth
                     enemy["electrocution_intensity"] = visual_intensity
@@ -4349,8 +4497,12 @@ class DefenseEngine(RowBarrierRuntime):
                         target_y - tower["y"], target_x - tower["x"]
                     )
                 for enemy in hit:
-                    enemy["hp"] -= damage
+                    self._hurt_enemy(enemy, damage, tower.get('owner'))
                     if kind == "flamethrower":
+                        burn_damage = float(self.settings['flamethrower_burn_damage_per_s']) * link_multiplier
+                        if burn_damage >= float(enemy.get('burn_damage_per_s', 0.0)):
+                            enemy['burn_owner'] = tower.get('owner')
+                            enemy['purge_burn'] = False
                         enemy["burn_until"] = max(
                             float(enemy.get("burn_until", 0.0)),
                             self.sim_time
@@ -4391,7 +4543,7 @@ class DefenseEngine(RowBarrierRuntime):
             for key in (
                 "placement_id", "atom_tag_id", "owner", "socket_id", "aruco_id", "tower_type",
                 "x", "y", "last_fire_at", "last_fire_target", "source", "hp",
-                "max_hp", "destroyed", "destroyed_at", "facing_angle",
+                "max_hp", "destroyed", "deactivated", "destroyed_at", "facing_angle",
                 "last_fire_chain", "aim_revision", "aim_instance", "last_damage_at",
                 "last_damage_amount", "activation_started_at",
                 "activation_complete_at", "replenished_at", "upgrade_level", "upgrade_multiplier",
@@ -4409,7 +4561,7 @@ class DefenseEngine(RowBarrierRuntime):
         )
         public["charge_duration_s"] = round(fire_interval, 4)
         public["operational"] = (
-            not bool(tower.get("destroyed"))
+            not self._tower_inactive(tower)
             and self.runtime_time >= float(
                 tower.get("activation_complete_at", -math.inf)
             )
@@ -4597,7 +4749,7 @@ class DefenseEngine(RowBarrierRuntime):
         order = [
             socket_id for socket_id in self.activation_order
             if socket_id in self.placements
-            and not self.placements[socket_id].get("destroyed")
+            and not self._tower_inactive(self.placements[socket_id])
         ]
         detonation_progress = 0.0
         if self.core_detonation_started_at is not None:
@@ -4624,12 +4776,16 @@ class DefenseEngine(RowBarrierRuntime):
             "ring_candidate_count": len(
                 self.ring_candidate_socket_ids or order
             ),
+            "ring_notice": dict(self.ring_notice) if self.ring_notice else None,
             "ring_completed": self.ring_completed_at is not None,
             "ring_completed_at": self.ring_completed_at,
             "ring_source": self.ring_candidate_source,
             "ring_socket_ids": list(self.ring_socket_ids),
             "first_atom_tag_id": self.core_first_tag,
             "first_team": self.core_first_team,
+            "first_source": self.core_first_source,
+            "second_atom_tag_id": self.core_second_tag,
+            "second_source": self.core_second_source,
             "core_force_field_active": self.core_stage in {"detonating", "complete"},
             "field_immunity_until": round(self.field_immunity_until, 3),
             "field_immunity_remaining_s": round(
@@ -4648,7 +4804,7 @@ class DefenseEngine(RowBarrierRuntime):
         """Read-only intent, not future combat/collision outcomes. Bounded wire size."""
         revision = self.row_topology_revision
         guide = {"mode": "hold", "speed": 0, "points": [], "revision": revision}
-        if (self.phase != "running" or self.paused or enemy.get("blocked_steps", 0) > 0
+        if (self.phase != "running" or self.paused or self.ranged.holding(enemy) or enemy.get("blocked_steps", 0) > 0
                 or (not enemy["attacking"] and self.level.row_barriers
                     and enemy.get("row_route_revision") != revision)):
             return guide
@@ -4693,8 +4849,9 @@ class DefenseEngine(RowBarrierRuntime):
                 break
         return {"mode": mode, "speed": round(speed, 2), "points": points, "revision": revision}
 
+    @trace.traced('simulation.snapshot')
     def snapshot(self, *, compact_enemies: bool = False) -> dict[str, Any]:
-        with self.lock:
+        with trace.locked(self.lock, 'simulation.lock'):
             self._refresh_row_barriers()
             if compact_enemies:
                 enemies = []
@@ -4751,7 +4908,9 @@ class DefenseEngine(RowBarrierRuntime):
                 ]
             link_state = self._sync_tower_link_bonuses()
             for public_enemy in enemies:
-                public_enemy["motion"] = self._enemy_motion_guide(self.enemies[public_enemy["id"]])
+                source = self.enemies[public_enemy["id"]]
+                public_enemy["motion"] = self._enemy_motion_guide(source)
+                public_enemy.update(self.ranged.public_enemy(source))
             towers = [
                 self._public_tower(tower, link_state)
                 for tower in self.placements.values()
@@ -4776,6 +4935,13 @@ class DefenseEngine(RowBarrierRuntime):
                 "tower_activation_duration_s": TOWER_ACTIVATION_DURATION_S,
                 "tower_replenish_pulse_s": TOWER_REPLENISH_PULSE_S,
                 "sim_time": round(self.sim_time, 3),
+                "start_countdown": {
+                    "contract": "photon.game.start-countdown", "version": 1,
+                    "duration_s": self.start_countdown_duration_s,
+                    "remaining_s": round(self.start_countdown_remaining_s, 3),
+                    "go_elapsed_s": round(self.sim_time, 3),
+                    "started_at": self.run_started_at,
+                },
                 "runtime_time": round(self.runtime_time, 3),
                 "wave": self.current_wave,
                 "wave_count": int(self.settings["wave_count"]),
@@ -4785,17 +4951,23 @@ class DefenseEngine(RowBarrierRuntime):
                 "core_hp": round(self.core_hp, 2),
                 "core_max_hp": round(self.core_max_hp, 2),
                 "kills": self.kills,
+                "match_score": self.rewards.snapshot(),
+                "kill_heatmap": self.rewards.heatmap.snapshot() if self.phase in ("won","overrun","operator_ended") else None,
                 "released_orcs": self.next_enemy_id - 1,
                 "contract_control_tier": self.contract_control_tier,
+                "spawn_intensity": dict(self.spawn_intensity) if self.spawn_intensity is not None else None,
+                "wave_timeline": wave_timeline.snapshot(self, orc_schedule(self.settings, self.wave_source, self.contract_control_tier)),
                 "player_progression": self.player_progression,
                 "virtual_test_control": self.virtual_test_control,
                 "virtual_test_loadout": dict(self.virtual_test_loadout) if self.virtual_test_loadout is not None else None,
                 "breaches": self.breaches,
                 "enemies": enemies,
                 "enemy_motion": {"contract": "photon.enemy-motion", "version": 1, "horizon_s": 1.2},
+                **self.ranged.snapshot(),
                 "towers": towers,
+                "turret_controls": turret_controls.snapshot(self),
                 "companions": [self._public_tower(unit, link_state) for unit in self._sync_companions()],
-                "companion_policy": dict(companions.POLICY),
+                "companion_policy": {**companions.POLICY, 'l4_turrets_per_socket': self.settings['l4_turrets_per_socket']},
                 "projectiles": [dict(projectile) for projectile in self.pending_mortar_rounds],
                 "mortar_impacts": [dict(impact) for impact in self.mortar_impacts],
                 "force_field_impacts": [
@@ -4823,7 +4995,8 @@ class DefenseEngine(RowBarrierRuntime):
                 "ring_status": self._ring_status_snapshot(),
                 "core_sequence": self._core_sequence_snapshot(),
                 "activation_order": list(self.activation_order),
-                "movable_piece_codes": {side: [code for code, owner in self.atom_owners.items() if owner == side] for side in ("green", "purple")},
+                "event_game": self.event_game,
+                "movable_piece_codes": {side: [code for code, owner in self.atom_owners.items() if owner == side and event_rules.allowed(self,code)] for side in ("green", "purple")},
                 "loadout": {str(key): value for key, value in self.loadout.items()},
                 "settings": dict(self.settings),
                 "physical_input_error": self.physical_input_error,
@@ -4832,6 +5005,9 @@ class DefenseEngine(RowBarrierRuntime):
             }
 
     def _event(self, kind: str, **detail: Any) -> None:
+        if kind.startswith('operator_'):
+            self.telemetry.setdefault('operator_actions',[]).append({'kind':kind,'at':round(self.sim_time,3),**detail})
+            self.telemetry['operator_actions']=self.telemetry['operator_actions'][-100:]
         if kind=='tower_placed' and self.phase=='running':
             side=self.atom_owners.get(detail.get('atom_tag_id'))
             if side in self.telemetry['placements']:
@@ -4842,6 +5018,7 @@ class DefenseEngine(RowBarrierRuntime):
         elif kind=='mobile_pickup':self.pickup_times[detail['atom_tag_id']]=self.sim_time
         elif kind=='paused':self.telemetry['pause_count']+=1
         elif kind in ('run_won','core_destroyed','core_detonation_complete'):
+            self.rewards.victory_method = ('center_stack' if self.core_stage in ('detonating','complete') else 'waves_cleared') if kind!='core_destroyed' else None
             self.telemetry['outcome_reason']='core activation' if detail.get('reason')=='core_tag_detonation' or self.core_stage in ('detonating','complete') else ('all waves cleared' if kind=='run_won' else 'core destroyed')
         self.events.append({
             "sequence": self._next_event_sequence,

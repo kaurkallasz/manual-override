@@ -147,6 +147,26 @@ class CameraMarkerAlignmentTests(unittest.TestCase):
         self.set_size(false, 41)
         self.assertIn(49, [t['id'] for t in self.board.camera_markers_snapshot()['tags']])
 
+    def test_core_and_atom_sizes_are_independent_but_still_require_valid_geometry(self):
+        for tag in self.detections:
+            self.set_size(tag, 64)
+        for ident, size in ((38, 100), (103, 50)):
+            tag = dict(id=ident, nx=.5, ny=.4, missing=0)
+            self.set_size(tag, size)
+            self.detections.append(tag)
+            self.runtime['visible_ids'].append(ident)
+        result = self.board.camera_markers_snapshot()
+        self.assertEqual({t['id'] for t in result['tags']}, {38,40,41,42,43,44,103})
+        self.assertAlmostEqual(result['size_filter']['minimum_px'], 64)
+        self.assertAlmostEqual(result['size_filter']['maximum_px'], 64)
+        self.assertEqual(self.mobile.camera_view(self.game)['status'], 'ready')
+        for tag in self.detections[-2:]:
+            tag['ncorners'] = [[.1,.1]] * 4
+        result = self.board.camera_markers_snapshot()
+        self.assertEqual({t['id'] for t in result['tags']}, {40,41,42,43,44})
+        self.assertEqual({(r['id'],r['reason']) for r in result['size_filter']['rejected']},
+                         {(38,'invalid_corners'),(103,'invalid_corners')})
+
     def test_fifteen_percent_is_a_pairwise_span_not_plus_minus_fifteen(self):
         # 34 and 46 are each +/-15% from 40, but differ by more than 15%.
         for tag, size in zip(self.detections, (34,40,40,40,46)):

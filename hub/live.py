@@ -52,6 +52,7 @@ On the page, replace `setInterval(poll, …)` with:
 """
 
 import json
+from shared import delay_trace as trace
 import threading
 import time
 
@@ -98,10 +99,11 @@ class LiveState:
         identities = tuple(identity_fields)
         fields = tuple(dict.fromkeys((*static_fields, *identities)))
 
+        @trace.traced('delivery.prepare')
         def prepare():
             value = snapshot()
             if not fields and not envelope:
-                payload = json.dumps(value, default=str)
+                payload = trace.call('delivery.json_encode', json.dumps, value, default=str)
                 return payload, payload, None
             static = {key: value[key] for key in fields if key in value}
             dynamic = {key: item for key, item in value.items() if key not in fields or key in identities}
@@ -109,11 +111,11 @@ class LiveState:
             def encode(item, kind):
                 if envelope:
                     item = {"contract": "hub.live", "version": 1, "kind": kind, "state": item}
-                return json.dumps(item, **compact)
+                return trace.call('delivery.json_encode', json.dumps, item, **compact)
             return (
                 encode(value, "snapshot"),
                 encode(dynamic, "update"),
-                json.dumps(static, sort_keys=True, **compact),
+                trace.call('delivery.json_encode', json.dumps, static, sort_keys=True, **compact),
             )
 
         def prepared(version):
@@ -121,7 +123,7 @@ class LiveState:
                 return prepare()
             # Snapshot outside the condition lock: producers can bump while
             # taking their own locks. Retain only one bounded cache entry.
-            with state._shared_lock:
+            with trace.locked(state._shared_lock, 'delivery.shared_lock'):
                 cached = state._shared
                 key = (snapshot, fields, identities, envelope, version)
                 if cached is None or cached[0] != key or time.monotonic() >= cached[1]:

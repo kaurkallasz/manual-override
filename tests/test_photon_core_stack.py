@@ -157,6 +157,38 @@ class CoreStackTests(unittest.TestCase):
         self.cover(101)
         self.assertEqual(self.engine.core_stage, "first_tag")
 
+    def test_physical_first_layer_overrides_manual_selection(self):
+        with mock.patch('time.time', return_value=self.now):
+            self.engine.operator_turret_command('operator_core', None, 103)
+        self.activate_first(100)
+        self.assertEqual(self.engine.core_first_source, 'physical')
+        self.cover(101)
+        self.assertEqual(self.engine.core_stage, 'first_tag')
+        self.sample([100, 101], positions={101: (.8, .8)})
+        self.cover(103)
+        self.assertEqual(self.engine.core_stage, 'detonating')
+        self.assertEqual(self.engine.core_second_source, 'physical')
+
+    def test_physical_cover_can_complete_manual_first_layer(self):
+        with mock.patch('time.time', return_value=self.now):
+            self.engine.operator_turret_command('operator_core', None, 100)
+        self.sample([100])
+        self.cover(101)
+        self.assertEqual(self.engine.core_stage, 'first_tag')
+        self.sample([100, 101], positions={101: (.8, .8)})
+        self.cover(103)
+        self.assertEqual(self.engine.core_stage, 'detonating')
+
+    def test_x_does_not_replay_stationary_physical_layer(self):
+        self.activate_first()
+        with mock.patch('time.time', return_value=self.now):
+            self.engine.operator_turret_command('operator_core', None, None)
+        for _ in range(4):
+            self.sample([100], .3)
+        self.assertEqual(self.engine.core_stage, 'ring_ready')
+        self.sample([38], 2)
+        self.activate_first()
+
     def test_second_atom_at_38_does_not_replace_cover_requirement(self):
         self.activate_first()
         self.connected["purple"] = True

@@ -101,9 +101,12 @@ test('arm illustration follows confirmed telemetry and exposes no input controls
  global.requestAnimationFrame=fn=>{frame=fn;return 1;};global.cancelAnimationFrame=()=>{};
  const parts=new Map();const part=()=>({attrs:{},innerHTML:'',classList:{toggle(){}},setAttribute(k,v){this.attrs[k]=v;}});
  const host={...part(),clientWidth:360,clientHeight:300,getBoundingClientRect:()=>({width:360,height:300}),querySelector(key){if(!parts.has(key))parts.set(key,part());return parts.get(key);}};
- let preview=null,state={joints:[-80,-5,-5],targets:[-80,-5,-5],limits:[[-160,160],[-25,85],[-25,105]]};
+ let visible=true,stateReads=0,preview=null,state={joints:[-80,-5,-5],targets:[-80,-5,-5],limits:[[-160,160],[-25,85],[-25,105]]};
  try{
-  const rig=mount(host,{state:()=>state,available:()=>true,previewTargets:()=>preview});frame(16);
+  const rig=mount(host,{visible:()=>visible,state:()=>{stateReads++;return state;},available:()=>true,previewTargets:()=>preview});frame(16);
+  visible=false;const reads=stateReads;frame(17);
+  assert.equal(stateReads,reads,'hidden rigs skip state and layout work');
+  visible=true;frame(18);assert.equal(stateReads,reads+1,'visible rigs resume immediately');
   assert.ok(!host.innerHTML.includes('<button'));assert.ok(!host.innerHTML.includes('<input'));assert.ok(host.innerHTML.includes('role="img"'));
   const before=parts.get('.rigShoulder').attrs.transform;
   const renderedScale=Number(before.match(/scale\(([^)]+)\)/)[1]);

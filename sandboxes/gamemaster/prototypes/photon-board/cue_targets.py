@@ -1,4 +1,4 @@
-"""Camera evidence for cues. Fixed coordinates are memory, never fresh sightings."""
+"""Fixed board coordinates and separate live evidence; only the sampler writes."""
 import copy
 import math
 import uuid
@@ -10,27 +10,48 @@ ACQUIRE_MIN_SPAN_S = .5
 ACQUIRE_MIN_SAMPLES = 3
 ACQUIRE_TOLERANCE = .004
 MARKER_SIZE_RATIO = 1.15
-ANCHOR_MIN_COUNT = 4
-ANCHOR_MIN_AREA = .02
-ANCHOR_MIN_SPAN = .15
+BOARD_MIN_SPAN = .15
 
 
-def _cross(a, b, c):
-    return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+def coherent_motion(records, observations):
+    """Two separated IDs must agree on one translation/rotation/scale.
 
-
-def _anchor_hull(points):
-    """Convex coverage of independent reference points, not a fitted new map."""
-    points = sorted(set(points))
-    halves = []
-    for ordered in (points, reversed(points)):
-        half = []
-        for p in ordered:
-            while len(half) >= 2 and _cross(half[-2], half[-1], p) <= 0:
-                half.pop()
-            half.append(p)
-        halves.append(half[:-1])
-    return halves[0] + halves[1]
+    Measured marker size must agree with that scale too. A projected decode on
+    an arm is not board motion merely because its centre moved. No fitting or
+    extrapolation supplies target coordinates: a confirmed move clears memory.
+    """
+    points = {i: t for i, t in observations.items()
+              if i in records and records[i]['mapped']
+              and math.hypot(t['nx']-records[i]['reference']['nx'],
+                             t['ny']-records[i]['reference']['ny']) > .01}
+    best = []
+    for i, first in points.items():
+        a = records[i]['reference']
+        for j, second in points.items():
+            if j <= i:
+                continue
+            b = records[j]['reference']
+            dx, dy = b['nx']-a['nx'], b['ny']-a['ny']
+            norm = dx*dx+dy*dy
+            if norm < BOARD_MIN_SPAN**2:
+                continue
+            ux, uy = second['nx']-first['nx'], second['ny']-first['ny']
+            re, im = (ux*dx+uy*dy)/norm, (uy*dx-ux*dy)/norm
+            scale = math.hypot(re, im)
+            if not .25 <= scale <= 4:
+                continue
+            group = []
+            for ident, tag in points.items():
+                ref = records[ident]['reference']
+                x, y = ref['nx']-a['nx'], ref['ny']-a['ny']
+                size_ratio = tag['geometry']['size']/(ref['size']*scale)
+                if (1/MARKER_SIZE_RATIO <= size_ratio <= MARKER_SIZE_RATIO
+                        and math.hypot(first['nx']+re*x-im*y-tag['nx'],
+                                       first['ny']+im*x+re*y-tag['ny']) <= ACQUIRE_TOLERANCE):
+                    group.append(ident)
+            if i in group and j in group and len(group) > len(best):
+                best = sorted(group)
+    return best
 
 
 class CueTargets:
@@ -42,7 +63,8 @@ class CueTargets:
         self.epoch_marker_id = None
         self.pending_fixed = {}
         self.pending_reasons = {}
-        self.verification = None
+        self.motion_ids = []
+        self.motion_samples = []
         self.records = {}
         self.frame_at = None
         self.sampled_at = None
@@ -58,7 +80,7 @@ class CueTargets:
                       and all(type(runtime.get(k)) in (int, float) and math.isfinite(runtime[k])
                               and runtime[k] > 0 for k in ('width', 'height')))
         if not self.ready:
-            self.verification = None
+            self.motion_samples = []
             # Keep the hold, but an outage cannot count toward confirmation.
             for ident in self.pending_fixed:
                 self.pending_fixed[ident] = []
@@ -73,13 +95,14 @@ class CueTargets:
             self.epoch_reason, self.epoch_marker_id = 'camera_changed', None
             self.pending_fixed = {}
             self.pending_reasons = {}
+            self.motion_ids = []
+            self.motion_samples = []
             self.frame_at = None
-        if frame == self.frame_at:
+        if self.frame_at is not None and frame <= self.frame_at:
             return
         self.frame_at = frame
-        self.verification = None
         visible = set(runtime.get('visible_ids', []))
-        current, geometry = {}, {}
+        current, geometry, motion = {}, {}, {}
         for tag in runtime.get('detections', []):
             ident, missing = tag.get('id'), tag.get('missing')
             if (type(ident) is not int or not (ident in self.fixed_ids or 100 <= ident <= 199)
@@ -92,57 +115,84 @@ class CueTargets:
                 old = self.records.get(ident)
                 reference = (old or {}).get('reference')
                 invalid = shape is None
-                if not invalid and reference:
-                    before, after = [reference['size'], *reference['shape']], [shape['size'], *shape['shape']]
-                    invalid = any(max(a,b)/min(a,b) > MARKER_SIZE_RATIO for a,b in zip(before,after))
+                if shape and reference:
+                    shape_ok = all(max(a,b)/min(a,b) <= MARKER_SIZE_RATIO
+                                   for a,b in zip(reference['shape'], shape['shape']))
+                    if shape_ok:
+                        motion[ident] = dict(tag, geometry=shape)
+                    invalid = (not shape_ok or max(reference['size'], shape['size']) /
+                               min(reference['size'], shape['size']) > MARKER_SIZE_RATIO)
                 if invalid:
                     # Projected codes on an occluding arm can decode at the
-                    # wrong size/shape. They are never movement evidence.
+                    # wrong size/shape. Only independent coherent board evidence
+                    # can justify relearning a changed scale.
                     if old and old['mapped']:
                         self.pending_fixed[ident] = []
-                        self.pending_reasons[ident] = 'marker_geometry'
+                        self.pending_reasons.setdefault(ident, 'marker_geometry')
                     continue
                 geometry[ident] = shape
             current[ident] = tag
-        # A partial/false fixed-tag detection near the arm must not erase an
-        # acquired pickup. Isolate its evidence; independent surrounding anchors
-        # may verify the retained map. Absence alone can never clear the hold.
-        changed = []
+        # Individual bad observations never shrink the map or erase memory.
+        # A geometry-valid positional contradiction blocks only that endpoint.
         for ident, tag in current.items():
             old = self.records.get(ident)
             if ident >= 100 or not old or not old['mapped']:
                 continue
-            reference = old['reference']
-            if math.hypot(tag['nx']-reference['nx'], tag['ny']-reference['ny']) <= .01:
+            ref = old['reference']
+            if math.hypot(tag['nx']-ref['nx'], tag['ny']-ref['ny']) <= .01:
                 self.pending_fixed.pop(ident, None)
                 self.pending_reasons.pop(ident, None)
-                continue
-            seen = min(frame, now-tag['missing'])
-            observations = self.pending_fixed.get(ident, [])
-            if observations and (seen-observations[-1][0] > .5
-                                 or any(math.hypot(tag['nx']-p[1], tag['ny']-p[2]) > ACQUIRE_TOLERANCE
-                                        for p in observations)):
-                observations = []
-            if not observations or seen > observations[-1][0]:
-                observations.append((seen, tag['nx'], tag['ny']))
-            self.pending_fixed[ident] = observations[-64:]
-            self.pending_reasons[ident] = 'position_conflict'
-            if len(observations) >= 3 and observations[-1][0]-observations[0][0] >= .5:
-                changed.append(ident)
-        if changed:
-            self.records = {}
-            self.epoch = uuid.uuid4().hex
-            self.epoch_reason, self.epoch_marker_id = 'fixed_marker_changed', min(changed)
-            self.pending_fixed = {}
-            self.pending_reasons = {}
+            else:
+                self.pending_fixed[ident] = []
+                self.pending_reasons[ident] = 'position_conflict'
+        group = coherent_motion(self.records, motion)
+        if group:
+            coordinates = {i: (motion[i]['nx'], motion[i]['ny']) for i in group}
+            common = set(coordinates)
+            for _, previous in self.motion_samples:
+                common.intersection_update(previous)
+            separated = any(math.dist((self.records[i]['reference']['nx'], self.records[i]['reference']['ny']),
+                                      (self.records[j]['reference']['nx'], self.records[j]['reference']['ny'])) >= BOARD_MIN_SPAN
+                            for i in common for j in common if i < j)
+            if (self.motion_samples and (frame-self.motion_samples[-1][0] > .5 or not separated
+                    or any(math.dist(previous[i], coordinates[i]) > ACQUIRE_TOLERANCE
+                           for _, previous in self.motion_samples for i in common))):
+                self.motion_samples = []
+                common = set(coordinates)
+            self.motion_ids = group
+            self.motion_samples.append((frame, coordinates))
+            self.motion_samples = self.motion_samples[-64:]
+            if (len(self.motion_samples) >= ACQUIRE_MIN_SAMPLES
+                    and frame-self.motion_samples[0][0] >= ACQUIRE_MIN_SPAN_S):
+                self.records = {}
+                self.epoch = uuid.uuid4().hex
+                self.epoch_reason, self.epoch_marker_id = 'board_moved', min(common)
+                self.pending_fixed = {}
+                self.pending_reasons = {}
+                self.motion_ids = []
+                self.motion_samples = []
         else:
-            for ident in self.pending_fixed:
-                current.pop(ident, None)
+            self.motion_samples = []
+            # Lost/covered anchors are not board movement. After positive motion
+            # evidence, however, require two independent original positions to
+            # recover; mere disappearance must not silently clear a real hold.
+            anchors = [i for i, tag in current.items() if i < 100 and i not in self.pending_fixed
+                       and self.records.get(i, {}).get('mapped')
+                       and self.records[i]['samples'] >= ACQUIRE_MIN_SAMPLES
+                       and frame-self.records[i]['last_seen'] <= ACQUIRE_MAX_AGE_S]
+            if any(math.dist((self.records[i]['reference']['nx'], self.records[i]['reference']['ny']),
+                             (self.records[j]['reference']['nx'], self.records[j]['reference']['ny'])) >= BOARD_MIN_SPAN
+                   for i in anchors for j in anchors if i < j):
+                self.motion_ids = []
+        for ident in self.pending_fixed:
+            current.pop(ident, None)
         for ident, tag in current.items():
             seen = min(frame, now-tag['missing'])
             old = self.records.get(ident)
+            if self.motion_ids and ident < 100 and not (old and old['mapped']):
+                continue
             consistent = (old and old['samples'] and seen-old['last_seen'] <= .5
-                          and math.hypot(tag['nx']-old['tag']['nx'], tag['ny']-old['tag']['ny']) <= .004)
+                          and math.hypot(tag['nx']-old['observed_tag']['nx'], tag['ny']-old['observed_tag']['ny']) <= .004)
             since = old['since'] if consistent else seen
             samples = old['samples']+1 if consistent else 1
             stable = samples >= 3 and seen-since >= .5
@@ -157,14 +207,17 @@ class CueTargets:
                 observations = []
             if not observations or seen > observations[-1][0]:
                 observations.append((seen, tag['nx'], tag['ny']))
-            self.records[ident] = {'tag': copy.deepcopy(tag), 'last_seen': seen,
+            qualified = len(observations) >= ACQUIRE_MIN_SAMPLES and observations[-1][0]-observations[0][0] >= ACQUIRE_MIN_SPAN_S
+            frozen = old and old['mapped']
+            self.records[ident] = {'tag': copy.deepcopy(old['tag'] if frozen else tag),
+                                  'observed_tag': copy.deepcopy(tag), 'last_seen': seen,
                                   'since': since, 'samples': samples,
                                   'observations': observations[-64:],
                                   'covered_by': list(old.get('covered_by', [])) if old else [],
-                                  'mapped': ident < 100 and (stable or bool(old and old['mapped'])),
+                                  'mapped': ident < 100 and (qualified or bool(old and old['mapped'])),
                                   'reference': ((old or {}).get('reference') or
                                                 (dict(nx=tag['nx'], ny=tag['ny'], **geometry[ident])
-                                                 if ident < 100 and stable else None))}
+                                                 if ident < 100 and qualified else None))}
         # Remember observed occupancy independently of coordinate memory. A dark
         # Atom must not make an occupied fixed destination appear empty.
         for ident, record in self.records.items():
@@ -194,77 +247,45 @@ class CueTargets:
                 record['samples'] = 0
             if ident >= 100 and now-record['last_seen'] > 15:
                 del self.records[ident]
-        if self.pending_fixed:
-            self._verify_retained_map(current, now)
-
-    def _verify_retained_map(self, current, now):
-        anchors = {}
-        for ident, tag in current.items():
-            record = self.records[ident]
-            ref = record['reference']
-            observations = record['observations']
-            if (ident >= 100 or not ref or ident in self.pending_fixed
-                    or not 0 <= now-record['last_seen'] <= ACQUIRE_MAX_AGE_S
-                    or len(observations) < ACQUIRE_MIN_SAMPLES
-                    or observations[-1][0]-observations[0][0] < ACQUIRE_MIN_SPAN_S
-                    or math.hypot(tag['nx']-ref['nx'], tag['ny']-ref['ny']) > ACQUIRE_TOLERANCE):
-                continue
-            anchors[ident] = (ref['nx'], ref['ny'])
-        if len(anchors) < ANCHOR_MIN_COUNT:
-            return
-        hull = _anchor_hull(anchors.values())
-        area = abs(sum(a[0]*b[1]-a[1]*b[0] for a, b in zip(hull, hull[1:]+hull[:1]))) / 2
-        if (area < ANCHOR_MIN_AREA or
-                any(max(p[i] for p in hull)-min(p[i] for p in hull) < ANCHOR_MIN_SPAN for i in (0, 1))):
-            return
-        # Verify around every quarantined location. Distant or collinear
-        # surviving markers cannot license extrapolation past an occlusion.
-        for ident in self.pending_fixed:
-            ref = self.records[ident]['reference']
-            point = (ref['nx'], ref['ny'])
-            if any(_cross(a, b, point) < -1e-9 for a, b in zip(hull, hull[1:]+hull[:1])):
-                return
-        self.verification = {'anchor_ids': sorted(anchors),
-                             'observed_at': min(self.records[i]['last_seen'] for i in anchors),
-                             'area': area}
 
     def snapshot(self, now):
-        verified = bool(self.verification and 0 <= now-self.verification['observed_at'] <= ACQUIRE_MAX_AGE_S)
-        ready = (self.ready and (not self.pending_fixed or verified) and self.sampled_at is not None and self.frame_at is not None
+        ready = (self.ready and not self.motion_ids and self.sampled_at is not None and self.frame_at is not None
                  and 0 <= now-self.sampled_at <= 1.5 and 0 <= now-self.frame_at <= 1.5)
-        tags = []
-        if ready:
-            for ident, record in sorted(self.records.items()):
-                age = now-record['last_seen']
-                visible = 0 <= age <= .35 and record['samples'] > 0
-                stable = visible and record['samples'] >= 3 and record['last_seen']-record['since'] >= .5
-                if ident in self.pending_fixed or ident < 100 and not record['mapped']:
-                    continue
-                tag = copy.deepcopy(record['tag'])
-                observations = [p for p in record['observations'] if 0 <= now-p[0] <= ACQUIRE_WINDOW_S]
-                acquirable = (ident >= 100 and 0 <= age <= ACQUIRE_MAX_AGE_S
-                              and len(observations) >= ACQUIRE_MIN_SAMPLES
-                              and observations[-1][0]-observations[0][0] >= ACQUIRE_MIN_SPAN_S)
-                tag.update(last_seen=record['last_seen'], missing=max(0, age), visible=visible,
-                           stable=stable, fixed=ident < 100, cached=ident < 100 and not visible,
-                           acquirable=acquirable, evidence_samples=len(observations),
-                           covered_by=list(record['covered_by']))
+        fixed_tags, tags = [], []
+        for ident, record in sorted(self.records.items()):
+            age = now-record['last_seen']
+            visible = ready and ident not in self.pending_fixed and 0 <= age <= .35 and record['samples'] > 0
+            stable = visible and record['samples'] >= 3 and record['last_seen']-record['since'] >= .5
+            if ident < 100 and not record['mapped']:
+                continue
+            tag = copy.deepcopy(record['tag'])
+            observations = [p for p in record['observations'] if 0 <= now-p[0] <= ACQUIRE_WINDOW_S]
+            acquirable = (ident >= 100 and 0 <= age <= ACQUIRE_MAX_AGE_S
+                          and len(observations) >= ACQUIRE_MIN_SAMPLES
+                          and observations[-1][0]-observations[0][0] >= ACQUIRE_MIN_SPAN_S)
+            tag.update(last_seen=record['last_seen'], missing=max(0, age), visible=visible,
+                       stable=stable, fixed=ident < 100, cached=ident < 100 and not visible,
+                       acquirable=acquirable, evidence_samples=len(observations),
+                       covered_by=list(record['covered_by']))
+            if ident < 100:
+                fixed_tags.append(copy.deepcopy(tag))
+            if ready:
                 tags.append(tag)
-        error = None if ready else 'Waiting for fresh camera mapping.'
-        if not ready and self.ready and self.pending_fixed:
-            error = ('Checking fixed marker '+', '.join('#'+str(i) for i in sorted(self.pending_fixed))
-                     +' after a conflicting camera detection.')
-        return {'contract': 'photon.board.cue-targets', 'version': 1,
+        error = None if ready else ('Checking coherent board movement.' if self.motion_ids
+                                     else 'Waiting for fresh camera mapping.')
+        blocked = [i for i in sorted(self.pending_fixed) if self.pending_reasons[i] == 'position_conflict']
+        return {'contract': 'photon.board.cue-targets', 'version': 2,
                 'status': 'ready' if ready else 'unavailable', 'epoch': self.epoch,
                 'epoch_reason': self.epoch_reason, 'epoch_marker_id': self.epoch_marker_id,
-                'pending_fixed_ids': sorted(self.pending_fixed),
-                # These IDs are withheld from acquisition. Occupancy remains
-                # available to the current operation without exposing a pose.
+                'pending_fixed_ids': sorted(self.pending_fixed), 'blocked_fixed_ids': blocked,
+                'board_motion_ids': list(self.motion_ids),
                 'quarantined_tags': [dict(id=i, reason=self.pending_reasons[i],
                                           covered_by=list(self.records[i]['covered_by']))
                                      for i in sorted(self.pending_fixed)],
-                'verification': dict(status='ready' if ready and verified else 'unavailable',
-                                     **(self.verification or {})),
+                # Display memory is explicitly separate from motion authority.
+                # Fixed tags have immutable coordinates, never renewed sightings.
+                'fixed_tags': fixed_tags,
+                'width': self.scope[2] if self.scope else 0, 'height': self.scope[3] if self.scope else 0,
                 'coordinate_space': 'corrected-camera-normalized', 'source': 'camera',
                 'frame_at': self.frame_at, 'sampled_at': self.sampled_at, 'tags': tags,
                 'error': error}

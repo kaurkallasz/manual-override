@@ -488,6 +488,10 @@ def calibration_session_command(side, value):
     if _lessons is None:
         raise ValueError('calibration owner unavailable')
     action = value.get('action')
+    if action in ('undo_capture','undo_raised'):
+        result = _lessons.undo(side,value)
+        _sync_calibration_display(result['sessions'][value['id']])
+        return result
     if action == 'heartbeat':
         maintained = calibration_session_maintain()
         if maintained.get('status') != 'ready':
@@ -623,7 +627,7 @@ def calibration_history(side):
             identity=session['id']+':'+str(session['calibration_revision'])
             if identity not in archived:
                 rows.append({'id':identity,'side':side,'revision':session['calibration_revision'],
-                             'saved_at':session['committed_at'],'practice':session.get('practice',False),
+                             'saved_at':session['committed_at'],'purpose':session.get('purpose','progression'),
                              'draft':copy.deepcopy(session['draft']),'transport_height':session.get('transport_height'),
                              'camera_revision':session.get('camera_revision')})
     cal=_calibration2_public()
@@ -894,6 +898,24 @@ def calibration_reach_snapshot():
                      'z_min':WORKSPACE['z'][0],'z_max':WORKSPACE['z'][1]}}
 
 
+def _manual_calibration_tier(side):
+    """Resolve trusted server policy; a browser cannot waive camera matching."""
+    policy = _read_contract('photon-game', 'motion_policy', 'photon.game.motion', side)
+    if policy.get('blocked') or policy.get('scope') not in ('player',):
+        return None
+    tier = policy.get('tier')
+    if policy.get('scope') == 'player':
+        module = (_hub_ctx.get_prototype('photon-progress') if _hub_ctx
+                  and _hub_ctx.is_prototype_enabled('photon-progress') else None)
+        value = module.control_policy(side) if module and callable(getattr(module, 'control_policy', None)) else {}
+        if (value.get('contract') != 'photon.progress' or type(value.get('version')) is not int
+                or value['version'] != 2 or value.get('status') != 'ready'
+                or value.get('stage') != 'playing'):
+            raise ValueError('Player control policy unavailable')
+        tier = value.get('tier')
+    return tier if type(tier) is int and tier in (1, 2) else None
+
+
 def calibration_safety_snapshot(side):
     try:
         cal = _calibration2_public()
@@ -922,8 +944,14 @@ def calibration_safety_snapshot(side):
         if camera_revision:
             current_camera=_current_camera_revision()
             if current_camera != camera_revision:
-                raise ValueError(f'{side.title()} camera correction changed. Apply a saved {side.title()} calibration or run {side.title()} calibration in Laser Tag Y before moving.')
+                try: manual_tier = _manual_calibration_tier(side)
+                except Exception: manual_tier = None
+                if manual_tier is None:
+                    raise ValueError(f'{side.title()} camera correction changed. Apply a saved {side.title()} calibration or run {side.title()} calibration in Laser Tag Y before moving.')
             compatibility=_camera_compatibility(arm.get('camera_revision',cal.get('camera_revision')),current_camera)
+            if current_camera != camera_revision:
+                compatibility.update(manual_only=True, tier=manual_tier,
+                    warning='Saved calibration uses a different camera correction. L1 joint and L2 XYZ controls are available; camera positioning is approximate. L3/L4 require a current calibration association.')
         identity = cal['arms'][side].get('rig_identity')
         if identity:
             arms = _read_contract('dobot-mg400-relay','arms_snapshot','hhh.relay.arms')

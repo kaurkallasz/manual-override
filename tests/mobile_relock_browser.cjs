@@ -1,15 +1,16 @@
 /* Real mobile UI, bridge and planner; isolated fixture + fake arm. No hardware. */
-const assert=require('node:assert/strict'),{chromium}=require('playwright');
+const assert=require('node:assert/strict'),{chromium,webkit}=require('playwright');
 const root=process.env.MOBILE_RELOCK_TEST_URL||'http://127.0.0.1:8138';
 if(!/^http:\/\/127\.0\.0\.1:(?!8000(?:\/|$))\d+$/.test(root))throw Error('Use an isolated loopback fixture, never the live hub.');
 (async()=>{
- const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+ const useWebKit=process.env.MOBILE_TEST_BROWSER==='webkit';
+ const browser=await (useWebKit?webkit:chromium).launch({headless:true,...(useWebKit?{}:{executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'})});
  try{
   for(const side of ['green','purple']){
-   const page=await browser.newPage({viewport:{width:844,height:390},isMobile:true,hasTouch:true});
+   const page=await browser.newPage({viewport:{width:844,height:390},isMobile:true,hasTouch:true,deviceScaleFactor:3});
    const errors=[],commands=[];page.on('pageerror',error=>errors.push(error.message));
    await page.request.post(root+'/__test/saved-calibrations');
-   await page.request.post(root+'/__test/camera',{data:{enabled:true}});
+   await page.request.post(root+'/__test/camera',{data:{enabled:true,width:3840,height:2160}});
    const initial=await (await page.request.get(root+'/s/gamemaster/p/mobile-ltz-api/api/state?side='+side)).json();
    let calibration=true,connections=0;
    const robot={connected:false,enabled:true,robot_mode:5,motion_epoch:0,motion_ready:true,
@@ -71,6 +72,11 @@ if(!/^http:\/\/127\.0\.0\.1:(?!8000(?:\/|$))\d+$/.test(root))throw Error('Use an
     await page.waitForFunction(()=>state.journey.phase==='playing'&&controlMode==='cue');
     await page.locator('#connect').click();
     await page.waitForFunction(()=>session&&available()&&state.mobile_arm.control_mode==='cue',null,{timeout:12000});
+    await page.waitForFunction(()=>document.getElementById('xyzBullseyes').dataset.aligned==='true');
+    const guides=await page.locator('#xyzBullseyes .xyzGuides').evaluateAll(nodes=>nodes.map(node=>({
+     id:node.id,filter:getComputedStyle(node).filter,width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height})));
+    assert(guides.every(g=>g.filter==='none'),'Connecting at the measured pose must not add full-camera SVG filter surfaces: '+JSON.stringify(guides));
+    assert.equal(await page.evaluate(()=>viewport.w),3840,'Connected-arm rendering preserves source camera coordinates');
     assert.notEqual(await page.evaluate(()=>session),priorSession);
     assert.equal(commands.filter(c=>['move','joint-move'].includes(c.action)).length,before,'Relock/Connect must not replay an old movement');
     assert.equal(await page.evaluate(()=>xyzTarget.z),65,'The reconnected controls follow the manually moved pose');

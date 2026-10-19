@@ -24,13 +24,13 @@ class AtomBuffTests(unittest.TestCase):
         self.now = time.time()
 
     def sample(self, positions=None, *, delta=.2, ready=True, frame=None, connected=True,
-               pump='off', geometry=1, ingest=False):
+               pump='off', geometry=1, ingest=False, frame_age=0):
         self.now += delta
         positions = {40: (.4, .4), 100: (.4, .4)} if positions is None else positions
         tags = [{'id': tag, 'nx': xy[0], 'ny': xy[1], 'missing': 0} for tag, xy in positions.items()]
         raw = {'status': 'ready' if ready else 'unavailable', 'corrected': True,
                'source': 'camera', 'camera_revision': geometry, 'width': 1000, 'height': 1000,
-               'observed_at': self.now, 'frame_at': self.now if frame is None else frame,
+               'observed_at': self.now, 'frame_at': self.now-frame_age if frame is None else frame,
                'tags': tags, 'detections': tags, 'visible_ids': list(positions),
                'arms': {side: {'connected': connected, 'enabled': True,
                        'pump_mode': pump, 'feedback_at': self.now} for side in ('green', 'purple')}}
@@ -138,7 +138,7 @@ class AtomBuffTests(unittest.TestCase):
         self.assertEqual(t['atom_buff_state'], 'active')
         self.assertAlmostEqual(t['hp'] / t['max_hp'], .5)
         self.assertFalse(any(x['kind'] == 'tower_replenished' for x in self.engine.events))
-        self.sample({}, delta=.4, ingest=True)
+        self.sample({}, delta=1.0, ingest=True)
         self.assertNotEqual(t['atom_buff_state'], 'active')
         self.acquire(positions={100: (.4, .4)}, connected=False, ingest=True)
         self.assertEqual(t['atom_buff_state'], 'active')
@@ -170,7 +170,7 @@ class AtomBuffTests(unittest.TestCase):
 
     def test_unknown_is_not_departure_and_new_frames_are_required(self):
         self.acquire()
-        result = self.sample({40: (.4, .4)}, delta=.4)
+        result = self.sample({40: (.4, .4)}, delta=1.0)
         self.assertEqual(result['relations'][0]['state'], 'unavailable')
         self.assertIsNone(result['relations'][0]['departed_at'])
         frame = self.now + .2
@@ -179,12 +179,116 @@ class AtomBuffTests(unittest.TestCase):
         self.assertNotEqual(result['relations'][0]['state'], 'present')
         self.assertEqual(self.acquire()['relations'][0]['state'], 'present')
 
+    def test_uncovered_marker_removes_missing_atom_and_return_heals_once(self):
+        self.physical()
+        self.acquire(ingest=True)
+        self.acquire(positions={100: (.4, .4)}, ingest=True)
+        tower = self.engine.placements['socket_01']
+        tower['hp'] *= .75
+        maximum = tower['max_hp']
+        for index in range(3):
+            result = self.sample({40: (.4, .4)}, delta=.08, ingest=True)
+            if index < 2:
+                self.assertEqual(tower['atom_buff_state'], 'active')
+        self.assertEqual(result['relations'][0]['state'], 'departed')
+        departed_at = result['relations'][0]['departed_at']
+        self.assertEqual(tower['atom_buff_state'], 'inactive')
+        self.assertEqual((tower['hp'], tower['max_hp']), (maximum * .375, maximum * .5))
+        self.assertEqual(tower['atom_damage_multiplier'], 1)
+        for _ in range(5):
+            result = self.sample({40: (.4, .4)}, ingest=True)
+            self.assertEqual(result['relations'][0]['state'], 'departed')
+            self.assertEqual(result['relations'][0]['departed_at'], departed_at)
+        self.acquire(positions={100: (.4, .4)}, ingest=True)
+        self.assertEqual((tower['hp'], tower['max_hp']), (maximum, maximum))
+        self.assertEqual(tower['atom_damage_multiplier'], 2)
+        tower['hp'] *= .5
+        self.acquire(positions={100: (.4, .4)}, ingest=True)
+        self.assertEqual(tower['hp'], maximum * .5)
+        self.assertEqual(sum(e['kind'] == 'tower_replenished' for e in self.engine.events), 1)
+
+    def test_uncovered_marker_blocks_hovering_atom_and_cached_placement(self):
+        self.physical()
+        self.acquire(ingest=True)
+        self.acquire(positions={100: (.4, .4)}, ingest=True)
+        tower = self.engine.placements['socket_01']
+        tower['hp'] *= .5
+        for _ in range(8):
+            result = self.sample(ingest=True)  # Both IDs visible at the same XY.
+        self.assertEqual(result['relations'][0]['state'], 'departed')
+        self.assertEqual(tower['atom_buff_state'], 'inactive')
+        self.assertAlmostEqual(tower['hp'] / tower['max_hp'], .5)
+        self.assertTrue(self.engine.atom_visits[100]['departed'])
+        self.assertFalse(any(e['kind'] == 'tower_replenished' for e in self.engine.events))
+        self.acquire(positions={100: (.4, .4)}, ingest=True)
+        self.assertEqual(tower['hp'], tower['max_hp'])
+        self.assertEqual(tower['atom_buff_state'], 'active')
+
+    def test_marker_flicker_duplicate_and_stale_frames_do_not_rearm_healing(self):
+        self.physical()
+        self.acquire(ingest=True)
+        self.acquire(positions={100: (.4, .4)}, ingest=True)
+        tower = self.engine.placements['socket_01']
+        tower['hp'] *= .5
+        self.sample(delta=.05, ingest=True)
+        frame = self.now
+        for _ in range(5):
+            result = self.sample(delta=.03, frame=frame, ingest=True)
+            self.assertIsNone(result['relations'][0]['departed_at'])
+        self.sample({100: (.4, .4)}, ingest=True)  # Flicker ends.
+        self.assertEqual(tower['atom_buff_state'], 'active')
+        for _ in range(3):
+            result = self.sample(delta=1.1, frame=self.now + .1, ingest=True)
+            self.assertIsNone(result['relations'][0]['departed_at'])
+        self.sample(ready=False, ingest=True)
+        self.acquire(positions={100: (.4, .4)}, ingest=True)
+        self.assertAlmostEqual(tower['hp'] / tower['max_hp'], .5)
+        self.assertFalse(any(e['kind'] == 'tower_replenished' for e in self.engine.events))
+
     def test_ambiguous_candidates_never_buff(self):
         for positions in ({40: (.4, .4), 100: (.4, .4), 101: (.4, .4)},
                           {40: (.4, .4), 42: (.41, .4), 100: (.4, .4)}):
             self.tracker = self.board.OccupancyTracker()
             result = self.acquire(positions=positions)
             self.assertFalse(any(r['state'] == 'present' for r in result['relations']))
+
+    def test_normal_camera_latency_and_short_detection_gaps_keep_buff_stable(self):
+        self.physical()
+        self.acquire(ingest=True, frame_age=.3)
+        tower = self.engine.placements['socket_01']
+        tower['hp'] *= .5
+        maximum = tower['max_hp']
+        for _ in range(20):
+            result = self.sample(delta=.25, ingest=True, frame_age=.3)
+            # A reader between two 5 Hz Board samples sees older evidence.
+            clean = self.game._validated_occupancy(result, self.now+.2)
+            self.engine.ingest_physical({'status':'unavailable', 'occupancy':clean})
+            self.assertEqual(tower['atom_buff_state'], 'active')
+            self.assertEqual((tower['hp'], tower['max_hp']), (maximum*.5, maximum))
+        self.sample({}, delta=.5, frame_age=.3, ingest=True)
+        self.assertEqual(tower['atom_buff_state'], 'active')
+        self.sample(delta=.2, frame_age=.3, ingest=True)
+        self.assertEqual(tower['atom_buff_state'], 'active')
+        self.assertFalse(any(e['kind']=='tower_replenished' for e in self.engine.events))
+        self.sample({}, delta=1, ingest=True)
+        self.assertEqual(tower['atom_damage_multiplier'], 1)
+        self.acquire(ingest=True)
+        self.assertEqual(tower['hp']/tower['max_hp'], .5)
+
+    def test_occupancy_reader_and_validator_use_the_same_bounded_grace(self):
+        result = self.acquire()
+        self.assertEqual(result['policy']['grace_s'], .9)
+        with mock.patch.object(self.board, '_occupancy', result):
+            for age, expected in ((.5, 'present'), (.91, 'unavailable')):
+                now = self.now+age
+                with mock.patch('time.time', return_value=now):
+                    board = self.board.occupancy_snapshot()
+                self.assertEqual(board['relations'][0]['state'], expected)
+                self.assertEqual(self.game._validated_occupancy(result, now)['relations'][0]['state'], expected)
+        for policy in (None, {'grace_s':True}, {'grace_s':10}):
+            self.assertEqual(self.game._validated_occupancy({**result,'policy':policy}, self.now)['status'], 'unavailable')
+        legacy = {k:v for k,v in result.items() if k!='policy'}
+        self.assertEqual(self.game._validated_occupancy(legacy, self.now+.5)['relations'][0]['state'], 'unavailable')
 
     def test_validator_rejects_malformed_and_stale_contracts(self):
         result = self.acquire()

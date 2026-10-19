@@ -4,15 +4,19 @@ import time
 import threading
 import uuid
 import logging
-import hashlib
 from pathlib import Path
+from shared.ltz_ui import manifest as shop_assets, asset_response as shop_asset_response
 from flask import Blueprint, Response, abort, current_app, g, jsonify, request, send_from_directory
 from camera_view import registration
+import mcam1_view
 from delivery_diagnostics import DeliveryDiagnostics
 import live
 import connection_log
+import delay_analysis
+from shared import delay_trace as trace
+from shared.fixed_board import cue_layout
 MANIFEST = {'name':'Mobile LTZ API','description':'Player payloads, delivery statistics and API diagnostics.',
-            'group':'Photon Engine','default_page':'','pages':[{'path':'','label':'Delivery diagnostics'}]}
+            'group':'Photon Engine','default_page':'','pages':[{'path':'','label':'Delivery diagnostics'}, {'path':'delay-analysis','label':'Delay Analysis'}]}
 bp=Blueprint('mobile_ltz_api',__name__)
 _live=live.LiveState()
 _team_live={'green':_live,'purple':live.LiveState()}
@@ -31,15 +35,18 @@ _cue_scope_since = 0.0
 def hub_init(ctx):
     global _ctx, _diagnostics, _diagnostic_errors, _cue_scope, _cue_scope_since
     _ctx=ctx
+    delay_analysis.start(Path(__file__).parent / 'data' / 'delay-analysis')
     _diagnostics=DeliveryDiagnostics()
     _diagnostic_errors=0
     _cue_scope, _cue_scope_since = None, 0.0
 
 def hub_stop():
     global _ctx
+    delay_analysis.stop()
     _ctx=None
 
 
+@trace.traced('mobile.observe')
 def _observe(method, *args, **kwargs):
     """Observability must never interrupt player delivery."""
     global _diagnostic_errors, _diagnostic_error_logged_at
@@ -90,7 +97,10 @@ def begin_measurement():
 
 
 @bp.after_request
+@trace.traced('mobile.record_response')
 def record_response(response):
+    if '/api/delay' in request.path or '/delay-analysis' in request.path:
+        return response
     started = getattr(g, 'mobile_request_started', None)
     if started is None:
         # Hub authentication may return before this blueprint's before_request.
@@ -120,6 +130,7 @@ def _record_action(data):
 def _module(slug):
     return _ctx.get_prototype(slug) if _ctx and _ctx.is_prototype_enabled(slug) else None
 
+@trace.traced('mobile.game')
 def _game():
     module=_module('photon-game')
     if not module or not callable(getattr(module,'game_snapshot',None)):
@@ -132,6 +143,7 @@ def _game():
         raise ValueError('Photon Game contract mismatch')
     return module,value
 
+@trace.traced('mobile.camera_view')
 def camera_view(game):
     alignment = None
     tracking = None
@@ -172,6 +184,7 @@ def camera_view(game):
         return {'status':'unavailable', 'error':str(exc), 'alignment':alignment, 'tracking':tracking}
 
 
+@trace.traced('mobile.motion_safety')
 def _motion_safety(side):
     """Read the same owner as Relay, without exposing guards or other sessions."""
     try:
@@ -184,17 +197,37 @@ def _motion_safety(side):
         if value.get('status')!='ready':
             reason=value.get('error')
             raise ValueError(reason if isinstance(reason,str) and reason else 'Validated Cal 2 safety limits unavailable')
-        return {'status':'ready','revision':value.get('revision')}
+        result = {'status':'ready','revision':value.get('revision')}
+        if (value.get('camera_compatibility') or {}).get('manual_only'):
+            result['camera_compatibility'] = value['camera_compatibility']
+        return result
     except Exception as exc:
         return {'status':'unavailable','error':str(exc)}
 
 
+@trace.traced('mobile.motion_policy')
+def _motion_policy(game, side):
+    """Project Game's transition decision, also enforced by the physical relay."""
+    try:
+        policy = game.motion_policy(side)
+        if (not isinstance(policy,dict) or policy.get('contract')!='photon.game.motion'
+                or type(policy.get('version')) is not int or policy['version']!=1
+                or policy.get('status')!='ready' or type(policy.get('blocked')) is not bool
+                or policy.get('scope') not in ('player','tutorial','waiting')):
+            raise ValueError('Game control policy unavailable')
+        return policy
+    except Exception as exc:
+        return {'contract':'photon.game.motion','version':1,'status':'unavailable',
+                'blocked':True,'error':str(exc)}
+
+
+@trace.traced('mobile.snapshot', side='argument')
 def mobile_snapshot(side='green'):
     """Player-facing projection; no administrative settings/history/roster."""
     global _delivery_sequence, _delivery_at
     started=time.perf_counter()
     try:
-        _, value = _game()
+        game, value = _game()
     except ValueError as exc:
         value = {'status':'unavailable','error':str(exc)}
         if side in ('green', 'purple'):
@@ -202,25 +235,31 @@ def mobile_snapshot(side='green'):
         return value
     if side not in ('green', 'purple'):
         raise ValueError('Unknown mobile team.')
+    trace.annotate(side=side, run_id=value.get('run_id'))
+    value['delay_analysis'] = trace.config(side)
     arms = value.pop('mobile_arms', {})
     value['mobile_arm'] = arms.get(side, value.get('mobile_arm') if side == 'green' else None)
     value['mobile_team'] = side
+    value['mobile_motion_policy'] = _motion_policy(game, side)
+    value['mobile_mcam1'] = trace.call('mobile.mcam1', mcam1_view.snapshot, _module)[0]
+    if value.get('presentation'):
+        value['presentation']={**value['presentation'],'assets':{**value['presentation'].get('assets',{}),**trace.call('mobile.shop_assets', shop_assets)}}
     value['mobile_camera'] = camera_view(value) if not value.get('virtual_play') else {'status':'unused'}
     value['mobile_safety'] = _motion_safety(side) if not value.get('virtual_play') else {'status':'unused'}
     value['mobile_cue_targets'] = _cue_targets_projection(value) if not value.get('virtual_play') else {'status':'unused'}
-    for key in ('configuration', 'storage', 'inputs', 'progress', 'level_presets'):
+    for key in ('configuration', 'storage', 'inputs', 'progress', 'level_presets','next_loadouts'):
         value.pop(key, None)
     # Movement packets retain authoritative health/effects and short guides,
     # not internal lane bookkeeping or unnecessary float precision.
     fields=('id','enemy_type','x','y','vx','vy','facing_x','facing_y','hp','max_hp',
             'attacking','burn_until','electrocuted_until','electrocution_depth',
-            'electrocution_intensity','motion')
+            'electrocution_intensity','motion','combat')
     value['enemies']=[{key:round(enemy[key],3) if isinstance(enemy[key],float) else enemy[key]
                        for key in fields if key in enemy} for enemy in value.get('enemies',[])]
     progress = _module('photon-progress')
     if progress and callable(getattr(progress, 'progress_snapshot', None)):
         try:
-            profile = progress.public_snapshot(side)
+            profile = trace.call('mobile.progress', progress.public_snapshot, side)
             if not isinstance(profile,dict) or profile.get('contract') != 'photon.progress' or type(profile.get('version')) is not int or profile['version']!=2 or profile.get('status')!='ready':
                 raise ValueError('Photon Progress v2 unavailable')
             value['mobile_progress'] = profile
@@ -234,7 +273,7 @@ def mobile_snapshot(side='green'):
     value['mobile_calibration_connect'] = False
     if owner and callable(getattr(owner,'calibration_session_snapshot',None)):
         try:
-            cal = owner.calibration_session_snapshot()
+            cal = trace.call('mobile.calibration', owner.calibration_session_snapshot)
             if not isinstance(cal,dict) or cal.get('contract')!='hhh.cal2.session' or type(cal.get('version')) is not int or cal['version']!=1 or cal.get('status')!='ready':
                 raise ValueError('Auto PP Cal 2 session v1 unavailable')
             value['mobile_rig_revision']=cal.get('rig_revision')
@@ -286,6 +325,8 @@ def mobile_snapshot(side='green'):
                            'source_gap_ms':round((now-_delivery_at)*1000,2) if _delivery_at is not None else None,
                            'build_ms':round((now-started)*1000,2)}
         _delivery_at=now
+    trace.annotate(sequence=_delivery_sequence)
+    trace.measure('mobile.source_gap', value['delivery']['source_gap_ms'] or 0, side=side, sequence=_delivery_sequence)
     _observe('generated', side, value, (now-started)*1000)
     return value
 
@@ -311,27 +352,19 @@ def mobile_state_api():
     return jsonify(mobile_snapshot(side))
 
 
+@trace.traced('mobile.cue_targets_projection')
 def _cue_targets_projection(game):
-    """Read cached evidence for SSE and commands, scoped to the actual layout."""
+    """Read cached evidence for SSE and commands, scoped to this run/layout."""
     global _cue_scope, _cue_scope_since
     try:
         board = _module('photon-board')
         if not board or not callable(getattr(board, 'cue_targets_snapshot', None)):
             raise ValueError('Cue target mapping unavailable.')
-        level, journey = game.get('level') or {}, game.get('journey') or {}
-        layout = {k: level.get(k) for k in ('id', 'layout_revision', 'width', 'height', 'sockets', 'core')}
-        fixed_ids = [s['aruco_id'] for s in level.get('sockets', [])]
-        core = level.get('core') or {}
-        if 'marker_x' in core and 'marker_y' in core:
-            fixed_ids.append(38)
-        if journey.get('phase') == 'calibration':
+        field = None
+        if game.get('journey', {}).get('phase') == 'calibration':
             field = _module('playfield-areas')
             field = field.display_snapshot() if field else {}
-            if field.get('contract') != 'hhh.playfield' or type(field.get('version')) is not int or field['version'] != 1 or field.get('status') != 'ready':
-                raise ValueError('Calibration display unavailable.')
-            layout = {'calibration': journey.get('id'), 'areas': field.get('areas'), 'settings': field.get('settings')}
-            fixed_ids = [area['marker'] for area in field['areas']]
-        scope = hashlib.sha256(json.dumps(layout, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        scope, fixed_ids = cue_layout(game, field)
         with _cue_scope_lock:
             if scope != _cue_scope:
                 _cue_scope, _cue_scope_since = scope, time.time()
@@ -340,14 +373,15 @@ def _cue_targets_projection(game):
         # hiding unrelated tags here leaves their global hold/epoch in effect.
         value = board.cue_targets_snapshot(scope=scope, fixed_ids=fixed_ids)
         if (value.get('contract') != 'photon.board.cue-targets' or type(value.get('version')) is not int
-                or value['version'] != 1 or value.get('layout_scope') != scope
+                or value['version'] != 2 or value.get('layout_scope') != scope
                 or value.get('fixed_ids') != sorted(fixed_ids)):
             raise ValueError('Cue target mapping contract mismatch.')
         value.update(scope=scope, scope_since=since, server_time=time.time())
-        value['tags'] = [tag for tag in value['tags'] if tag['last_seen'] >= since]
+        # The owner acknowledges a run/layout-specific map. A later reader
+        # must not discard fixed targets already learned by another display.
         return value
     except Exception as exc:
-        return dict(contract='photon.board.cue-targets', version=1, status='unavailable', tags=[], error=str(exc))
+        return dict(contract='photon.board.cue-targets', version=2, status='unavailable', tags=[], error=str(exc))
 
 
 @bp.route('/api/cue-targets')
@@ -357,7 +391,7 @@ def cue_targets_api():
         _, game = _game()
         value = _cue_targets_projection(game)
     except ValueError as exc:
-        value = dict(contract='photon.board.cue-targets', version=1, status='unavailable', tags=[], error=str(exc))
+        value = dict(contract='photon.board.cue-targets', version=2, status='unavailable', tags=[], error=str(exc))
     response = jsonify(value)
     response.headers['Cache-Control'] = 'no-store'
     return response
@@ -374,10 +408,15 @@ def connection_diagnostics_api():
                 'Content-Disposition': 'attachment; filename=mobile-connection-events.jsonl',
                 'Cache-Control': 'no-store'})
         # Bound reads even if Content-Length is omitted.
-        raw = request.stream.read(4097)
-        if len(raw) > 4096:
+        raw = request.stream.read(65537)
+        if len(raw) > 65536:
             abort(413)
-        if not connection_log.append(side, json.loads(raw)):
+        value = json.loads(raw)
+        if isinstance(value, dict) and value.get('contract') == trace.CONTRACT:
+            return jsonify(delay_analysis.client_batch(side, value))
+        if len(raw) > (12288 if trace.enabled() else 4096):
+            abort(413)
+        if not trace.call('logging.connection_event', connection_log.append, side, value):
             return jsonify(ok=False, error='Diagnostic rate limit.'), 429
         return jsonify(ok=True)
     except (ValueError, UnicodeDecodeError) as exc:
@@ -398,8 +437,10 @@ def mobile_events_api():
                         # Start/reset must deliver a complete scene to every
                         # team, even when the map itself has not changed.
                         identity_fields=('run_id', 'level_revision'), envelope=True,
+                        # Progress contains shop.server_time and remains dynamic;
+                        # otherwise its clock forces full scene resends each tick.
                         static_fields=('level', 'presentation', 'settings', 'loadout',
-                                       'force_field_blockers', 'row_barrier_geometry', 'mobile_progress'))
+                                       'force_field_blockers', 'row_barrier_geometry'))
     original = response.response
     def measured_stream():
         failed = False
@@ -480,6 +521,24 @@ def player_api():
         return jsonify(ok=False,error=str(exc)),400
 
 
+@bp.route('/api/saved-game', methods=['POST'])
+def saved_game_api():
+    side = _mobile_guard(mutation=True)
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or len(json.dumps(data)) > 2048:
+            raise ValueError('invalid saved game command')
+        owner, _ = _game()
+        result = owner.saved_game_command(side, data)
+        if (result.get('contract') != 'photon.progress' or type(result.get('version')) is not int
+                or result['version'] != 2 or result.get('status') != 'ready'):
+            raise ValueError('Saved game contract unavailable')
+        for stream in _team_live.values(): stream.bump()
+        return jsonify(result)
+    except (ValueError, PermissionError, TypeError) as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+
 @bp.route('/api/history')
 def history_api():
     side=_mobile_guard()
@@ -539,11 +598,18 @@ def mobile_renderer_api():
 @bp.route('/api/assets/<path:filename>')
 def mobile_asset_api(filename):
     _mobile_guard()
+    if filename == 'mcam1.jpg':
+        descriptor, image = mcam1_view.snapshot(_module)
+        if image is None:
+            return jsonify(descriptor), 503
+        return Response(image, mimetype='image/jpeg', headers={'Cache-Control':'no-store'})
+    if filename.startswith('ui/ltz/'):
+        return shop_asset_response(filename.removeprefix('ui/ltz/'))
     if filename == 'mobile-camera.jpg':
         camera = _module('camera-calibration')
         if not camera or not callable(getattr(camera, 'preview_frame', None)):
             abort(503)
-        frame = camera.preview_frame()
+        frame = camera.preview_frame(mobile=True)
         if (frame.get('contract') != 'hhh.camera-frame' or type(frame.get('version')) is not int
                 or frame['version'] != 1 or frame.get('status') != 'ready'
                 or frame.get('coordinate_space') != 'corrected-camera-normalized'
@@ -558,3 +624,6 @@ def mobile_asset_api(filename):
     if descriptor.get('contract') != 'photon.level.assets' or type(descriptor.get('version')) is not int or descriptor['version'] != 1:
         abort(503)
     return module.presentation_asset_response(filename)
+
+
+delay_analysis.register(bp, _operator_guard, _mobile_guard)

@@ -35,10 +35,15 @@ def marker_geometry(tag, width, height):
 
 
 def size_consistent_markers(tags, width, height):
-    """A unique largest group whose maximum/minimum side length is <= 1.15."""
+    """Flat-marker consensus; core and raised Atoms have independent sizes.
+
+    Registration still requires its own sufficient spread of level markers.
+    Individual core/Atom acceptance is display geometry, never pickup evidence.
+    """
     ratio = 1.15
     sizes = {tag["id"]: marker_size(tag, width, height) for tag in tags}
-    measured = sorted((size, ident) for ident, size in sizes.items() if size is not None)
+    independent = {tag['id'] for tag in tags if tag['id'] == 38 or 100 <= tag['id'] <= 199}
+    measured = sorted((size, ident) for ident, size in sizes.items() if size is not None and ident not in independent)
     groups, largest = [], 0
     for start, (smallest, _) in enumerate(measured):
         group = {ident for size, ident in measured[start:] if size <= smallest * ratio + 1e-9}
@@ -48,9 +53,11 @@ def size_consistent_markers(tags, width, height):
             groups.append(group)
     # One tag cannot verify its own size. Equal competing groups are ambiguous.
     accepted = groups[0] if largest >= 2 and len(groups) == 1 else set()
+    flat = set(accepted)
+    accepted |= {tag['id'] for tag in tags if tag['id'] in independent and marker_geometry(tag, width, height)}
     result = {"max_ratio": ratio, "status": "ready" if accepted else "unavailable",
-              "minimum_px": min(sizes[i] for i in accepted) if accepted else None,
-              "maximum_px": max(sizes[i] for i in accepted) if accepted else None,
+              "minimum_px": min(sizes[i] for i in flat) if flat else None,
+              "maximum_px": max(sizes[i] for i in flat) if flat else None,
               "rejected": [{"id": ident, "size_px": size,
                             "reason": "invalid_corners" if size is None else
                                       "size_outlier" if accepted else "no_size_consensus"}

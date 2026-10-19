@@ -8,6 +8,7 @@ const { chromium } = require('playwright');
   for (const side of ['green', 'purple']) {
    const page = await browser.newPage();
    await page.setContent(`<html data-mobile-team="${side}"><body></body></html>`);
+   await page.addScriptTag({ path: 'shared/ltz_ui/shop.js' });
    await page.addScriptTag({ path: 'shared/mobile_ltz/journey.js' });
    await page.evaluate(async side => {
     window.sample = {

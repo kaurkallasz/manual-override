@@ -57,7 +57,7 @@ const team=process.env.MOBILE_TEST_TEAM==='purple'?'purple':'green',piece=team==
  }
  await page.request.post(root+'/__test/camera',{data:{enabled:true,stale:true}});
  await page.waitForFunction(()=>state.mobile_camera?.status==='unavailable');
- assert.equal(await page.locator('[data-aim-handle]').count(),0);
+ await page.locator('[data-aim-handle]').waitFor({state:'hidden'});
  assert.equal(await page.locator('#turretAimStatus').count(),0);
  assert.match(await page.locator('#feedback').textContent(),/Tracking unavailable/);
  await page.request.post(root+'/__test/camera',{data:{enabled:true,stale:false}});

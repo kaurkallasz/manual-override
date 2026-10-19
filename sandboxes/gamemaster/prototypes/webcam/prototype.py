@@ -17,6 +17,7 @@ runs inside the hub server. If OpenCV isn't installed the import fails and the h
 reports the prototype as failed to load while the others keep running; install
 this folder's requirements.txt to enable it.
 """
+from shared import delay_trace as trace
 
 import base64
 import ctypes
@@ -332,6 +333,7 @@ class ScreenConfirmation:
     def reset(self):
         self.records.clear()
 
+    @trace.traced('camera.update')
     def update(self, detections, now):
         output = {mid: tag for mid, tag in detections.items() if mid < SCREEN_BASE}
         current = {}
@@ -355,6 +357,7 @@ class ScreenConfirmation:
         return output
 
 
+@trace.traced('camera.detect')
 def _detect(frame, target_width, target_height):
     """Detect markers from all supported dictionaries in full-res pixel coords.
 
@@ -362,16 +365,16 @@ def _detect(frame, target_width, target_height):
     Atom-screen (3x3) markers come back as SCREEN_BASE + id (100..105)."""
     h, w = frame.shape[:2]
     scale = min(1.0, target_width / w, target_height / h)
-    small = cv2.resize(frame, None, fx=scale, fy=scale,
+    small = trace.call('camera.resize', cv2.resize, frame, None, fx=scale, fy=scale,
                        interpolation=cv2.INTER_AREA) if scale < 1.0 else frame
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    gray = trace.call('camera.grayscale', cv2.cvtColor, small, cv2.COLOR_BGR2GRAY)
     dets = {}
-    c, i, _ = _detector.detectMarkers(gray)
+    c, i, _ = trace.call('camera.detect_4x4_50', _detector.detectMarkers, gray)
     _collect(dets, c, i, scale, w, h)                       # printed 4x4 tags
-    c, i, _ = _tower_detector.detectMarkers(gray)
+    c, i, _ = trace.call('camera.detect_4x4_100', _tower_detector.detectMarkers, gray)
     _collect(dets, c, i, scale, w, h,
              id_min=TOWER_TAG_MIN, id_max=TOWER_TAG_MAX)    # fixed sockets 50-55
-    c, i, _ = _screen_detector.detectMarkers(gray)
+    c, i, _ = trace.call('camera.detect_atom', _screen_detector.detectMarkers, gray)
     _collect_screens(dets, c, i, scale, w, h)              # validated Atom geometry
     return dets
 
@@ -384,11 +387,12 @@ class TagTracker:
         self._tags = {}      # id -> record
 
     def reset(self):
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             self._tags.clear()
 
+    @trace.traced('camera.update')
     def update(self, dets, now):
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             for mid, d in dets.items():
                 rec = self._tags.get(mid)
                 if rec is None:
@@ -412,7 +416,7 @@ class TagTracker:
 
     def tags(self, now):
         """The confirmed tracked tags, sorted by id."""
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             out = []
             for rec in self._tags.values():
                 if not rec["tracked"] or (now - rec["last_seen"]) > DROP_SECS:
@@ -433,7 +437,7 @@ class TagTracker:
 
     def detections(self, now):
         """Immediate marker reads, including tags still inside the debounce window."""
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             out = []
             for rec in self._tags.values():
                 missing = now - rec["last_seen"]
@@ -487,7 +491,7 @@ def _placeholder(text):
     img = np.full((720, 1280, 3), 18, np.uint8)
     cv2.putText(img, text, (40, 360),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (140, 150, 170), 2, cv2.LINE_AA)
-    ok, buf = cv2.imencode(".jpg", img)
+    ok, buf = trace.call('camera.jpeg', cv2.imencode, ".jpg", img)
     return buf.tobytes() if ok else b""
 
 
@@ -511,6 +515,7 @@ class CameraManager:
         self._native_focus_error = None
         self._native_focus_process = None
         self._thread = None
+        self._startup_timer = None
         self._running = False
         self._latest = None        # latest JPEG bytes
         self._latest_raw = None    # unannotated BGR frame for calibration/vision clients
@@ -561,7 +566,7 @@ class CameraManager:
                 match = next((d for d in devices or []
                               if d["unique_id"] == remembered["unique_id"]), None)
                 if match is None:
-                    with self._lock:
+                    with trace.locked(self._lock, 'camera.state_lock'):
                         self._error = (f"Selected camera {remembered.get('name') or index} "
                                        "unavailable. Reconnect it, then press Reconnect.")
                     return False, self._error
@@ -577,6 +582,27 @@ class CameraManager:
             self._manually_stopped = False
             return self.ensure_open()
 
+    def watch_startup(self):
+        """An allocated AVFoundation capture may never deliver its first frame."""
+        with self._lifecycle_lock:
+            if self._cap is not None:
+                self._schedule_startup_check(self._cap, 2)
+
+    def _schedule_startup_check(self, cap, attempts):
+        timer = threading.Timer(3.0, self._check_startup, args=(cap, attempts))
+        timer.daemon = True
+        self._startup_timer = timer
+        timer.start()
+
+    def _check_startup(self, cap, attempts):
+        with self._lifecycle_lock:
+            # A user's Stop, Reconnect or camera selection supersedes this check.
+            if self._manually_stopped or self._cap is not cap or self.status()['open']:
+                return
+            ok, _ = self.reconnect()
+            if ok and self._cap is not None and attempts > 1:
+                self._schedule_startup_check(self._cap, attempts - 1)
+
     def _open(self, index, width=None, height=None, tracking_width=None,
               tracking_height=None, detection_fps=None):
         """Open camera `index` at a requested resolution, replacing any current
@@ -590,7 +616,7 @@ class CameraManager:
             detection_fps or DEFAULT_DETECTION_FPS)))
         capture_width = max(width, tracking_width)
         capture_height = max(height, tracking_height)
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             self._stop_locked()
             devices = _capture_devices()
             if devices is not None and not 0 <= index < len(devices):
@@ -701,7 +727,7 @@ class CameraManager:
             self._close()
 
     def _close(self):
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             self._stop_locked()
             self._index = None
             self._device_info = None
@@ -710,6 +736,9 @@ class CameraManager:
 
     def _stop_locked(self):
         """Stop the grab thread and release the capture. Call with the lock held."""
+        if self._startup_timer is not None:
+            self._startup_timer.cancel()
+            self._startup_timer = None
         self._running = False
         thread = self._thread
         cap = self._cap
@@ -761,11 +790,11 @@ class CameraManager:
         cap = self._cap
         while self._running and cap is not None and self._cap is cap:
             try:
-                ok, frame = cap.read()
+                ok, frame = trace.call('camera.capture', cap.read)
             except cv2.error:
                 ok, frame = False, None
             if not ok or frame is None:
-                with self._lock:
+                with trace.locked(self._lock, 'camera.state_lock'):
                     if not self._running or self._cap is not cap:
                         return
                     if not self._error:
@@ -774,20 +803,20 @@ class CameraManager:
                     self._error = "Camera disconnected or returned no frame. Reconnect the webcam, then press Reconnect."
                 time.sleep(0.05)
                 continue
-            with self._lock:
+            with trace.locked(self._lock, 'camera.state_lock'):
                 if not self._running or self._cap is not cap:
                     return
                 self._latest_raw = frame.copy()
                 self._latest_raw_at = time.time()
             capture_h, capture_w = frame.shape[:2]
             preview = self._process_frame(frame)
-            ok, buf = cv2.imencode(
+            ok, buf = trace.call('camera.jpeg', cv2.imencode,
                 ".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
             )
             if not ok:
                 continue
             now = time.monotonic()
-            with self._lock:
+            with trace.locked(self._lock, 'camera.state_lock'):
                 if not self._running or self._cap is not cap:
                     return
                 self._latest = buf.tobytes()
@@ -815,7 +844,7 @@ class CameraManager:
 
     def focus_controls(self):
         """Return autofocus/manual-focus state for the active UVC camera."""
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             cap = self._cap
             if cap is None or not self._running:
                 return {
@@ -882,7 +911,7 @@ class CameraManager:
     def set_focus_controls(self, autofocus=None, focus=None,
                            autoexposure=None, exposure=None):
         """Apply supported UVC focus/exposure properties and return readback."""
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             cap = self._cap
             if cap is None or not self._running:
                 return False, "no camera is open", None
@@ -916,13 +945,13 @@ class CameraManager:
             saved_exposure = native.get("exposure") if native else exposure
             _save_focus_settings(index, saved_auto, saved_focus,
                                  saved_autoexposure, saved_exposure)
-            with self._lock:
+            with trace.locked(self._lock, 'camera.state_lock'):
                 self._native_focus_state = native
             return True, None, self.focus_controls()
 
         if autoexposure is not None or exposure is not None:
             return False, "this camera does not expose exposure control", None
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             cap = self._cap
             try:
                 if autofocus is not None and not cap.set(
@@ -938,6 +967,7 @@ class CameraManager:
                              controls.get("autoexposure"), controls.get("exposure"))
         return True, None, controls
 
+    @trace.traced('camera.process_frame')
     def _process_frame(self, frame):
         """Detect ArUco markers, update the debounced tracker, and draw an
         overlay (green = tracked, amber = still qualifying)."""
@@ -947,7 +977,7 @@ class CameraManager:
             dets = self._screen_confirmation.update(
                 _detect(frame, self._tracking_w, self._tracking_h), now)
             _tracker.update(dets, now)
-            with self._lock:
+            with trace.locked(self._lock, 'camera.state_lock'):
                 if self._last_detection_ts:
                     measured = 1.0 / max(1e-6, now - self._last_detection_ts)
                     self._detection_fps = (measured if not self._detection_fps else
@@ -977,13 +1007,13 @@ class CameraManager:
                     self._last_detections_at = now
                 elif now - self._last_detections_at > DETECTION_HOLD_SECS:
                     self._last_detections = {}
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             dets = {mid: {**d, "corners": np.array(d["corners"], copy=True)}
                     for mid, d in self._overlay_detections.items()}
         source_h, source_w = frame.shape[:2]
         preview_scale = min(1.0, self._preview_w / source_w,
                             self._preview_h / source_h)
-        preview = cv2.resize(frame, None, fx=preview_scale, fy=preview_scale,
+        preview = trace.call('camera.resize', cv2.resize, frame, None, fx=preview_scale, fy=preview_scale,
                              interpolation=cv2.INTER_AREA) if preview_scale < 1.0 else frame
         tracked = {t["id"] for t in _tracker.tags(now)}
         for mid, d in dets.items():
@@ -997,7 +1027,7 @@ class CameraManager:
 
     # -- readers --------------------------------------------------------------
     def latest_jpeg(self):
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             return (self._latest if self._fresh_locked() else None) or self._no_signal
 
     def latest_frame(self):
@@ -1006,11 +1036,11 @@ class CameraManager:
         Keeping camera ownership here lets sibling prototypes (notably Camera
         Calibration) do OpenCV work without fighting over the physical device.
         """
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             return self._latest_raw.copy() if self._fresh_locked() else None
 
     def status(self):
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             open_ = self._fresh_locked()
             error = self._error
             if not open_ and self._cap is not None and self._running and not error:
@@ -1048,7 +1078,7 @@ class CameraManager:
 
     def detection_snapshot(self, now):
         """Held positions plus IDs present in the latest processed frame."""
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             if not self._fresh_locked():
                 return [], []
             missing = now - self._last_detections_at
@@ -1073,7 +1103,7 @@ class CameraManager:
 
     def detection_frame_at(self):
         """Wall-clock time of the last processed frame, including empty frames."""
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             stamp = self._last_detection_ts
         return time.time() - max(0.0, time.monotonic() - stamp) if stamp else 0.0
 
@@ -1082,7 +1112,7 @@ class CameraManager:
         return self.detection_snapshot(now)[0]
 
     def active_index(self):
-        with self._lock:
+        with trace.locked(self._lock, 'camera.state_lock'):
             return self._index
 
     def mjpeg(self):
@@ -1108,6 +1138,7 @@ def hub_init(ctx):
     """Physical consumers need frames even before a video page is opened."""
     if ctx.is_enabled():
         _mgr.ensure_open()
+        _mgr.watch_startup()
 
 
 def hub_stop():
@@ -1130,6 +1161,7 @@ def camera_status_snapshot():
             "observed_at": time.time(), "camera": value}
 
 
+@trace.traced('camera.raw_frame_snapshot')
 def raw_frame_snapshot():
     """Fresh, uncorrected BGR copy from the one owned camera capture."""
     with _mgr._lock:
@@ -1174,6 +1206,7 @@ def camera_command(value):
     raise ValueError("unknown camera command")
 
 
+@trace.traced('camera.tag_snapshot')
 def tag_snapshot():
     """Versioned raw camera/tag output for observation adapters.
 
@@ -1243,7 +1276,7 @@ def _probe_cameras(max_index):
         w = h = 0
         readable = False
         if opened:
-            ok, frame = cap.read()
+            ok, frame = trace.call('camera.capture', cap.read)
             readable = ok and frame is not None
             if readable:
                 h, w = frame.shape[:2]

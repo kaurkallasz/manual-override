@@ -391,6 +391,7 @@ def _snapshot():
         return {
             "rev": _rev, "areas": copy.deepcopy(list(_store.values())),
             "srev": _srev, "settings": copy.deepcopy(_settings),
+            "calibration_side": (_display_session or {}).get('side'),
         }
 
 

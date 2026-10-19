@@ -327,3 +327,67 @@ Hardware-free regressions:
 node tests/mobile_arm_bridge_smoke.cjs
 MOBILE_TEST_TEAM=purple node tests/mobile_arm_bridge_smoke.cjs
 ```
+
+### Player feedback delivery
+
+Each connected arm now runs its existing `relay_arm.DobotMG400` driver in a
+relay-owned spawned process (`arm_worker.py`). Camera, game, JSON and garbage
+collection work in the hub can no longer starve the driver's feedback reader
+or servo loop. This is still one driver/socket set per arm and one validated
+relay command path. Importing the module opens no sockets or processes; Connect
+starts its worker, and disconnect/replacement/`hub_stop` closes it.
+
+Telemetry and stop/reset calls have a separate local pipe from dashboard
+commands. Pending motion/pump-on requests expire after 250 ms rather than replay
+after a blocked command. Original feedback timestamps and motion generations
+are retained. The driver still stops on a real 250 ms feedback gap, unlock or
+fault; the player still requires feedback within 1.5 s. A separate worker
+watchdog cancels motion, requests StopRobot and pump-off, and exits if the hub
+dies or misses its two-second parent heartbeat. Worker failure requires an
+explicit new connection; there is no automatic restart or target replay.
+
+`python -m unittest discover -s tests -p 'test_relay_worker.py'` uses fake
+feedback with the real driver/follower and no robot sockets. It reproduces a
+shared-process feedback failure under a 400 ms Python pause, checks continuous
+feedback through repeated 600 ms hub pauses in the isolated version, and checks
+real loss/unlock, stale-command rejection, parent loss, process crash, both
+teams' Connect/Enable routes, and teardown. A hub restart is required to adopt
+the worker transport for physical connections.
+
+The spawn entry point is the standard-library `runpy.run_path`, loading the
+relay's own `arm_worker.py` and driver in the child. The hub intentionally
+removes prototype helpers from `sys.modules`; passing a cached helper function
+or default driver class to `spawn` fails Python's pickle identity check after
+that cleanup. No helper cache exception or second robot-control path is needed.
+Startup failures are converted to the existing `DobotError` contract, so the
+Connect endpoint returns a JSON diagnosis and leaves no owned worker/lease.
+`tests/relay_worker_hub_smoke.py` exercises the real hub loader in a fresh Python
+process, both teams' fake Connect/Enable, and the default driver's rejection of
+an invalid local interface before any robot socket is opened.
+
+`GET /api/feedback?side=green|purple` pushes full `hhh.relay.feedback` v1
+snapshots through the existing SSE helper every 100 ms. Each contains `status`,
+one side under `arms` and `sides`, and the versioned `z_limits`. It is read-only:
+it cannot acquire/renew a lease, enable an arm, or send motion. Player adapters
+consume this stream independently of the 700 ms heartbeat and retain the
+original robot `feedback_at`; delayed heartbeat replies cannot replace newer
+measurements. `POST /api/heartbeat` accepts `feedback_only: true` to return the
+same compact state. Legacy callers still receive full monitor state.
+
+Neither compact path reads the disk-backed command monitor or the other arm.
+The full operator snapshot releases the lease lock before reading its monitor.
+Feedback publication and motion-epoch validation share one lock order, so a
+delayed status reader cannot revoke newer healthy feedback. The 250 ms driver
+and 1.5 s player freshness limits, unlock latch, lease checks, and explicit
+reconnect requirement remain unchanged. `motion_invalidation` identifies the
+last epoch change (feedback gap/stale/disconnected, robot mode, reset, or servo
+failure) and passes through to the mobile connection diagnostic log.
+
+Both player adapters close their stream and heartbeat on disconnect and module
+shutdown. Their read-only stream uses a one-second socket timeout so the reader
+can close its own response without racing HTTP chunk parsing.
+
+```sh
+.venv/bin/python -B -m unittest discover -s tests -p 'test_relay_feedback.py'
+.venv/bin/python -B tests/relay_feedback_transport_smoke.py
+```

@@ -1,0 +1,101 @@
+[
+  {
+    "mode": "melee",
+    "mix": "28% breakers",
+    "ticks": 160,
+    "active": 1000,
+    "defense_bodies": 28,
+    "tick_ms": {
+      "0.5": 52.525,
+      "0.95": 66.284,
+      "0.99": 105.461,
+      "1": 147.695
+    },
+    "ticks_over_50_ms": 105,
+    "backlog_peak_ms": 778.46,
+    "snapshot_p95_ms": 21.032,
+    "snapshot_max_bytes": 601030,
+    "peak_arrows": 0,
+    "peak_stopped": 0,
+    "stats": {
+      "shots": 0,
+      "hits": 0,
+      "blocks": 0,
+      "misses": 0,
+      "cancelled_draws": 0,
+      "deaths_before_release": 0,
+      "tower_damage": 0,
+      "core_damage": 0,
+      "tower_destructions": 0,
+      "core_destructions": 0,
+      "stopped_s": 0,
+      "aim_s": 0
+    }
+  },
+  {
+    "mode": "ranged",
+    "mix": "28% breakers",
+    "ticks": 160,
+    "active": 1000,
+    "defense_bodies": 28,
+    "tick_ms": {
+      "0.5": 43.451,
+      "0.95": 62.272,
+      "0.99": 86.498,
+      "1": 124.748
+    },
+    "ticks_over_50_ms": 34,
+    "backlog_peak_ms": 188.73,
+    "snapshot_p95_ms": 30.288,
+    "snapshot_max_bytes": 672588,
+    "peak_arrows": 179,
+    "peak_stopped": 278,
+    "stats": {
+      "shots": 1379,
+      "hits": 1377,
+      "blocks": 0,
+      "misses": 0,
+      "cancelled_draws": 7,
+      "deaths_before_release": 0,
+      "tower_damage": 16524.0,
+      "core_damage": 0,
+      "tower_destructions": 0,
+      "core_destructions": 0,
+      "stopped_s": 2188.8499999991973,
+      "aim_s": 886.999999999741
+    }
+  },
+  {
+    "mode": "ranged",
+    "mix": "all archers",
+    "ticks": 160,
+    "active": 1000,
+    "defense_bodies": 28,
+    "tick_ms": {
+      "0.5": 30.926,
+      "0.95": 47.184,
+      "0.99": 76.798,
+      "1": 79.875
+    },
+    "ticks_over_50_ms": 7,
+    "backlog_peak_ms": 65.04,
+    "snapshot_p95_ms": 25.235,
+    "snapshot_max_bytes": 866528,
+    "peak_arrows": 593,
+    "peak_stopped": 994,
+    "stats": {
+      "shots": 4951,
+      "hits": 4946,
+      "blocks": 0,
+      "misses": 0,
+      "cancelled_draws": 3,
+      "deaths_before_release": 0,
+      "tower_damage": 59352.0,
+      "core_damage": 0,
+      "tower_destructions": 0,
+      "core_destructions": 0,
+      "stopped_s": 7867.600000019856,
+      "aim_s": 3169.000000002763
+    }
+  }
+]

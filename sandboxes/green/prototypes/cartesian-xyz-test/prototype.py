@@ -13,6 +13,7 @@ and the API simply reports "Not connected".
 Put the robot in API mode first — see ../../docs/operations/dobot-api-mode.md.
 Safety: keep the hardware E-stop within reach; start with a low speed.
 """
+from shared import delay_trace as trace
 
 import json
 import importlib.util
@@ -199,6 +200,16 @@ def hub_init(ctx):
     _hub_ctx = ctx
 
 
+def hub_stop():
+    """Release this controller's lease and feedback/heartbeat resources."""
+    global _robot, _hub_ctx
+    with _robot_lock:
+        robot, _robot = _robot, None
+        if robot is not None:
+            robot.close()
+    _hub_ctx = None
+
+
 PLAYER_SIDES = ("purple", "green")
 
 
@@ -355,6 +366,7 @@ def _pump_mode(do_bits):
     return "off"
 
 
+@trace.traced('controller.green.status')
 def _status_dict():
     robot = _current()
     st = DobotMG400._blank_state() if robot is None else robot.get_state()
@@ -462,7 +474,8 @@ def connect():
                     held = e.holder or "the other side"
                     return _fail(f"Relay is held by {held} — release it first.",
                                  holder=e.holder)
-                return _fail(f"Could not reach relay at {host}: {e}")
+                return _fail(f"Relay connection failed: {e}" if e.status is not None
+                             else f"Could not reach relay at {host}: {e}")
             if ident["is_player"]:
                 errid, resp = robot.enable()
                 if errid != 0:
@@ -522,7 +535,8 @@ def enable():
             try:
                 _robot, _host, _relay_side = _connect_player_relay_locked(ident)
             except RelayError as e:
-                return _fail(f"Could not reach relay: {e}")
+                return _fail(f"Relay connection failed: {e}" if e.status is not None
+                             else f"Could not reach relay: {e}")
             _link = "relay"
             robot = _robot
     try:

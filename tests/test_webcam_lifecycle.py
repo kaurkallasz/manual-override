@@ -121,6 +121,41 @@ class WebcamLifecycleTests(unittest.TestCase):
         self.assertEqual(self.webcam.raw_frame_snapshot()['status'], 'unavailable')
         self.assertEqual(self.webcam.tag_snapshot()['visible_ids'], [])
 
+    def test_startup_reopens_allocated_capture_without_frames_at_most_twice(self):
+        manager = self.live_manager()
+        manager._latest_raw_at -= 10
+        def reconnect():
+            manager._cap = mock.Mock()
+            return True, None
+        with mock.patch.object(manager, 'reconnect', side_effect=reconnect) as opened, \
+                mock.patch.object(manager, '_schedule_startup_check') as scheduled:
+            manager._check_startup(manager._cap, 2)
+            scheduled.assert_called_once_with(manager._cap, 1)
+            scheduled.reset_mock()
+            manager._check_startup(manager._cap, 1)
+            self.assertEqual(opened.call_count, 2)
+            scheduled.assert_not_called()
+            self.assertFalse(manager.status()['open'])
+
+    def test_startup_never_reopens_fresh_stopped_or_replaced_capture(self):
+        manager = self.live_manager()
+        original = manager._cap
+        with mock.patch.object(manager, 'reconnect') as opened:
+            manager._check_startup(original, 2)
+            manager._latest_raw_at -= 10
+            manager._cap = mock.Mock()
+            manager._check_startup(original, 2)
+            manager._manually_stopped = True
+            manager._check_startup(manager._cap, 2)
+            opened.assert_not_called()
+
+    def test_stop_cancels_pending_startup_recovery(self):
+        manager = self.live_manager()
+        timer = manager._startup_timer = mock.Mock()
+        manager.close()
+        timer.cancel.assert_called_once()
+        self.assertIsNone(manager._startup_timer)
+
     def test_failed_read_clears_live_state_and_a_new_frame_recovers(self):
         manager = self.live_manager()
         cap = manager._cap

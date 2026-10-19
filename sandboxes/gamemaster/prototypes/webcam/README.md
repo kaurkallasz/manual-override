@@ -77,6 +77,12 @@ and Laser Tag Y receive frames without first opening Webcam or Laser Tag X.
 device scans share a lifecycle lock to prevent concurrent capture replacement.
 With no saved camera, choose one in Webcam first.
 
+Startup verifies that the allocated capture delivers fresh frames after three
+seconds. If it stalls, the owner reopens the same saved camera at most twice;
+unavailable devices never fall back to a different camera. Stop or a new camera
+selection cancels this startup recovery. Consumers remain unavailable until fresh
+frames actually arrive.
+
 Hardware-free startup/concurrency smoke test:
 `.venv/bin/python -m unittest discover -s tests -p test_webcam_lifecycle.py`.
 

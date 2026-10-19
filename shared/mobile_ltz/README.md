@@ -3,6 +3,129 @@ Shared Mobile LTZ presentation assets for Green and Purple. Each player's
 supplies `data-mobile-team` in HTML. Runtime state belongs to the team-specific
 module, game arm and LTX frame; these frontend files have no global Python state.
 
+Physical Cue tracks confirmed two-Atom stacks by tag ID across rows, Clear view,
+pause/resume and subsequent Play runs in the same game/controller. Board's fresh
+camera-only stack descriptor can also identify a stack placed by the other arm.
+The upper Atom's pickup uses the selected arm's calibrated pickup plus its saved
+`stack_drop_offset` (default 31.5 mm), including normal fine tuning. A confirmed
+release onto a board marker restores normal pickup height. Command receipt failure
+or interruption while carrying leaves height uncertain; stale or conflicting stack
+evidence holds acquisition. A revealed lower Atom cannot silently turn an old
+stack into a normal-height pickup. Game/layout changes discard local records;
+camera outages preserve them and camera epoch changes require revalidation.
+
+The current operation raises travel height by the needed stack offset, including
+resume and image-intervention routes, while retaining normal clearance and Z/reach
+checks. One-Atom camera calibration remains unchanged; a two-Atom pickup extends
+the calibrated parallel-plane perspective model using the recorded sample height.
+Inconsistent perspective samples and stacks taller than two Atoms are refused.
+Fresh camera acquisition remains the XY authority, even after a confirmed release.
+Load the Board addition at a hub restart, then refresh both player pages. No saved
+calibration values are changed. `node --test tests/cue_recovery.test.js` includes
+both teams/views, stack/unstack, uncertain receipts, pause, Clear view and height
+limits using fake camera/robot feedback; physical accuracy still needs a supervised
+pickup with the real rig.
+
+Safari memory lifecycle: the shared game renderer limits image requests/decodes
+to four at a time and retains only converted runtime textures for tower upgrades,
+field tiers and archer poses. It releases source atlases, cancelled requests,
+obsolete presentations and evicted canvas buffers explicitly, including failed
+conversions and page-cache teardown. A queued state cannot restart a destroyed
+renderer. The camera decoder likewise releases each JPEG after the persistent
+canvas receives it. Gameplay, camera freshness and motion checks are unchanged.
+
+The isolated Chromium fixture measured retained decoded-image storage decreasing
+from 132,194,792 to 44,079,360 bytes, with identical map pixels. These are resource
+dimensions, not measured iOS process/GPU memory; those tests did not reproduce
+the remaining native iPhone crash described below. The renderer is read from disk with cache revalidation, so its fix loads
+on player-page refresh. Physical camera play now avoids creating the hidden
+simulation renderer entirely and releases its map/game/arm canvases. Returning
+to virtual play recreates the renderer; changing back cancels pending artwork
+and releases every owned buffer. Page teardown prevents late script completion
+from recreating the view. The 4K camera world no longer requests a permanent
+`will-change` layer. Camera coordinates and targeting geometry keep their
+original resolution. These mobile JS/CSS changes are in the frozen client bundle
+and require a normal main-hub restart and page refresh.
+
+`tests/mobile_camera_memory_browser.cjs` runs in WebKit by default (or with
+`MOBILE_TEST_BROWSER=chromium`) against the isolated fixture. It checks both
+teams, 3840×2160 camera coordinates with a 1920×1080 preview, physical/virtual
+switches, delayed script completion after teardown, and page-cache restoration.
+Physical startup downloads no simulation artwork and retains zero hidden-renderer
+buffers, versus 79,108,352 bytes in the virtual fixture. These are probed image
+and canvas dimensions, not a measurement of the iPhone process's total memory.
+
+Connected-iPhone investigation subsequently confirmed a native memory kill:
+WebContent exceeded its 1536 MB soft limit and was killed at 2,245,986 KB while
+the JavaScript heap was only 14 MB. Disabling CSS filters or changing JPEG
+decoders did not cure it. The main and inset camera canvases now request
+`{alpha:false, willReadFrequently:true}` on their first 2D-context creation.
+This avoids the accelerated camera surface path that accumulated native memory
+on the connected iPhone. Temporary application on that device kept both camera
+feeds and the original overlays responsive without further memory warnings.
+The user confirmed that connecting the real arm now stays open; the inspector
+also verified a live physical session after 383 seconds. After the normal hub
+restart, both live team bundles contain the fix and the iPhone loads it at the
+normal player URL without a temporary override.
+The aligned XY glow also now targets only the small bullseye groups: the
+previous selector unintentionally filtered both full-camera guide paths.
+The 4K/3×-pixel-ratio relock regression checks that all three guides remain
+unfiltered while the arm is connected and aligned.
+
+Checks: `node tests/safari_memory_renderer.cjs` and
+`node tests/mobile_video_smoke.cjs`; against the isolated fixture at port 8152,
+`node tests/safari_memory_browser.cjs` covers real artwork, repeated cache
+replacement/teardown and both player pages' restoration. It issues no gameplay
+or robot commands. `MOBILE_MEMORY_TEST_URL` overrides the fixture origin.
+
+Both players show an optional MCAM1 inset at the upper right, immediately left
+of the right-side control/Cue panel. Its canvas is half the camera's native
+width and height (480×320 becomes 240×160), shrinking further only to fit narrow
+screens without covering controls. Availability and freshness arrive in the
+existing game SSE projection; a separate, non-overlapping JPEG request loop
+loads the read-only video. Disabled, missing, stale, malformed or failed frames
+hide the inset without interrupting play. Fresh frames restore it automatically;
+hidden pages stop loading it. This never starts capture or connects USB controls.
+The Game Master's MCAM1 preview must already be running. The existing hosted
+asset proxy and frozen client bundle include this feature. Load changes at the
+next hub restart and player-page refresh.
+
+Verify with `python -m unittest discover -s tests -p 'test_mobile_mcam1.py'` and
+`node tests/mobile_mcam1_browser.cjs` against
+`python tests/mobile_ltz_fixture.py --port 8146` (isolated, no hardware).
+
+Turret aiming keeps persistent SVG geometry and a persistent touch handle.
+Camera timestamps/diagnostics no longer replace the cone's DOM. A valid
+registration may keep its display and an existing drag for up to one second,
+bounded by the original frame's 1.5-second freshness; repeated frames cannot
+renew it. The gesture uses the mapping captured at touch-down, so ordinary
+registration jitter cannot move the pointer's coordinate system. Camera,
+calibration, level, viewport, turret-revision or significant registration changes
+invalidate the draft. A real camera/feed outage or expired registration does too.
+
+New gestures still require current alignment. Releasing an existing drag during
+a brief detector miss waits at most one second for fresh alignment before using
+the same server-validated aim command. It never submits from cached evidence or
+replays an expired draft. This does not change marker size rejection, robot
+readiness or game ownership checks. The optional MCAM1 inset is included among
+the obstacles when placing the turret's handle.
+
+`node --test tests/mobile_turret_continuity.test.js` checks continuity and
+invalidation. `node tests/mobile_turret_stability_browser.cjs` against the
+isolated fixture at port 8146 checks both teams' native touch drags, repeated
+camera packets, brief registration loss, deferred saving and expiry without
+replay. The regular `mobile_turret_browser.cjs` also covers virtual/physical aim,
+ownership, rotated player views and four viewport sizes.
+
+The battlefield disables native text/image selection and drag, including
+Safari's whole-canvas blue/grey selection highlight. A selection intersecting
+the battlefield is cleared on selection changes, page restoration, ordinary
+clicks and Escape. Editable controls and status text outside the field remain
+selectable. MCAM1 is outside the battlefield's selected document fragment.
+`node tests/mobile_selection_browser.cjs` against the isolated fixture at port
+8146 covers both teams in virtual and physical-camera modes, stale-selection
+recovery, pointer release, and text editing without issuing arm commands.
+
 `arm-bridge.js` is served by both LTX modules and uses the existing controller's
 `TEAM`, calibration, relay and guarded command path. Camera-normalized points
 remain in the original camera frame. `Viewport` alone applies the selected
@@ -24,6 +147,16 @@ interior detour waypoints; it cannot reject an otherwise valid pickup, drop,
 or measured starting position. All executed segments still pass full motion
 validation. A camera-visibility hint makes repositioning optional, distinct
 from a rejected target or unsafe path.
+
+Targeting Go re-reads the camera owner's current Atom observation before applying
+raised-tag correction. The background acquisition list refreshes every 750 ms,
+so it cannot decide a 500 ms freshness check for an SSE-updated preview. A hidden,
+stale, moved, foreign or unverified Atom is rejected without falling back to a
+flat camera target. A verified target rejection holds the previous motion,
+clears queued gestures, and preserves the session and pump; the player must
+select a target again. Camera/feedback/transport failures and failed holds still
+follow the disconnect path. The bridge smoke test covers both teams, including
+Stop during an in-flight camera read; the limit-recovery smoke covers the phone.
 
 Regression checks:
 
@@ -58,6 +191,15 @@ page suspension keep existing suction on while stopping motion and releasing
 control. This keeps the calibration Atom attached. Reconnect to operate the
 pump; an explicit pump-off still releases suction. Blow is not retained.
 
+Before committing calibration, tap a checked number again to undo that arm
+position or raised-tag sample. Saved raised samples can be undone without placing
+the crosshair. During the raised-tag step, expand **Saved arm positions · edit**
+to undo any of the six arm captures. Removing an arm position clears its dependent
+raised sample and calculated heights until it is captured again. The calibration
+owner persists these edits and updates the projected highlights without moving
+the arm. Projected calibration numbers rotate 180° for Purple; marker geometry
+and the phone's already-upright label overlay keep their existing orientation.
+
 Physical unlock invalidates the old motion session. After relocking, press
 Connect to synchronize with the measured pose; only a new gesture moves the arm.
 The embedded controller follows the same control assignment changes as the
@@ -85,13 +227,23 @@ preserves its abort flag. The bridge is served with no-store and loads on a
 player-page refresh without restarting the hub; Connect alone does not reload
 an already-open page.
 
-An acquired physical cue position survives tag occlusion for its current
-operation. A conflicting fixed-marker detection holds the arm while the camera
-owner confirms or rejects the apparent map change. Recovery of the same map
-keeps the acquired pickup; confirmed map/layout/calibration changes require a
-new acquisition. Invalidation diagnostics identify the changed identity and,
-when supplied by the owner, the fixed marker responsible. No tag-age or robot
-feedback safety deadline is extended.
+Fixed board cues consume `photon.board.cue-targets` v2. Once camera-confirmed,
+fixed coordinates remain immutable for the game/map; late markers join without
+resetting known ones. Malformed individual geometry is diagnostic and does not
+remove saved coordinates or shrink a permitted hull. Positive valid positional
+contradictions block only the affected endpoint. Coherent movement of separated
+markers, camera identity/correction/dimension changes, and a new game reset map
+authority. Genuine banner/window relocation still requires reacquisition.
+
+An acquired Atom survives expected occlusion only for its current operation.
+New pickup/placement evidence remains live. Camera/sampler staleness, another
+occupant, real board movement, calibration, reach/path and robot feedback checks
+still hold through the existing control route and preserve suction as before.
+The controller selects one current publication: fresh SSE can recover a stale
+acquisition poll, while a newer unavailable publication revokes authority even
+if its frame timestamp did not advance. V1 retains its old region checks only
+for rollout compatibility. Delay Analysis optionally records the precise failing
+gate, source and both current/polled ages; disabling it removes extra evidence.
 
 New placements include a separate `{action:"clear_view"}` row immediately after
 them by default. Its minus button removes just that action; **+ Clear view** on
@@ -111,6 +263,12 @@ arm position, requires the pump off, and converts the selected centimetres to
 millimetres in XY toward the selected phone-view direction. The calibrated local camera direction and the phone's
 0°/180° rotation at fresh Play determine that direction. It uses the existing
 guarded planner and arrival checks; an unsafe offset stops with a row error.
+The physical adapter takes this orientation directly from the current viewport
+when dispatching Play. Legacy commands without it use the player-side default
+(Green 0°, Purple 180°); an explicit 0° remains valid for either player. The
+standalone controller uses its visible Flip setting. Rotation is disabled while
+a cue is starting, running, waiting or paused, so its arrows cannot reverse
+relative to a pending Clear view move. Cue-start diagnostics record the angle.
 Pause/Resume retains the same target instead of adding another displacement. Clearing
 the camera view does not fabricate placement confirmation. Virtual practice uses
 a horizontal offset of 10 board units per cm with the same row
@@ -118,7 +276,8 @@ sequence and rotation behavior.
 
 `node tests/mobile_clear_view_browser.cjs` runs the complete two-team virtual
 placement/clearance flow and portrait/landscape checks against the isolated
-fixture at port 8134 (`MOBILE_XYZ_TEST_URL` overrides it). Physical clearance,
+fixture started with `python tests/mobile_ltz_fixture.py --port 8134 --virtual-controls`
+(`MOBILE_XYZ_TEST_URL` overrides the test URL). Physical clearance,
 rotated calibration, reach rejection, and interrupted arrival are covered by
 `cue_recovery.test.js`; `mobile_arm_bridge_smoke.cjs` verifies the typed program.
 
@@ -144,16 +303,15 @@ the existing intervention owner: wait for an atomic pump command, lift to travel
 height, move to the clicked point, preserve suction and pause state, then require
 normal cue revalidation. This does not certify or reset a held tag map.
 
-Physical marker labels use the existing `photon.board.cue-targets` v1 feed and
-fresh `photon.board.camera-markers` v1 detections, independently of robot feedback
-and connection. The facade publishes current detections as
-`mobile_camera.tracking`, with their frame timestamp and projection `server_time`,
-even when level alignment is unavailable. A brief cue-map or alignment hold can
-therefore leave visible detections on screen. Frame age including local receipt
-age is limited to 1.5 seconds; movable sightings expire after 0.5 seconds. Fixed
-memory remains displayable only under a fresh ready cue map. No held-map poses
-are cached or promoted into movement evidence. These display records never
-populate arm state, clear a map hold or authorize movement.
+Physical fixed labels use v2 `fixed_tags`, the same run-scoped owner memory as
+Gamemaster. They survive camera occlusion, detector geometry rejection and a
+camera/feed outage without granting motion authority. A new map/game clears them;
+late confirmed IDs appear without flickering existing labels. Current Atom labels
+use their own fresh observations with at most one second of display grace; they
+are never frozen. Core/Atom physical size is not compared with socket size, and
+live alignment size rejection cannot erase a confirmed fixed label. Legacy v1
+input retains its previous conservative display behavior. No label cache supplies
+arm state, pickup, placement, or permission to move.
 The initial game state, live stream and controller discovery start before the
 artwork renderer finishes loading. When it is ready, it paints the newest state.
 Virtual and calibration labels keep their existing sources.
@@ -202,3 +360,27 @@ runs against the isolated fixture to measure intermediate display positions,
 verify constant speed with jittered 100 ms feedback in the real renderer for both
 orientations, endpoint alignment and path disappearance on arrival. Bridge/planner tests
 cover source timestamp preservation, route projection and unchanged commands.
+
+
+The shared equipment/receipt and score feedback use `shared/ltz_ui` in both
+Score/Y and phone clients. `bundle.assemble()` remains the single local/hosted/export
+assembly. The store shows eligible unlocked equipment only. Credits, signed debt,
+prices, purchases and level unlocks come from Progress; there are no purchase buttons.
+
+Both players register inside the selected event. New games start L1 Joint for both;
+Load restores the linked pair and between-match progress. Start locks that pair.
+Results display actual score, earnings, automatic or GM-forced turret purchases,
+remaining balance and control/force-field unlocks. Continue/Ready acknowledges the
+result; Game Master prepares and starts the next match. Required L3 calibration
+continues to block normal motion. Independent calibration setup remains available.
+
+Practice/game simulation, test tier overrides, grants and practice datasets are
+removed from production flows. Developer engine fixtures remain isolated from
+physical hardware and real player data. Validation: `tests/event_progression_browser.cjs`
+checks Game Master plus both landscape phones with temporary profiles and fake arms.
+
+Each level's saved result uses the shared `LTZShop.receipt`/`mount` celebration:
+count-up totals and personal/shared kills, score comparisons, animated pair history,
+and actual automatic turret/second-Atom unlocks. Animation timelines survive SSE
+renders, offscreen reveals wait for visibility and reduced motion is respected.
+`tests/level_results_browser.cjs` also checks portrait and the existing projector.

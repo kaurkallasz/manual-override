@@ -20,6 +20,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 def timed_frame(frame, gap_ms):
     """Annotate owned delivery diagnostics; preserve unknown SSE verbatim."""
+    started=time.perf_counter()
     try:
         lines=frame.decode('utf-8').splitlines()
         raw='\n'.join(line[5:].lstrip(' ') for line in lines if line.startswith('data:'))
@@ -29,9 +30,28 @@ def timed_frame(frame, gap_ms):
         if not isinstance(delivery,dict) or delivery.get('contract')!='photon.delivery' or delivery.get('version')!=1:
             return frame
         delivery.update(gateway_at=time.time(),gateway_gap_ms=gap_ms)
+        control=state.get('delay_analysis') or {}
+        if control.get('contract')=='delay.analysis' and control.get('version')==1 and control.get('recording') is True:
+            delivery['delay_gateway']={'capture_id':control.get('capture_id'), 'receive_gap_ms':gap_ms,
+                'parse_ms':(time.perf_counter()-started)*1000, '_received_mono':time.monotonic()}
         other=[line for line in lines if line and not line.startswith('data:')]
         return ('\n'.join(other+['data: '+json.dumps(value,separators=(',',':'))])+'\n\n').encode()
     except (ValueError,AttributeError,TypeError):
+        return frame
+
+
+def delay_queue_frame(frame):
+    # Only active captures pay for this additional encode; never inspect tokens.
+    if b'"delay_gateway":' not in frame:
+        return frame
+    try:
+        lines=frame.decode('utf-8').splitlines()
+        value=json.loads('\n'.join(line[5:].lstrip(' ') for line in lines if line.startswith('data:')))
+        timing=value.get('state',value)['delivery']['delay_gateway']
+        timing['queue_ms']=max(0,time.monotonic()-timing.pop('_received_mono',time.monotonic()))*1000
+        other=[line for line in lines if line and not line.startswith('data:')]
+        return ('\n'.join(other+['data: '+json.dumps(value,separators=(',',':'))])+'\n\n').encode()
+    except (ValueError,KeyError,AttributeError,TypeError):
         return frame
 
 
@@ -101,7 +121,7 @@ def latest_events(response):
                 condition.wait_for(lambda: pending or finished)
                 if not pending: break
                 value=pending.pop(0);condition.notify_all()
-            yield value
+            yield delay_queue_frame(value)
     finally:
         with condition:
             stopped=True;condition.notify_all()
@@ -171,9 +191,9 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
         side=direct['side'] if direct else request.headers.get('X-Mobile-Team','green')
         if side not in ('green','purple'):return jsonify(error='Invalid player team'),400
         client = re.fullmatch(r'client/(?:manifest|(?:[a-f0-9]{32}|latest)/(?:index\.html|mobile\.css|mobile\.js|viewport\.js|live-game\.js|network\.js|joint-rig\.js))', path)
-        if not client and path not in ('login', 'state', 'events', 'command', 'player', 'journey', 'history', 'calibrations', 'diagnostics', 'renderer.js') and not path.startswith('assets/'):
+        if not client and path not in ('login', 'state', 'events', 'command', 'player', 'saved-game', 'journey', 'history', 'calibrations', 'diagnostics', 'renderer.js') and not path.startswith('assets/'):
             return jsonify(error='Not found'), 404
-        if request.method != ('POST' if path in ('login', 'command', 'player', 'journey', 'diagnostics') else 'GET'):
+        if request.method != ('POST' if path in ('login', 'command', 'player', 'saved-game', 'journey', 'diagnostics') else 'GET'):
             return jsonify(error='Method not allowed'), 405
         if '..' in path or '\\' in path or '?' in path or '#' in path:
             return jsonify(error='Invalid path'), 400
@@ -208,7 +228,7 @@ def create_app(secret, upstream='http://127.0.0.1:8000', client_token_file=None,
             if not cookie or len(cookie) > 2048 or any(c in cookie for c in '\r\n;'):
                 return jsonify(error='Sign in to your team'), 401
             headers['Cookie'] = 'hhh_auth=' + cookie
-            data = request.get_data() if path in ('command','player','journey','diagnostics') else None
+            data = request.get_data() if path in ('command','player','saved-game','journey','diagnostics') else None
             if data is not None:
                 headers['Content-Type'] = 'application/json'
             url = upstream + '/s/gamemaster/p/mobile-ltz-api/api/' + quote(path, safe='/')+'?side='+side

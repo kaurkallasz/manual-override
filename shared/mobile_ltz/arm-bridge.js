@@ -11,6 +11,7 @@ let connectionSession=null,synchronizing=false,stopPending=Promise.resolve();
 let activeCommand=null;
 let motionPath=null,motionPathId=0;
 const limitError=message=>Object.assign(Error(message),{code:'motion_limit'});
+const targetError=message=>Object.assign(Error(message),{code:'target_unavailable'});
 const finite=p=>p&&['x','y','z'].every(k=>Number.isFinite(p[k]));
 function imagePointReady(){
  const camera=mobileGame?.mobile_camera,serverTime=mobileGame?.server_time;
@@ -24,7 +25,7 @@ function imagePointReady(){
 }
 const rawCalibration=()=>mobileGame?.journey?.phase==='calibration'&&mobileGame.mobile_calibration_connect===true&&!['tutorial','complete'].includes(mobileGame.mobile_calibration?.stage);
 const connectionReady=()=>typeof mobileConnectionReady==='function'?mobileConnectionReady():mobileRobotReady();
-const send=value=>parent.postMessage({contract:bridgeContract,version:1,...value},location.origin);
+const send=value=>parent.postMessage({contract:bridgeContract,version:1,...value,delay_sent_at:parent.mobileDelay?.active?parent.performance.now():undefined},location.origin);
 const assertOK=value=>{if(!value?.ok)throw Object.assign(Error(value?.error||'Robot command failed'),{code:value?.code});return value;};
 const feedbackFresh=value=>value?.feedback_ok===true&&Number.isFinite(value.last_feedback)&&Date.now()/1000-value.last_feedback>=0&&Date.now()/1000-value.last_feedback<1.5;
 function diagnostics(){return {
@@ -33,12 +34,24 @@ function diagnostics(){return {
  parent_age_ms:performance.now()-parentAt,robot_age_ms:robotAt?performance.now()-robotAt:null,
  feedback_age_ms:Number.isFinite(robot?.last_feedback)?Date.now()-robot.last_feedback*1000:null,
  connected:!!robot?.connected,enabled:!!robot?.enabled,feedback_ok:!!robot?.feedback_ok,motion_ready:!!robot?.motion_ready,
- motion_epoch:robot?.motion_epoch,robot_mode:robot?.robot_mode,had_session:!!token,control_mode:mode,
+ motion_epoch:robot?.motion_epoch,motion_invalidation:robot?.motion_invalidation,robot_mode:robot?.robot_mode,had_session:!!token,control_mode:mode,
  connection_ready:connectionReady(),paused:mobileGame?.paused,safety_status:mobileGame?.mobile_safety?.status,
  calibration_loading:typeof mobileCalibrationLoading!=='undefined'&&!!mobileCalibrationLoading,
  view_active:typeof mobileViewActive==='undefined'||mobileViewActive,
  game_error:typeof mobileGameError==='string'?mobileGameError:''};}
-function diagnostic(event,reason,extra={}){try{send({type:'diagnostic',event,reason,context:{...diagnostics(),...extra}});}catch{}}
+function diagnostic(event,reason,extra={}){try{
+ const evidence={};
+ if(parent.mobileDelay?.active){
+  evidence.servo_error=robot?.servo_error;
+  try{
+   const board=autoPpxCueEvidence().data;
+   if(board)evidence.board={status:board.status,error:board.error,epoch:board.epoch,frame_at:board.frame_at,
+    pending_fixed_ids:board.pending_fixed_ids,blocked_fixed_ids:board.blocked_fixed_ids,board_motion_ids:board.board_motion_ids,
+    quarantined_tags:board.quarantined_tags,verification:board.verification,...(typeof autoPpxCueGateDetails==='function'?autoPpxCueGateDetails():{})};
+  }catch{} // Missing extra evidence must not suppress the original diagnostic.
+ }
+ send({type:'diagnostic',event,reason,context:{...diagnostics(),...evidence,...extra}});
+}catch{}}
 window.mobileArmDiagnostic=diagnostic;
 function discardTargets(){revision++;target=null;jointTarget=null;motionPath=null;pauseUserMoves();autoPpxAbort=true;cancelAutoPpxClickOverride();waypoint=null;}
 let positionSettled=false;
@@ -79,16 +92,26 @@ window.mobileArmPath=plan=>{
   if(points.every(finite))motionPath={id:String(++motionPathId),points,scope:geometryKey};
  }catch{} // A drawing failure must never affect motion execution.
 };
-function pose(p){
+async function pose(p){
  if(!finite(p))throw Error('Invalid calibrated target.');
  if(p.x<0||p.x>1||p.y<0||p.y>1||p.z<ws.z[0]||p.z>ws.z[1])throw limitError('Target is outside the calibrated camera or height range.');
  let n=gameDisplayPoint(p.x,p.y),tagId=null;
  if(p.tag_id!=null){
+  // Preview labels follow SSE, while the background acquisition poll runs
+  // every 750 ms. Re-read the owner on Go instead of testing that older list
+  // against the 500 ms sighting limit. Never fall back to an untagged point.
+  const tags=await readAutoPpxCueTargets(true);
+  if(!autoPpxCueMapReady())throw Error('Wait for fresh verified camera mapping before moving to an Atom.');
   const ids=mobileGame?.movable_piece_codes?.[TEAM]||mobileGame?.mobile_arm?.tags?.map(t=>t.id)||[];
-  const tag=(latestVisibleArucoTags||[]).find(t=>Number(t.id)===p.tag_id&&ids.includes(p.tag_id)&&!t.obscured&&Date.now()-Number(t.lastSeenAt||0)<=500&&Number(t.missing||0)<=.35);
-  if(!tag)throw Error('A fresh visible Atom belonging to this player is required.');
+  const tag=tags.find(t=>Number(t.id)===p.tag_id&&ids.includes(p.tag_id)&&!t.obscured
+   &&Number.isFinite(t.lastSeenAt)&&Date.now()-t.lastSeenAt>=0&&Date.now()-t.lastSeenAt<=500
+   &&Number(t.missing||0)<=.35&&Number.isFinite(t.nx)&&Number.isFinite(t.ny));
+  if(!tag)throw targetError('Selected Atom is not currently visible or available to your team. Reveal it and select it again.');
+  const issue=autoPpxCueEndpointIssue(tag,true);
+  if(issue==='camera')throw Error('Wait for fresh verified camera mapping before moving to an Atom.');
+  if(issue)throw targetError('Selected Atom has no verified camera position. Reveal it and select it again.');
   const raw=rawPoint({u:tag.nx,v:tag.ny});
-  if(Math.hypot(raw.u-p.x,raw.v-p.y)>.025)throw Error('Preview the current Atom position again.');
+  if(Math.hypot(raw.u-p.x,raw.v-p.y)>.025)throw targetError('Selected Atom moved. Select its current position and press Go again.');
   n={u:tag.nx,v:tag.ny};tagId=p.tag_id;
  }
  const result=clickToPose(n.u,n.v,tagId);result.z=p.z;
@@ -112,7 +135,9 @@ function reach(){
   cuePoseAt=at;
  }catch(error){geometryError=TEAM[0].toUpperCase()+TEAM.slice(1)+' · '+error.message;}
 }
-function cueTargetAvailability(tag){
+function cueTargetAvailability(tag,id=tag?.id){
+ const issue=autoPpxCueEndpointIssue(tag||{id},true);
+ if(issue==='camera'||issue==='quarantined'||tag&&issue==='region')return {mapping_ready:false,mapping_error:issue==='quarantined'?`Marker #${id} is disputed. Reveal it before a new approach.`:issue==='region'?`Endpoint #${id} is outside the verified board region.`:'Waiting for fresh camera mapping.'};
  if(!cuePoseAt||!tag||!tag.fixed&&Date.now()-tag.lastSeenAt>750)return {};
  try{
   const corrected=compensateCal2Parallax(tag.nx,tag.ny,tag.id);
@@ -148,6 +173,9 @@ function changeControlMode(desired){
  return change;
 }
 function snapshot(){
+ const timing=parent.mobileDelay?.begin();try{return snapshotValue();}finally{parent.mobileDelay?.end('browser.iframe_snapshot',timing);}
+}
+function snapshotValue(){
  syncControlMode();
  if(cal2BoundaryStop&&token){
   if(cal2BoundaryStop.code!=='motion_limit')halt(cal2BoundaryStop.message);
@@ -166,12 +194,12 @@ function snapshot(){
  const displayTags=autoPpxCueDisplayTags();
  const tags=displayTags.filter(t=>(t.fixed||!t.obscured&&Date.now()-Number(t.lastSeenAt||0)<=500&&Number(t.missing||0)<=.35)&&Number.isFinite(t.nx)&&Number.isFinite(t.ny)).map(t=>{const p=rawPoint({u:t.nx,v:t.ny});return {id:Number(t.id),x:p.u,y:p.v,cached:!!t.fixed&&!t.visible};});
  const choices=autoPpxCueCandidates(displayTags);
- for(const choice of [...choices.sources,...choices.destinations])Object.assign(choice,cueTargetAvailability(displayTags.find(t=>t.id===choice.id)));
+ for(const choice of [...choices.sources,...choices.destinations])Object.assign(choice,cueTargetAvailability(displayTags.find(t=>t.id===choice.id),choice.id));
  return {status:ready?'ready':'unavailable',diagnostics:diagnostics(),error:geometryError||(!fresh?'Robot feedback unavailable.':!ready?'Calibrated arm position unavailable.':null),geometry,active_command:activeCommand,
   arm:{side:TEAM,physical:true,session:token,controller_id:token,connected:!!token&&!!robot?.connected,enabled:!!robot?.enabled,
    joints:actual,targets:jointTarget||actual,limits:['j1','j2','j3'].map(k=>jointLimits[k]),tip,position_at:fresh?robot.last_feedback:null,position_settled:ready&&positionSettled,xyz_target:target||tip,
    coordinate_space:raw?'robot-mm':'camera-normalized',xyz_limits:raw?ws:{x:[0,1],y:[0,1],z:ws.z},control_mode:mode,control_revision:revision,control_pending:!!modeChange||synchronizing,
-   pump:robot?.pump_mode==='suck'?'suction':robot?.pump_mode==='blow'?'blow':'off',message:motionError||message,
+   pump:robot?.pump_mode==='suck'?'suction':robot?.pump_mode==='blow'?'blow':'off',message:motionError||[message,mobileGame?.mobile_safety?.camera_compatibility?.warning].filter(Boolean).join(' '),
    motion_ready:!motionError&&fresh&&robot?.motion_ready===true&&!synchronizing,motion_error:motionError,
    motion_path:ready&&!raw&&token&&robot?.enabled&&motionPath?.scope===geometryKey?{id:motionPath.id,points:motionPath.points}:null,
    tags:tags.filter(t=>ids.has(t.id)),markers:tags.filter(t=>!ids.has(t.id)),
@@ -255,7 +283,7 @@ async function command(data){
  if(modeChange)await modeChange;
  if(commandEpoch!==epoch)throw Error('Control method changed.');
  if(action==='connect'){
-  if(!connectionReady())throw Error(mobileGame?.mobile_safety?.error||'Wait for your calibration turn or fresh physical game state.');
+  if(!connectionReady())throw Error(mobileGame?.mobile_motion_policy?.error||mobileGame?.mobile_safety?.error||'Wait for your calibration turn or fresh physical game state.');
   discardTargets();synchronizing=true;
   try{
    await stopPending;
@@ -274,7 +302,7 @@ async function command(data){
   return;
  }
  const holding=action==='cue_pause'||action==='cue_stop';
- if(!holding&&!mobileRobotReady())throw Error(mobileGame?.mobile_safety?.error||'Wait for fresh, unpaused physical play and calibration readiness.');
+ if(!holding&&!mobileRobotReady())throw Error(mobileGame?.mobile_motion_policy?.error||mobileGame?.mobile_safety?.error||'Wait for fresh, unpaused physical play and calibration readiness.');
  if(!token||data.session!==token)throw Error('Connect this mobile controller first.');
  if(!Number.isSafeInteger(data.sequence)||data.sequence<=sequence)throw Error('Obsolete physical command.');sequence=data.sequence;
  // Holding a cue needs the current authenticated session, not new motion readiness.
@@ -287,7 +315,7 @@ async function command(data){
  }
  if(action==='control_mode'){
   const tier={joint:1,xyz:2,targeting:3,cue:4}[data.mode];
-  if(!tier||tier>ltzTier||(mobileGame?.virtual_test_control==null&&tier!==ltzTier))throw Error('This control method is locked.');
+  if(!tier||tier>ltzTier||tier!==ltzTier)throw Error('This control method is locked.');
   mobileControlChoice=tier;await changeControlMode(data.mode);return;
  }
  if(data.control_revision!=null&&data.control_revision!==revision)throw Error('Obsolete control mode.');
@@ -332,7 +360,8 @@ async function command(data){
     p={x:robot.pose[0],y:robot.pose[1],z,r:robot.pose[3]};
     if(mode==='cue'&&autoPpxCueRunning){beginCueIntervention(p,{heightOnly:true});return;}
     assertAutoPpxPoseSafe(p,'mobile target');
-   }else p=pose(data.xyz);
+   }else p=await pose(data.xyz);
+   if(mine!==epoch)throw Error('Movement cancelled.');
    await moveToPose(p,mode==='targeting'&&!data.height_only?'video target':'mobile XYZ',false,{allowDetour:mode==='targeting'&&!data.height_only,interruptWhen:()=>mine!==epoch||!mobileRobotReady()});
    if(mine!==epoch)throw Error('Movement cancelled.');
    target=data.height_only?point(p):{...data.xyz};message='Calibrated physical target sent.';
@@ -352,11 +381,11 @@ async function command(data){
   if(data.rows!==undefined&&(!Array.isArray(data.rows)||data.rows.length!==cueRows.length||!data.rows.every((r,i)=>r&&(r.action==='clear_view'?cueRows[i].action==='clear_view'&&autoPpxClearViewRow(r).direction===cueRows[i].direction&&autoPpxClearViewRow(r).distance_cm===cueRows[i].distance_cm:!r.action&&!cueRows[i].action&&Number.isInteger(r.piece)&&Number.isInteger(r.destination)&&r.piece===cueRows[i].piece&&r.destination===cueRows[i].destination))))throw Error('Cue selection changed. Review the selected rows and press Play again.');
   if(autoPpxRunning&&(!autoPpxCueRunning||autoPpxAbort))throw Error('Previous cue is still stopping. Wait for it to finish, then press Play again.');
   if(autoPpxPaused)toggleAutoPpxPause();else if(!autoPpxRunning){
-   const viewRotation=data.view_rotation===undefined?0:data.view_rotation;
+   const viewRotation=data.view_rotation===undefined?(TEAM==='purple'?180:0):data.view_rotation;
    if(viewRotation!==0&&viewRotation!==180)throw Error('Invalid cue camera view.');
    await prepareCueRows(cueRows,data,mine);
    cueStatus='running';autoPpxCueError=null;
-   diagnostic('cue_start_requested','Starting cue: '+cueRows.map(r=>r.action==='clear_view'?`Clear view ${r.distance_cm} cm ${r.direction}`:`${r.piece} → ${r.destination}`).join(', '),{action:'cue_play'});
+   diagnostic('cue_start_requested',`Starting cue · player view ${viewRotation}°: `+cueRows.map(r=>r.action==='clear_view'?`Clear view ${r.distance_cm} cm ${r.direction}`:`${r.piece} → ${r.destination}`).join(', '),{action:'cue_play'});
    // Keep the command queue free for Stop and player intervention while the
    // cue runs, but observe failures outside the runner's own catch as well.
    const runEpoch=epoch;
@@ -377,7 +406,8 @@ async function command(data){
   // not a detected tag's coordinates. Keep recovery taps available when a
   // disputed/occluded tag holds cue acquisition, without accepting stale video.
   if(!imagePointReady())throw Error('Wait for a fresh corrected camera image before moving to a selected point.'+(mobileGame?.mobile_camera?.error?' '+mobileGame.mobile_camera.error:''));
-  const p=pose({x:data.x,y:data.y,z:autoPpxTransportZ()});
+  const p=await pose({x:data.x,y:data.y,z:autoPpxTransportZ()});
+  if(mine!==epoch)throw Error('Movement cancelled.');
   if(autoPpxCueRunning){
    beginCueIntervention(p);
   }else{
@@ -407,10 +437,10 @@ window.addEventListener('message',event=>{
   let code=error.code;
   if(code==='motion_resync_required')halt(error.message);
   if(token&&(receivedEpoch!==epoch||error.message==='Obsolete control mode.'))code='control_changed';
-  if(code==='motion_limit'&&receivedEpoch===epoch&&token){
+  if(['motion_limit','target_unavailable'].includes(code)&&receivedEpoch===epoch&&token){
    // Stop the previous follower goal too; keep the lease and pump unchanged.
    // A Stop pressed while this request is pending must never revive its token.
-   try{assertOK(await api('/api/stop',{}));await sample();jointTarget=null;target=null;}
+   try{assertOK(await api('/api/stop',{}));await sample();jointTarget=null;target=null;motionPath=null;}
    catch(stopError){code=null;error=stopError;halt('Could not hold the arm safely. Connect to resume.');}
   }
   message=code==='motion_limit'?(/Z ceiling/.test(error.message)?error.message:'Safety limit reached. Choose a target inside the red boundary.'):code==='control_changed'?'Control method changed. Previous movement cancelled.':error.message;
@@ -420,7 +450,7 @@ window.addEventListener('message',event=>{
 setInterval(()=>{if(token&&(performance.now()-parentAt>1500||!connectionReady()||!feedbackFresh(robot)))halt('Mobile control paused. Press Connect to synchronize the arm.',performance.now()-parentAt>1500?'parent_timeout':!connectionReady()?'game_not_ready':'feedback_stale');},200);
 setInterval(()=>send({type:'state',...snapshot()}),200);
 // LTX owns telemetry sampling; reuse each accepted status instead of opening a second relay link.
-const previousStatus=applyStatus;applyStatus=function(value){if(acceptStatus(value)){previousStatus(value);send({type:'state',...snapshot()});}};
+const previousStatus=applyStatus;applyStatus=function(value){const timing=parent.mobileDelay?.begin();try{if(acceptStatus(value)){previousStatus(value);send({type:'state',...snapshot()});}}finally{parent.mobileDelay?.end('browser.status_apply',timing);}};
 gid('webcamFeed').onerror=null;gid('webcamFeed').removeAttribute('src');
 send({type:'ready'});sample();
 })();

@@ -1,0 +1,165 @@
+{
+  "seconds": 30,
+  "views": 2,
+  "results": [
+    {
+      "samples": 29,
+      "minFps": 45,
+      "medianFps": 60,
+      "maxFps": 60,
+      "belowTarget": 0,
+      "intervalP95": 18.799999713897705,
+      "intervalP99": 33.30000019073486,
+      "longTasks": 0,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/photon-level/assets/upgrades/tesla-coil-l3-atlas.png?v=72a3bb48d9ffee851bd8d878f3244f3c03a4bc0c3dae04e70814866947d2dd35",
+        "last_error": null,
+        "ready": true,
+        "base": "/s/gamemaster/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 60,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 16.69999999999709,
+          "quality": "dense",
+          "fieldMs": 0.4666666587193807,
+          "towerMs": 0.3583333651224772,
+          "enemyMs": 0.675000007947286,
+          "combatMs": 0.1699999729792277,
+          "cacheBytes": 708240
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.5999999046325684,
+          "frameMs": 16.69999999999709,
+          "quality": "dense",
+          "fieldMs": 0.49016391253862224,
+          "towerMs": 0.3540984216283579,
+          "enemyMs": 0.6786884870685514,
+          "combatMs": 0.16393442622950818,
+          "cacheBytes": 708240
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.5999999046325684,
+          "frameMs": 16.599999999998545,
+          "quality": "dense",
+          "fieldMs": 0.4833333174387614,
+          "towerMs": 0.3550000270207723,
+          "enemyMs": 0.6766666332880656,
+          "combatMs": 0.16499996185302734,
+          "cacheBytes": 708240
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.6999998092651367,
+          "frameMs": 16.599999999998545,
+          "quality": "dense",
+          "fieldMs": 0.4950819797203189,
+          "towerMs": 0.34262294456607006,
+          "enemyMs": 0.6770491678206647,
+          "combatMs": 0.17213113190697843,
+          "cacheBytes": 708240
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.6999998092651367,
+          "frameMs": 16.700000000004366,
+          "quality": "dense",
+          "fieldMs": 0.5081967447624832,
+          "towerMs": 0.35573768615722656,
+          "enemyMs": 0.6967213349264176,
+          "combatMs": 0.18032782976744605,
+          "cacheBytes": 708240
+        }
+      ],
+      "heapBytes": 17146793
+    },
+    {
+      "samples": 29,
+      "minFps": 46,
+      "medianFps": 60,
+      "maxFps": 61,
+      "belowTarget": 0,
+      "intervalP95": 19.90000009536743,
+      "intervalP99": 33.30000019073486,
+      "longTasks": 0,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/photon-level/assets/upgrades/tesla-coil-l3-atlas.png?v=72a3bb48d9ffee851bd8d878f3244f3c03a4bc0c3dae04e70814866947d2dd35",
+        "last_error": null,
+        "ready": true,
+        "base": "/s/gamemaster/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 60,
+          "drawMs": 1.799999713897705,
+          "frameMs": 16.599999999998545,
+          "quality": "dense",
+          "fieldMs": 0.4918032865055272,
+          "towerMs": 0.33442620762058944,
+          "enemyMs": 0.6819672428193639,
+          "combatMs": 0.157377016348917,
+          "cacheBytes": 615312
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.8000001907348633,
+          "frameMs": 16.700000000000728,
+          "quality": "dense",
+          "fieldMs": 0.49833335876464846,
+          "towerMs": 0.34833331902821857,
+          "enemyMs": 0.675,
+          "combatMs": 0.16833330790201823,
+          "cacheBytes": 615312
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.700000286102295,
+          "frameMs": 16.700000000000728,
+          "quality": "dense",
+          "fieldMs": 0.47704919439847354,
+          "towerMs": 0.3524590242104452,
+          "enemyMs": 0.675409848572778,
+          "combatMs": 0.15901637468181673,
+          "cacheBytes": 615312
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.5999999046325684,
+          "frameMs": 16.799999999999272,
+          "quality": "dense",
+          "fieldMs": 0.48524590007594376,
+          "towerMs": 0.32622954102813223,
+          "enemyMs": 0.6786885027025567,
+          "combatMs": 0.16721311162729732,
+          "cacheBytes": 615312
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.6999998092651367,
+          "frameMs": 16.599999999998545,
+          "quality": "dense",
+          "fieldMs": 0.4800000031789144,
+          "towerMs": 0.33833334445953367,
+          "enemyMs": 0.696666669845581,
+          "combatMs": 0.16166666348775227,
+          "cacheBytes": 615312
+        }
+      ],
+      "heapBytes": 26965005
+    }
+  ],
+  "errors": []
+}

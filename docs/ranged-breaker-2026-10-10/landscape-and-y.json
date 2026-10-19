@@ -1,0 +1,102 @@
+[
+  {
+    "name": "y-game",
+    "assets": {
+      "requested": 89,
+      "loaded": 89,
+      "failed": 0,
+      "pending": 0,
+      "last_url": "/s/gamemaster/p/photon-level/assets/game-art/z-pixel-v2/normalized-seam-safe/roads/core-access-plaza.png?v=7f829805a6d9ecb8058c516060bff96b4c8c483cece837fcdea097b0ecb9f54f",
+      "last_error": null,
+      "ready": true,
+      "base": "/s/gamemaster/p/photon-level/assets",
+      "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+    },
+    "combat": {
+      "contract": "photon.enemy-combat",
+      "version": 1,
+      "breaker_mode": "ranged"
+    },
+    "archers": 36,
+    "peakArrows": 34,
+    "frameP95": 16.800000190734863,
+    "imageLoaded": true,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "name": "y-screen",
+    "assets": {
+      "requested": 89,
+      "loaded": 89,
+      "failed": 0,
+      "pending": 0,
+      "last_url": "/s/gamemaster/p/photon-level/assets/upgrades/tesla-coil-l4-atlas.png?v=f2bf1457dbd58ba0ec44c1338c9f1af6e45e2b5ce19003f47064a791e53fafd6",
+      "last_error": null,
+      "ready": true,
+      "base": "/s/gamemaster/p/photon-level/assets",
+      "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+    },
+    "combat": {
+      "contract": "photon.enemy-combat",
+      "version": 1,
+      "breaker_mode": "ranged"
+    },
+    "archers": 36,
+    "peakArrows": 34,
+    "frameP95": 17.300000190734863,
+    "imageLoaded": true,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "name": "phone",
+    "assets": {
+      "requested": 89,
+      "loaded": 89,
+      "failed": 0,
+      "pending": 0,
+      "last_url": "/s/gamemaster/p/mobile-ltz-api/api/assets/game-art/z-pixel-v2/normalized-seam-safe/roads/core-access-plaza.png?v=7f829805a6d9ecb8058c516060bff96b4c8c483cece837fcdea097b0ecb9f54f",
+      "last_error": null,
+      "ready": true,
+      "base": "/p/photon-level/assets",
+      "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+    },
+    "combat": {
+      "contract": "photon.enemy-combat",
+      "version": 1,
+      "breaker_mode": "ranged"
+    },
+    "archers": 36,
+    "peakArrows": 36,
+    "frameP95": 26.40000009536743,
+    "imageLoaded": true,
+    "overflow": false,
+    "errors": []
+  },
+  {
+    "name": "tablet",
+    "assets": {
+      "requested": 89,
+      "loaded": 89,
+      "failed": 0,
+      "pending": 0,
+      "last_url": "/s/gamemaster/p/mobile-ltz-api/api/assets/upgrades/tesla-coil-l3-atlas.png?v=72a3bb48d9ffee851bd8d878f3244f3c03a4bc0c3dae04e70814866947d2dd35&side=purple",
+      "last_error": null,
+      "ready": true,
+      "base": "/p/photon-level/assets",
+      "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+    },
+    "combat": {
+      "contract": "photon.enemy-combat",
+      "version": 1,
+      "breaker_mode": "ranged"
+    },
+    "archers": 36,
+    "peakArrows": 36,
+    "frameP95": 32.09999990463257,
+    "imageLoaded": true,
+    "overflow": false,
+    "errors": []
+  }
+]

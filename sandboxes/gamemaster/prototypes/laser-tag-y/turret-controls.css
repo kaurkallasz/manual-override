@@ -1,0 +1,15 @@
+#turretOverlay{position:absolute;inset:0;z-index:3;pointer-events:none}
+.turret-overlay-target{position:absolute;inset:0;pointer-events:none}
+.turret-overlay-atoms{position:absolute;display:grid;grid-template-columns:repeat(2,32px);gap:3px}
+#turretOverlay button{pointer-events:auto;min-height:26px;padding:3px 1px;border:1px solid #8697ae;border-radius:4px;background:#07101eea;font:800 12px/1.2 ui-monospace,monospace;box-shadow:0 1px 4px #000a}
+#turretOverlay .turret-overlay-atom.green{--atom-color:#35d07f;color:var(--atom-color)}
+#turretOverlay .turret-overlay-atom.purple{--atom-color:#c084fc;color:var(--atom-color)}
+#turretOverlay .turret-overlay-atom[aria-pressed=true]{background:var(--atom-color,#c4d8ed);border-color:var(--atom-color,#c4d8ed);color:#07100c}
+#turretOverlay button:disabled{opacity:.65;cursor:default}
+#turretOverlay .turret-overlay-atom[aria-pressed=true]:disabled{opacity:1}
+#turretOverlay .turret-overlay-destroy{position:absolute;width:28px;height:28px;background:#d4dce6;color:#000;border-color:#d4dce6;font-size:18px}
+#turretOverlay .turret-overlay-destroy[aria-pressed=true]{background:#111b28;color:#fff;border-color:#fff;opacity:1}
+#turretOverlay button:focus-visible{outline:2px solid #36dfff;outline-offset:2px}
+#turretControlStatus{position:absolute;bottom:60px;right:12px;max-width:70%;z-index:4;padding:8px 12px;border:1px solid #8a9aaf;border-radius:6px;background:#07101ef2;color:#fff;font-size:13px;pointer-events:none}
+/* Preserve readable, separate targets on narrow operator screens; pan the field. */
+@media(max-width:960px){.stage-shell:has(#turretOverlay:not([hidden])){overflow-x:auto}.stage:has(#turretOverlay:not([hidden])){min-width:960px;min-height:0}}

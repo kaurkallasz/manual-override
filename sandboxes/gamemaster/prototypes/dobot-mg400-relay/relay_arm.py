@@ -29,6 +29,7 @@ ITS OWN cable (same trick as dualdobottest). Only `local_ip` (the fixed address
 of that side's USB dongle) is needed: the interface NAME is auto-detected as
 whichever interface owns that IP. Pass `iface` to override the detection.
 """
+from shared import delay_trace as trace
 
 import socket
 import struct
@@ -191,6 +192,7 @@ class DobotMG400:
         self._servo_lock = threading.Lock()
         self._lifecycle_lock = threading.RLock()
         self._motion_epoch = 0
+        self._motion_invalidation = None
         self._feedback_safe = False
         self._control_mode = None  # "joint" | "cartesian" | None
         self._target = None        # desired [j1..j4] OR [x,y,z,r]
@@ -235,15 +237,21 @@ class DobotMG400:
             "stall_error": 0.0,     # follower-vs-actual gap (deg or mm) behind `stalled`
         }
 
+    @trace.traced('driver.get_state')
     def get_state(self):
-        with self._state_lock:
-            state = dict(self._state)
-        fresh = self.feedback_fresh(state)
-        with self._servo_lock:
+        # Feedback and its motion generation must be one atomic observation.
+        # A reader delayed between copying state and taking the servo lock used
+        # to invalidate a newer, healthy packet using its old copy's timestamp.
+        # Always take these locks in servo -> state order, as _apply_feedback does.
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
+            with trace.locked(self._state_lock, 'driver.state_lock'):
+                state = dict(self._state)
+                fresh = self.feedback_fresh(state)
             if not fresh and self._feedback_safe:
-                self._invalidate_motion_locked()
+                self._invalidate_motion_locked('feedback_stale')
                 self._feedback_safe = False
             state['motion_epoch'] = self._motion_epoch
+            state['motion_invalidation'] = self._motion_invalidation
         state['feedback_ok'] = fresh
         state['motion_ready'] = fresh and state.get('robot_mode') in SERVO_MODES
         return state
@@ -259,15 +267,16 @@ class DobotMG400:
                         and all(type(v) in (int, float) and math.isfinite(v) for v in state[key])
                         for key in ('pose', 'joints')))
 
-    def _invalidate_motion_locked(self):
+    def _invalidate_motion_locked(self, reason='reset'):
         self._motion_epoch += 1
+        self._motion_invalidation = reason
         self._servo_running = False
         self._target = self._setpoint = None
         self._vel = [0.0] * 4
 
     def reset_motion(self):
         """Invalidate commands before a new connection/Enable; never move the arm."""
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._invalidate_motion_locked()
         self.stop_servo()
         return self.get_state()['motion_epoch']
@@ -297,16 +306,16 @@ class DobotMG400:
         """The commanded target the follower is slewing toward, or None before the
         servo loop is initialised. It is joint angles in joint mode and a tool pose
         in cartesian mode (see control_mode)."""
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             return list(self._target) if self._target is not None else None
 
     def control_mode(self):
         """Which follower is running: "joint", "cartesian", or None."""
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             return self._control_mode
 
     def is_connected(self):
-        with self._state_lock:
+        with trace.locked(self._state_lock, 'driver.state_lock'):
             return self._state["connected"]
 
     # -- connection -----------------------------------------------------------
@@ -345,7 +354,7 @@ class DobotMG400:
             self.close()
             raise DobotError(-1, str(e), "connect")
         self._running = True
-        with self._state_lock:
+        with trace.locked(self._state_lock, 'driver.state_lock'):
             self._state["connected"] = True
         self._feed_thread = threading.Thread(
             target=self._feed_loop, name="dobot-feedback", daemon=True
@@ -387,7 +396,7 @@ class DobotMG400:
         if self._alarm_thread and self._alarm_thread.is_alive():
             self._alarm_thread.join(timeout=1.1)
         self._alarm_thread = None
-        with self._state_lock:
+        with trace.locked(self._state_lock, 'driver.state_lock'):
             self._state = self._blank_state()
 
     # -- low-level command I/O ------------------------------------------------
@@ -407,22 +416,23 @@ class DobotMG400:
         except (ValueError, IndexError):
             return -1
 
+    @trace.traced('driver.command')
     def _command(self, sock, lock, command, raise_on_error=True, motion_epoch=None):
         if sock is None:
             raise DobotError(-1, "not connected", command)
-        with lock:
+        with trace.locked(lock, 'driver.socket_lock'):
             try:
                 if motion_epoch is None:
                     sock.sendall(command.encode("utf-8"))
                 else:
                     # Check at the actual send boundary too: an unlock may have
                     # arrived since this servo frame was calculated.
-                    with self._servo_lock:
+                    with trace.locked(self._servo_lock, 'driver.servo_lock'):
                         self._check_motion_epoch_locked(motion_epoch)
                         if not self._servo_running:
                             raise DobotError(-1, 'Servo movement cancelled', command)
                         sock.sendall(command.encode("utf-8"))
-                resp = self._recv_response(sock)
+                resp = trace.call('driver.socket_reply', self._recv_response, sock)
             except (OSError, socket.timeout) as e:
                 raise DobotError(-1, str(e), command)
         errid = self._parse_errid(resp)
@@ -553,24 +563,24 @@ class DobotMG400:
 
     # -- velocity / accel caps (separate joint vs cartesian setters) ----------
     def set_max_velocity_joint(self, deg_per_sec):
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._max_vel = max(1.0, float(deg_per_sec))
 
     def set_max_accel_joint(self, deg_per_sec2):
         """Joint follower acceleration cap. Lower = gentler ramp up/down and a
         longer braking distance, which removes the overshoot a hard velocity step
         causes; higher = snappier but can overshoot on stop."""
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._max_acc = max(1.0, float(deg_per_sec2))
 
     def set_max_velocity_cartesian(self, lin_mm_s, ang_deg_s):
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._max_lin = max(1.0, float(lin_mm_s))
             self._max_ang = max(1.0, float(ang_deg_s))
 
     def set_max_accel_cartesian(self, lin_mm_s2, ang_deg_s2):
         """Cartesian follower acceleration caps (lin + ang)."""
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._max_lin_acc = max(1.0, float(lin_mm_s2))
             self._max_ang_acc = max(1.0, float(ang_deg_s2))
 
@@ -578,7 +588,7 @@ class DobotMG400:
     def set_target_joints(self, j1, j2, j3, j4=None, *, expected_epoch=None):
         """Set the desired joint angles the joint follower slews toward. J4 is held
         at its current angle unless given."""
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._check_motion_epoch_locked(expected_epoch)
             if self._target is None or not self._servo_running:
                 raise DobotError(-1, 'Follower is not synchronized. Reconnect.', 'motion')
@@ -592,7 +602,7 @@ class DobotMG400:
     def set_target_pose(self, x, y, z, r=None, *, expected_epoch=None):
         """Set the desired tool pose the cartesian follower slews toward. R is held
         at its current value unless given."""
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._check_motion_epoch_locked(expected_epoch)
             if self._target is None or not self._servo_running:
                 raise DobotError(-1, 'Follower is not synchronized. Reconnect.', 'motion')
@@ -610,7 +620,7 @@ class DobotMG400:
         if not state['motion_ready']:
             self.reset_motion()
             return
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             if self._setpoint is None:
                 return
             tgt = list(self._setpoint)
@@ -650,7 +660,7 @@ class DobotMG400:
         self.stop_servo()
         st = self.wait_for_motion_feedback()
         seed = [float(v) for v in (st["pose"] if mode == "cartesian" else st["joints"])]
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._check_motion_epoch_locked(expected_epoch)
             self._control_mode = mode
             self._setpoint = list(seed)
@@ -658,7 +668,7 @@ class DobotMG400:
             self._vel = [0.0, 0.0, 0.0, 0.0]
             self._servo_running = True
         self._last_motion_ts = time.time()
-        with self._state_lock:
+        with trace.locked(self._state_lock, 'driver.state_lock'):
             self._state["servo_active"] = True
             self._state["servo_error"] = None
             self._state["control_mode"] = mode
@@ -679,11 +689,11 @@ class DobotMG400:
             if thread.is_alive():
                 raise DobotError(-1, 'Previous servo command is still stopping. Reconnect after it stops.', 'stop_servo')
         self._servo_thread = None
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             self._control_mode = None
             self._target = self._setpoint = None
             self._vel = [0.0] * 4
-        with self._state_lock:
+        with trace.locked(self._state_lock, 'driver.state_lock'):
             self._state["servo_active"] = False
             self._state["control_mode"] = None
             self._state["stalled"] = False
@@ -693,18 +703,18 @@ class DobotMG400:
         try:
             self._follow_servo()
         except (DobotError, OSError) as exc:
-            with self._servo_lock:
-                self._invalidate_motion_locked()
-            with self._state_lock:
+            with trace.locked(self._servo_lock, 'driver.servo_lock'):
+                self._invalidate_motion_locked('servo_error')
+            with trace.locked(self._state_lock, 'driver.state_lock'):
                 self._state['servo_error'] = str(exc)
         finally:
             self._servo_running = False
-            with self._state_lock:
+            with trace.locked(self._state_lock, 'driver.state_lock'):
                 self._state['servo_active'] = False
 
     def _follow_servo(self):
         # ServoJ minimum cycle is ~80 ms (12.5 Hz); ServoP is ~30 ms (≤33 Hz).
-        with self._servo_lock:
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
             cartesian = self._control_mode == "cartesian"
             motion_epoch = self._motion_epoch
         interval = 0.04 if cartesian else 0.08
@@ -713,7 +723,7 @@ class DobotMG400:
         consecutive_errors = 0
         next_t = time.monotonic()
         while self._servo_running:
-            with self._servo_lock:
+            with trace.locked(self._servo_lock, 'driver.servo_lock'):
                 target = list(self._target) if self._target is not None else None
                 setpoint = list(self._setpoint) if self._setpoint is not None else None
                 vel = list(self._vel)
@@ -729,10 +739,10 @@ class DobotMG400:
             tolerance = [limit + abs(v)*interval*2 for limit,v in zip(tolerance,vel)]
             if (not st['motion_ready'] or st['motion_epoch'] != motion_epoch
                     or any(abs(a-s) > limit for a,s,limit in zip(actual,setpoint,tolerance))):
-                with self._servo_lock:
+                with trace.locked(self._servo_lock, 'driver.servo_lock'):
                     if self._motion_epoch == motion_epoch:
-                        self._invalidate_motion_locked()
-                with self._state_lock:
+                        self._invalidate_motion_locked('feedback_or_position_changed')
+                with trace.locked(self._state_lock, 'driver.state_lock'):
                     self._state['servo_error'] = 'Arm feedback or position changed. Reconnect to synchronize controls.'
                 break
             dt = interval
@@ -782,7 +792,7 @@ class DobotMG400:
                     vel[i] = 0.0
                 else:
                     setpoint[i] += step
-            with self._servo_lock:
+            with trace.locked(self._servo_lock, 'driver.servo_lock'):
                 if not self._servo_running or self._motion_epoch != motion_epoch:
                     break
                 self._setpoint = list(setpoint)
@@ -794,9 +804,9 @@ class DobotMG400:
             if errid != 0:
                 consecutive_errors += 1
                 if consecutive_errors >= 3:
-                    with self._servo_lock:
-                        self._invalidate_motion_locked()
-                    with self._state_lock:
+                    with trace.locked(self._servo_lock, 'driver.servo_lock'):
+                        self._invalidate_motion_locked('servo_rejected')
+                    with trace.locked(self._state_lock, 'driver.state_lock'):
                         self._state["servo_error"] = f"{cmd} ErrorID {errid}: {resp}"
                     break
             else:
@@ -808,7 +818,7 @@ class DobotMG400:
             else:
                 next_t = time.monotonic()
         self._servo_running = False
-        with self._state_lock:
+        with trace.locked(self._state_lock, 'driver.state_lock'):
             self._state["servo_active"] = False
 
     # -- response parsing helpers ---------------------------------------------
@@ -858,7 +868,7 @@ class DobotMG400:
         read-only and never clears, enables, or moves the arm.
         """
         while self._running:
-            with self._state_lock:
+            with trace.locked(self._state_lock, 'driver.state_lock'):
                 faulted = self._state.get("error", False)
                 connected = self._state.get("connected", False)
                 if not faulted:
@@ -874,7 +884,7 @@ class DobotMG400:
                 time.sleep(1.0)
                 continue
             fault_kind, fault_label = classify_alarm_ids(alarm_ids)
-            with self._state_lock:
+            with trace.locked(self._state_lock, 'driver.state_lock'):
                 if self._state.get("error", False):
                     self._state["alarm_ids"] = alarm_ids
                     self._state["fault_kind"] = fault_kind
@@ -901,56 +911,62 @@ class DobotMG400:
                     continue
                 buf = buf[FEEDBACK_SIZE:]
                 self._apply_feedback(parsed)
-        with self._state_lock:
-            self._state["connected"] = False
-            self._state["feedback_ok"] = False
-            self._state["mode_name"] = "DISCONNECTED"
-        with self._servo_lock:
-            self._invalidate_motion_locked()
-            self._feedback_safe = False
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
+            with trace.locked(self._state_lock, 'driver.state_lock'):
+                self._state["connected"] = False
+                self._state["feedback_ok"] = False
+                self._state["mode_name"] = "DISCONNECTED"
+                self._invalidate_motion_locked('feedback_disconnected')
+                self._feedback_safe = False
 
+    @trace.traced('driver.apply_feedback')
     def _apply_feedback(self, parsed):
         mode = parsed["robot_mode"]
-        now = time.time()
-        with self._state_lock:
-            previous_stamp = self._state['last_feedback']
         # Latch even a brief unlock at feedback rate. The slower servo/browser
-        # loops must never miss it and resume a pre-unlock command.
-        with self._servo_lock:
-            if self._feedback_safe and (mode not in SERVO_MODES or now-previous_stamp > FEEDBACK_MAX_AGE):
-                self._invalidate_motion_locked()
-            self._feedback_safe = mode in SERVO_MODES
-        # Snapshot the follower's intent first (avoid nesting the servo lock inside
-        # the state lock — the servo loop never holds both at once).
-        with self._servo_lock:
-            running = self._servo_running
-            ctrl = self._control_mode
-            setpoint = list(self._setpoint) if self._setpoint is not None else None
-        with self._state_lock:
-            prev_joints = self._state["joints"]
-            self._state["robot_mode"] = mode
-            self._state["mode_name"] = ROBOT_MODES.get(mode, f"UNKNOWN({mode})")
-            self._state["enabled"] = mode in ENABLED_MODES
-            self._state["error"] = mode == 9
-            self._state["joints"] = parsed["joints"]
-            self._state["pose"] = parsed["pose"]
-            self._state["digital_in"] = parsed["digital_in"]
-            self._state["digital_out"] = parsed["digital_out"]
-            self._state["last_feedback"] = now
-            self._state["feedback_ok"] = True
-            # --- suspected-crash detection (see notes near the constants) ---
-            if prev_joints and max(abs(a - b) for a, b in zip(parsed["joints"], prev_joints)) > STALL_MOVE_EPS:
-                self._last_motion_ts = now          # the arm physically moved
-            err = 0.0
-            stalled = False
-            if running and ctrl and setpoint is not None:
-                if ctrl == "cartesian":
-                    err = max(abs(setpoint[i] - parsed["pose"][i]) for i in range(3))
-                    thr = STALL_ERR_CART
-                else:
-                    err = max(abs(s - a) for s, a in zip(setpoint, parsed["joints"]))
-                    thr = STALL_ERR_JOINT
-                # Follower is commanding motion the arm isn't executing for too long.
-                stalled = (err > thr) and (now - self._last_motion_ts > STALL_GRACE_SECS)
-            self._state["stalled"] = stalled
-            self._state["stall_error"] = round(err, 2)
+        # loops must never miss it and resume a pre-unlock command. Publish the
+        # packet and its epoch together; readers cannot see the new safety flag
+        # with the previous packet's timestamp.
+        with trace.locked(self._servo_lock, 'driver.servo_lock'):
+            with trace.locked(self._state_lock, 'driver.state_lock'):
+                self._publish_feedback_locked(parsed, mode, time.time())
+
+    def _publish_feedback_locked(self, parsed, mode, now):
+        previous_stamp = self._state['last_feedback']
+        if previous_stamp:
+            trace.measure('driver.feedback_gap', max(0, now-previous_stamp)*1000, feedback_at=now, motion_epoch=self._state.get('motion_epoch'))
+        if self._feedback_safe:
+            if mode not in SERVO_MODES:
+                self._invalidate_motion_locked('robot_mode_' + str(mode))
+            elif now - previous_stamp > FEEDBACK_MAX_AGE:
+                self._invalidate_motion_locked('feedback_gap')
+        self._feedback_safe = mode in SERVO_MODES
+        running = self._servo_running
+        ctrl = self._control_mode
+        setpoint = self._setpoint
+        prev_joints = self._state["joints"]
+        self._state["robot_mode"] = mode
+        self._state["mode_name"] = ROBOT_MODES.get(mode, f"UNKNOWN({mode})")
+        self._state["enabled"] = mode in ENABLED_MODES
+        self._state["error"] = mode == 9
+        self._state["joints"] = parsed["joints"]
+        self._state["pose"] = parsed["pose"]
+        self._state["digital_in"] = parsed["digital_in"]
+        self._state["digital_out"] = parsed["digital_out"]
+        self._state["last_feedback"] = now
+        self._state["feedback_ok"] = True
+        # --- suspected-crash detection (see notes near the constants) ---
+        if prev_joints and max(abs(a - b) for a, b in zip(parsed["joints"], prev_joints)) > STALL_MOVE_EPS:
+            self._last_motion_ts = now          # the arm physically moved
+        err = 0.0
+        stalled = False
+        if running and ctrl and setpoint is not None:
+            if ctrl == "cartesian":
+                err = max(abs(setpoint[i] - parsed["pose"][i]) for i in range(3))
+                thr = STALL_ERR_CART
+            else:
+                err = max(abs(s - a) for s, a in zip(setpoint, parsed["joints"]))
+                thr = STALL_ERR_JOINT
+            # Follower is commanding motion the arm isn't executing for too long.
+            stalled = (err > thr) and (now - self._last_motion_ts > STALL_GRACE_SECS)
+        self._state["stalled"] = stalled
+        self._state["stall_error"] = round(err, 2)

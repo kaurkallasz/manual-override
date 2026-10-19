@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import tempfile
 import shutil
+import sys
 import time
 import uuid
 from types import SimpleNamespace
@@ -12,18 +13,35 @@ from flask import Flask, request, jsonify, abort, Response
 from werkzeug.serving import make_server
 from test_photon_framework import load, FakeContext, ROOT
 
-def create_app(folder):
+def create_app(folder, *, virtual_controls=False):
     level=load('photon-level');game=load('photon-game');renderer=load('laser-tag-y');board=load('photon-board')
     progress=load('photon-progress');progress.DATA_DIR=Path(folder)/'progress';progress.hub_init(None)
+    event_id=progress.event_command({'action':'create','name':'Fixture event','operation_id':'fixture-event'})['result']['event_id']
     for side in ('green','purple'):
-        player=progress.player_command(side,{'action':'create','name':side+' pilot','operation_id':uuid.uuid4().hex})['result']['player_id']
-        progress.player_command(side,{'action':'select','player_id':player})
+        player=progress.player_command(side,{'action':'create','name':side+' pilot','operation_id':uuid.uuid4().hex,'event_id':event_id})['result']['player_id']
+        progress.player_command(side,{'action':'select','player_id':player,'event_id':event_id})
     game._settings=game.SettingsStore(Path(folder)/'settings.json');game.LOG_PATH=str(Path(folder)/'runs.jsonl')
     modules={'photon-level':level,'laser-tag-y':renderer,'photon-progress':progress}
     game._hub_ctx=FakeContext(modules)
     game._journey=game.Journey(Path(folder)/'journey.json',game._module,game._live.bump)
     game._progress=game.ProgressLink(game._module,lambda:game._engine,game._live.bump,Path(folder)/'pending.json',game._result_committed,game._journey_tick)
     game._sync_level();game._engine.set_virtual_play(True);game._engine.set_virtual_test_loadout(None,1)
+    if virtual_controls:
+        # Explicit test-only adapter: production no longer exposes virtual arm
+        # commands. Exercise the retained simulation without restoring that API.
+        def simulated_command(data):
+            with game._engine.lock:
+                return game._engine.mobile_arms[data['side']].command(data, game._engine)
+        game.mobile_command = simulated_command
+        profile_snapshot = progress.public_snapshot
+        def simulated_profile(side):
+            value = profile_snapshot(side)
+            if value.get('player'):
+                value['player'] = {**value['player'], 'current_control_tier':game._engine.virtual_test_control or 1}
+            return value
+        progress.public_snapshot = simulated_profile
+        journey_snapshot = game.journey_snapshot
+        game.journey_snapshot = lambda: {**journey_snapshot(), 'phase':'playing'}
     # This is an explicit isolated practice run, not the user's active game.
     # Setup stays idle so touch checks cannot be interrupted by a lost core.
     path=ROOT/'sandboxes/green/prototypes/mobile-ltz/prototype.py'
@@ -47,11 +65,14 @@ def create_app(folder):
                              for dx,dy in ((-.5,-.5),(.5,-.5),(.5,.5),(-.5,.5))]
         return dict(contract='photon.board.runtime',version=1,status='ready' if not camera_state['stale'] else 'unavailable',error='camera stale' if camera_state['stale'] else None,source='camera',corrected=True,revision=1,observed_at=time.time(),
             placement=dict(contract='photon.board.placement',version=1,status='ready',sampled_at=time.time(),source_epoch='fixture',revision=1,relations=[]),
-            frame_at=time.time()-(10 if camera_state['stale'] else camera_state.get('delay',0)),width=1280,height=720,
+            frame_at=time.time()-(10 if camera_state['stale'] else camera_state.get('delay',0)),width=camera_state.get('width',1280),height=camera_state.get('height',720),
             tags=[] if camera_state.get('qualifying') else targets,
             detections=targets,visible_ids=[t['id'] for t in targets])
     board.runtime_observation=observation
-    def camera_frame():
+    # This fixture supplies empty physical relationships, with explicit scope
+    # acknowledgement matching the production Board/Game contract.
+    board.game_observation=lambda *,scope,fixed_ids:dict(observation(),layout_scope=scope,fixed_ids=sorted(fixed_ids))
+    def camera_frame(**options):
         import cv2
         import numpy as np
         frame=np.full((720,1280,3),(30,46,35),dtype=np.uint8)
@@ -63,7 +84,8 @@ def create_app(folder):
             cv2.rectangle(frame,(x-half,y-half),(x+half,y+half),(230,240,230),-1)
             cv2.putText(frame,str(tag['id']),(x-14,y+5),cv2.FONT_HERSHEY_SIMPLEX,.5,(0,0,0),1)
         return dict(contract='hhh.camera-frame',version=1,status='ready',coordinate_space='corrected-camera-normalized',
-                    frame_at=time.time(),width=1280,height=720,jpeg=cv2.imencode('.jpg',frame)[1].tobytes())
+                    frame_at=time.time(),width=camera_state.get('width',1280),height=camera_state.get('height',720),
+                    jpeg=cv2.imencode('.jpg',cv2.resize(frame,(1920,1080)) if camera_state.get('width',1280)>1920 else frame)[1].tobytes())
     def camera_descriptor():
         return dict(contract='hhh.camera-preview',version=1,status='ready' if camera_state['enabled'] else 'unavailable',coordinate_space='corrected-camera-normalized')
     board._hub_ctx=FakeContext({'camera-calibration':SimpleNamespace(preview_frame=lambda:camera_frame() if camera_state['enabled'] and not camera_state['stale'] else dict(contract='hhh.camera-frame',version=1,status='unavailable',error='Camera unavailable'))})
@@ -90,6 +112,9 @@ def create_app(folder):
         data=request.get_json(silent=True) or {}
         action=data.get('action')
         if action not in ('start','pause','resume','reset','virtual_test_loadout','place','loadout'):abort(400)
+        if virtual_controls and action == 'virtual_test_loadout':
+            game._engine.set_virtual_test_loadout(data.get('levels'), data.get('control'))
+            return jsonify(game.game_snapshot())
         return jsonify(game.apply_command({**data,'action':action,'virtual_play':True,'reward_enabled':False}))
     # Actual target/layout owners with temporary files and measured fake inputs.
     field=load('playfield-areas');field_dir=Path(folder)/'playfield';field_dir.mkdir()
@@ -149,14 +174,34 @@ def create_app(folder):
         measured_marker[0]=marker
         return real_measurement(side,marker)
     owner._fresh_calibration_measurement=calibration_measurement
-    modules.update({'photon-board':board,'auto-pickup-game':owner})
+    modules.update({'photon-board':board,'auto-pickup-game':owner,'dobot-mg400-relay':owner._hub_ctx.modules['dobot-mg400-relay']})
     game._progress.start()
     facade=load('mobile-ltz-api');facade.hub_init(FakeContext({'photon-game':game,'photon-progress':progress,'photon-level':level,'laser-tag-y':renderer, 'photon-board':board,
         'camera-calibration':SimpleNamespace(preview_snapshot=camera_descriptor,preview_frame=camera_frame),'auto-pickup-game':owner}))
+    mcam1_state={'width':480,'height':320,'stale':False}
+    mcam1_images={}
+    def mcam1_frame():
+        import cv2
+        import numpy as np
+        width,height=mcam1_state['width'],mcam1_state['height']
+        if (width,height) not in mcam1_images:
+            image=np.full((height,width,3),(75,105,35),dtype=np.uint8)
+            cv2.rectangle(image,(10,10),(width-10,height-10),(135,210,240),4)
+            cv2.putText(image,'MCAM1',(30,height//2),cv2.FONT_HERSHEY_SIMPLEX,1,(255,255,255),2)
+            mcam1_images[width,height]=cv2.imencode('.jpg',image)[1].tobytes()
+        return dict(contract='hhh.camera.still',version=1,status='ready',width=width,height=height,
+                    captured_at=time.time()-(3 if mcam1_state['stale'] else 0),mime_type='image/jpeg',image=mcam1_images[width,height])
+    @app.post('/__test/mcam1')
+    def test_mcam1():
+        data=request.get_json()
+        mcam1_state.update(data)
+        if data.get('enabled',True):facade._ctx.modules['mcam1']=SimpleNamespace(still_snapshot=mcam1_frame)
+        else:facade._ctx.modules.pop('mcam1',None)
+        return jsonify(ok=True)
     def tracking_snapshot():
         raw=observation()
         return dict(contract='photon.board.tracking',version=1,status=raw['status'],source='camera',
-                    coordinate_space='corrected-camera-normalized',width=1280,height=720,
+                    coordinate_space='corrected-camera-normalized',width=camera_state.get('width',1280),height=camera_state.get('height',720),
                     sampled_at=time.time(),frame_at=raw['frame_at'],limits={'stale_s':1.5},tags=[])
     board.tracking_snapshot=tracking_snapshot
     renderer.hub_init(FakeContext({'photon-game':game,'photon-level':level,'auto-pickup-game':owner,
@@ -165,6 +210,7 @@ def create_app(folder):
     app.register_blueprint(game.bp,url_prefix='/s/gamemaster/p/photon-game')
     app.register_blueprint(level.bp,url_prefix='/s/gamemaster/p/photon-level')
     app.register_blueprint(renderer.bp,url_prefix='/s/gamemaster/p/laser-tag-y')
+    facade.delay_analysis.start(Path(folder)/'delay-analysis')
     facade.connection_log.LOG_PATH=Path(folder)/'connection-events.jsonl'
     app.register_blueprint(facade.bp,url_prefix='/s/gamemaster/p/mobile-ltz-api')
     app.register_blueprint(ui.bp,url_prefix='/s/green/p/mobile-ltz')
@@ -205,14 +251,21 @@ def create_app(folder):
     def fake_tags():return jsonify(tags=[],detections=[],corrected=True,width=1280,height=720)
     @app.get('/s/gamemaster/p/camera-calibration/api/corrected-stream')
     def fake_camera():return Response(camera_frame()['jpeg'],mimetype='image/jpeg')
-    app.config['fixture_cleanup']=progress.hub_stop
+    app.config['fixture_cleanup']=lambda: (facade.hub_stop(), progress.hub_stop())
     return app,game
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=8117)
-    port=parser.parse_args().port
+    parser.add_argument('--isolate-imports',action='store_true',help='Purge helper imports as the production hub does')
+    parser.add_argument('--virtual-controls',action='store_true',help='Enable the test-only simulated arm command adapter')
+    args=parser.parse_args();port=args.port
     with tempfile.TemporaryDirectory(prefix='mobile-ltz-') as folder:
-        app,game=create_app(folder);server=make_server('127.0.0.1',port,app,threaded=True)
+        app,game=create_app(folder, virtual_controls=args.virtual_controls)
+        if args.isolate_imports:
+            for name,module in list(sys.modules.items()):
+                if str(getattr(module,'__file__','') or '').startswith(str(ROOT/'sandboxes')+'/'):
+                    del sys.modules[name]
+        server=make_server('127.0.0.1',port,app,threaded=True)
         print(f'Mobile fixture http://127.0.0.1:{port}/s/green/p/mobile-ltz/',flush=True)
         try:server.serve_forever()
         finally:game.hub_stop();app.config['fixture_cleanup']()

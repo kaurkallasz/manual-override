@@ -5,7 +5,7 @@ POLICY = {'version': 1, 'pod_size': 96, 'shared_health': True, 'damage_scale': 1
 SHARED = ('atom_tag_id', 'owner', 'socket_id', 'aruco_id', 'tower_type', 'source',
           'atom_buff_state', 'occupying_atom_id', 'atom_health_multiplier', 'atom_damage_multiplier', 'normal_max_hp',
           'upgrade_level', 'upgrade_multiplier', 'aim_angle', 'aim_spread', 'aim_revision',
-          'hp', 'max_hp', 'base_max_hp', 'destroyed', 'destroyed_at', 'last_damage_at',
+          'hp', 'max_hp', 'base_max_hp', 'destroyed', 'deactivated', 'destroyed_at', 'last_damage_at',
           'last_damage_amount', 'replenished_at', 'linked_turret_count', 'link_multiplier')
 
 
@@ -48,7 +48,7 @@ def synchronize(parent, descriptor, now, activation_duration, fire_interval, *, 
         parent.pop('companion', None)
         return None
     unit = parent.get('companion')
-    if unit is None and create and not parent.get('destroyed'):
+    if unit is None and create and not parent.get('destroyed') and not parent.get('deactivated'):
         started = parent['activation_started_at'] if installed else now
         unit = {'placement_id': f"{parent['placement_id']}:companion",
                 'parent_placement_id': parent['placement_id'], 'is_companion': True,

@@ -357,7 +357,8 @@ def connect():
                     held = e.holder or "the other side"
                     return _fail(f"Relay is held by {held} — release it first.",
                                  holder=e.holder)
-                return _fail(f"Could not reach relay at {host}: {e}")
+                return _fail(f"Relay connection failed: {e}" if e.status is not None
+                             else f"Could not reach relay at {host}: {e}")
             _robot = robot
             _link = "relay"
             _relay_side = side

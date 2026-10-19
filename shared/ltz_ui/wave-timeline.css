@@ -1,0 +1,18 @@
+.ltzWaveTimeline{position:absolute;top:clamp(3px,.45vw,8px);left:50%;transform:translateX(-50%);width:min(56%,1000px);z-index:4;color:#eaffef;pointer-events:none;font-variant-numeric:tabular-nums;box-sizing:border-box}
+.ltzWaveTimeline[hidden]{display:none!important}
+.ltzWaveTimeline svg{display:block;width:100%;height:auto;--ltz-wave-color:#36e07c}
+.ltzWaveTrack{fill:#07110cbb;stroke:#658d70;stroke-width:2;shape-rendering:crispEdges}
+.ltzWavePixel{fill:var(--ltz-wave-color);fill-opacity:.15;shape-rendering:crispEdges}
+.ltzWaveProgress{fill:var(--ltz-wave-color);shape-rendering:crispEdges}
+.ltzWaveProgressShine{fill:#e7fff0;fill-opacity:.35;shape-rendering:crispEdges}
+.ltzWaveBar rect{fill:#b88c4b;shape-rendering:crispEdges}
+.ltzWaveBar.spawning rect{fill:#ffc06b}
+.ltzWaveBar.released rect{fill:#547361}
+.ltzWavePlayhead{fill:var(--ltz-wave-color);stroke:var(--ltz-wave-color);stroke-width:2;shape-rendering:crispEdges}
+/* HTML labels keep the same actual 22 px as the kill-count label, even when
+   the SVG scales down. Every label is centered inside the single track. */
+.ltzWaveLabels{position:absolute;inset:12.5% 1.8%;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 12px;font:800 22px/1.1 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap;text-shadow:-1px -1px #021008,1px -1px #021008,-1px 1px #021008,1px 1px #021008,0 2px 3px #000}
+.ltzWaveCurrent,.ltzWaveClock{flex-shrink:0}
+.ltzWaveCaption{min-width:0;overflow:hidden;text-overflow:ellipsis;text-align:center}
+.ltzWaveTimeline[data-paused=true] .ltzWaveClock{color:#ffd19a}
+.stage-shell>.ltzWaveTimeline{position:relative;top:auto;left:auto;transform:none;width:min(92%,1100px);margin:8px auto}

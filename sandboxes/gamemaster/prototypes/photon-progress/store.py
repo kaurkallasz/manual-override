@@ -12,54 +12,22 @@ import threading
 import time
 import uuid
 
+from ltz_economy import EconomyStore, initialize as initialize_economy, quote
+from ltz_rewards import migrate_player, banks_kill_credits, validate as validate_reward, rule as validate_reward_rule
+from ltz_records import encoded, integer, identifier, finite, fingerprint, normalize_legacy_tracks
+from ltz_backup import BackupStore
+from event_store import EventStore
+from linked_games import LinkedGames
+from level_results import LevelResults, attempts as event_attempts, statistics_at_finish, result_view, validate_heatmap
+
 TRACKS = ('damage-machine-gun', 'damage-flamethrower', 'damage-mortar', 'damage-tesla-coil', 'forcefield')
 MODES = ('joint', 'xyz', 'image', 'cue')
-SCHEMA = 2
+SCHEMA = 5
 LESSON_VERSION = 1
-TEST_PLAYERS = {'ltz-test-green': 'Test player · Green', 'ltz-test-purple': 'Test player · Purple'}
+LEGACY_TEST_IDS = {'ltz-test-green', 'ltz-test-purple'}
 
 
-def encoded(value):
-    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
-
-
-def integer(value, low=0, high=1000000000):
-    if type(value) is not int or not low <= value <= high:
-        raise ValueError(f'expected an integer between {low} and {high}')
-    return value
-
-
-def identifier(value):
-    if not isinstance(value, str) or not 1 <= len(value) <= 160 or not all(c.isalnum() or c in '-_:.' for c in value):
-        raise ValueError('invalid identifier')
-    return value
-
-
-def finite(value, low=0):
-    if type(value) not in (int, float) or not math.isfinite(value) or value < low:
-        raise ValueError('invalid numeric value')
-    return value
-
-
-def fingerprint(value):
-    return hashlib.sha256(encoded(value).encode()).hexdigest()
-
-
-def normalize_legacy_tracks(value):
-    if isinstance(value, list):
-        return [normalize_legacy_tracks(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-    value = {key: normalize_legacy_tracks(item) for key, item in value.items()}
-    if 'damage-photon' in value:
-        old = integer(value.pop('damage-photon'), 1, 4)
-        value['damage-tesla-coil'] = max(old, integer(value.get('damage-tesla-coil', 1), 1, 4))
-    if value.get('track') == 'damage-photon':
-        value['track'] = 'damage-tesla-coil'
-    return value
-
-
-class ProgressStore:
+class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupStore):
     def __init__(self, path):
         self.path = Path(path)
         self.lock = threading.RLock()
@@ -82,36 +50,37 @@ class ProgressStore:
 
     def initialize(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            with sqlite3.connect(self.path) as source:
-                if source.execute('PRAGMA user_version').fetchone()[0] == 1:
-                    backup = self.path.with_suffix('.pre-v2.sqlite3')
-                    if not backup.exists():
-                        with sqlite3.connect(backup) as target:
-                            source.backup(target)
         with self.transaction(write=True) as db:
-            version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, SCHEMA):
-                raise ValueError('unsupported progress database version')
+            version=db.execute('PRAGMA user_version').fetchone()[0]
+            if version not in (0,4,SCHEMA):raise ValueError('Event progress requires the cleared player database')
+            if version==4:
+                if (db.execute('SELECT 1 FROM attempts LIMIT 1').fetchone() or db.execute('SELECT 1 FROM ledger LIMIT 1').fetchone()
+                    or any(r[0] not in LEGACY_TEST_IDS for r in db.execute('SELECT id FROM players'))):
+                    raise ValueError('Legacy player records remain; event upgrade requires the approved empty player base')
+                db.execute('UPDATE game_selection SET game_id=NULL')
+                for table in ('sessions','participants','saved_games','players','operations','ready_rosters','lesson_rosters'):
+                    db.execute('DELETE FROM '+table)
+                db.execute('DROP TABLE IF EXISTS shop_windows')
+                db.execute('DELETE FROM economy_state');db.execute('DELETE FROM economy_catalogs')
+            db.execute('CREATE TABLE IF NOT EXISTS game_events(id TEXT PRIMARY KEY,data TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS event_selection(id INTEGER PRIMARY KEY CHECK(id=1),event_id TEXT REFERENCES game_events(id))')
+            db.execute('INSERT OR IGNORE INTO event_selection VALUES(1,NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS players(id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS sessions(side TEXT PRIMARY KEY CHECK(side IN (\'green\',\'purple\')), player_id TEXT UNIQUE REFERENCES players(id))')
             db.execute('CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             db.execute("CREATE INDEX IF NOT EXISTS attempt_outcome ON attempts(json_extract(data,'$.outcome'))")
+            db.execute("CREATE INDEX IF NOT EXISTS attempt_event ON attempts(json_extract(data,'$.event_id'))")
             db.execute('CREATE TABLE IF NOT EXISTS participants(run_id TEXT REFERENCES attempts(id), player_id TEXT REFERENCES players(id), PRIMARY KEY(run_id,player_id))')
             db.execute('CREATE TABLE IF NOT EXISTS ledger(id TEXT PRIMARY KEY, player_id TEXT REFERENCES players(id), amount INTEGER NOT NULL, data TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS ready_rosters(id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS lesson_rosters(id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS saved_games(id TEXT PRIMARY KEY, data TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS game_selection(id INTEGER PRIMARY KEY CHECK(id=1), game_id TEXT REFERENCES saved_games(id))')
+            db.execute('INSERT OR IGNORE INTO game_selection VALUES(1,NULL)')
             db.execute("INSERT OR IGNORE INTO meta VALUES('revision',1)")
-            if version == 1:
-                for row in db.execute('SELECT id,data FROM players').fetchall():
-                    player = self._migrate_player(json.loads(row['data']))
-                    db.execute('UPDATE players SET data=? WHERE id=?', (encoded(player), row['id']))
-            for player_id, name in TEST_PLAYERS.items():
-                player = self._new_player(player_id, name, created_at=0)
-                if db.execute('INSERT OR IGNORE INTO players VALUES(?,?)', (player_id, encoded(player))).rowcount:
-                    self._touch(db)
+            initialize_economy(db)
             db.execute(f'PRAGMA user_version={SCHEMA}')
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise ValueError('progress database integrity check failed')
@@ -126,23 +95,24 @@ class ProgressStore:
         if row is None:
             raise ValueError('player not found')
         player = json.loads(row[0])
-        player['is_test'] = player_id in TEST_PLAYERS
-        return player
+        player['is_test'] = False
+        return migrate_player(player)
 
     @staticmethod
     def _new_player(player_id, name, *, created_at=None):
         return {'id': player_id, 'name': name, 'created_at': time.time() if created_at is None else created_at,
-                'revision': 1, 'is_test': player_id in TEST_PLAYERS,
+                'revision': 1, 'is_test': False,
                 'selected_control': 1, 'unlocked_control': 1, 'wins_by_tier': [0, 0, 0, 0],
                 'current_control_tier': 1, 'progression_stage': 'playing',
                 'lesson': {'version': LESSON_VERSION, 'complete': False}, 'calibration_milestone': None,
                 'levels': {track: 1 for track in TRACKS}, 'credits': 0, 'lifetime_score': 0,
-                'attempts': 0, 'wins': 0}
+                'attempts': 0, 'wins': 0, 'lifetime_kills':0, 'lifetime_kill_credits':0,
+                'lifetime_bonus_credits':0,'lifetime_credits_earned':0}
 
-    @staticmethod
-    def _put_player(db, player):
+    def _put_player(self, db, player):
         player['revision'] += 1
         db.execute('UPDATE players SET data=? WHERE id=?', (encoded(player), player['id']))
+        self._sync_game_player(db, player)
 
     @staticmethod
     def _idle(db, player_id, reservation_id=None, changing_profile=False):
@@ -159,20 +129,6 @@ class ProgressStore:
                     raise ValueError('the calibration roster is fixed; finish both calibration turns first')
 
     @staticmethod
-    def _migrate_player(player):
-        tier = integer(player.get('unlocked_control', 1), 1, 4)
-        wins = player.get('wins_by_tier')
-        if not isinstance(wins, list) or len(wins) != 4 or any(type(w) is not int or w < 0 for w in wins):
-            raise ValueError('invalid mastery records; operator recovery required')
-        if any(w < 3 for w in wins[:tier-1]):
-            raise ValueError('inconsistent earned tiers; operator recovery required')
-        player.update(current_control_tier=tier, selected_control=tier,
-                      progression_stage='calibration_pending' if tier >= 3 else 'playing',
-                      lesson={'version': LESSON_VERSION, 'complete': False},
-                      calibration_milestone=f'legacy:{player["id"]}' if tier >= 3 else None)
-        return player
-
-    @staticmethod
     def _operation(db, operation_id, intent):
         identifier(operation_id)
         saved = db.execute('SELECT data FROM operations WHERE id=?', (operation_id,)).fetchone()
@@ -187,10 +143,10 @@ class ProgressStore:
     def _remember(db, operation_id, intent, result):
         db.execute('INSERT INTO operations VALUES(?,?)', (operation_id, encoded({'intent': intent, 'result': result})))
 
-    def create_player(self, name, operation_id, *, side=None):
+    def create_player(self, name, operation_id, *, side=None, event_id=None):
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 32 or any(ord(c) < 32 for c in name):
             raise ValueError('player name must contain 1–32 printable characters')
-        intent = {'action': 'create', 'name': name.strip()}
+        intent = {'action': 'create', 'name': name.strip(), 'event_id':event_id}
         if side is not None:
             if side not in ('green', 'purple'):
                 raise ValueError('invalid side')
@@ -199,7 +155,9 @@ class ProgressStore:
             previous = self._operation(db, operation_id, intent)
             if previous is not None:
                 return previous
+            event=self._event(db,event_id)
             player = self._new_player(uuid.uuid4().hex, name.strip())
+            player['event_id']=event['id']
             db.execute('INSERT INTO players VALUES(?,?)', (player['id'], encoded(player)))
             if side is not None:
                 self._select_player(db, side, player['id'])
@@ -208,19 +166,21 @@ class ProgressStore:
             self._touch(db)
             return result
 
-    def select_player(self, side, player_id):
+    def select_player(self, side, player_id, event_id=None):
         if side not in ('green', 'purple'):
             raise ValueError('invalid side')
         with self.transaction(write=True) as db:
+            self._event(db,event_id)
             self._select_player(db, side, player_id)
             self._touch(db)
 
     def _select_player(self, db, side, player_id):
+        self._pair_selection_guard(db)
         current = db.execute('SELECT player_id FROM sessions WHERE side=?', (side,)).fetchone()
         if current:
             self._idle(db, current[0], changing_profile=True)
         if player_id:
-            self._player(db, player_id)
+            if self._player(db,player_id).get('event_id')!=self._event(db)['id']:raise ValueError('Player belongs to another event')
             self._idle(db, player_id, changing_profile=True)
             other = db.execute('SELECT side FROM sessions WHERE player_id=? AND side!=?', (player_id, side)).fetchone()
             if other:
@@ -228,58 +188,27 @@ class ProgressStore:
         db.execute('DELETE FROM sessions WHERE side=?', (side,))
         if player_id:
             db.execute('INSERT INTO sessions VALUES(?,?)', (side, player_id))
+            # Choosing a name prepares a fresh game. Loading a linked save uses
+            # its own atomic path and restores that game's control progression.
+            self._fresh_player_controls(db, self._player(db, player_id))
 
     def mutate_player(self, side, data):
-        with self.transaction(write=True) as db:
-            row = db.execute('SELECT player_id FROM sessions WHERE side=?', (side,)).fetchone()
-            if row is None:
-                raise ValueError('select a player first')
-            player = self._player(db, row[0])
-            intent = {'side': side, 'player_id': player['id'], **data}
-            operation_id = data.get('operation_id')
-            previous = self._operation(db, operation_id, intent)
-            if previous is not None:
-                return previous
-            self._idle(db, player['id'])
-            if data.get('revision') != player['revision']:
-                raise ValueError('player changed in another window; refresh and retry')
-            if player['is_test']:
-                raise ValueError('test profiles use Game Master test unlocks and test loadouts; earned upgrades are unchanged')
-            if data.get('action') == 'control':
-                level = integer(data.get('level'), 1, 4)
-                if level != player['current_control_tier']:
-                    raise ValueError('stay on your current tier until three wins advance you')
-            elif data.get('action') == 'purchase':
-                track = data.get('track')
-                level = integer(data.get('level'), 2, 4)
-                if track not in TRACKS or player['levels'][track] + 1 != level:
-                    raise ValueError('only the next level of a supported upgrade can be purchased')
-                cost = (1000 if track == 'forcefield' else 250) * (level - 1)
-                if player['credits'] < cost:
-                    raise ValueError(f'need {cost - player["credits"]} more credits')
-                player['credits'] -= cost
-                player['levels'][track] = level
-                db.execute('INSERT INTO ledger VALUES(?,?,?,?)', (operation_id, player['id'], -cost, encoded({'kind': 'purchase', 'track': track, 'level': level, 'at': time.time()})))
-            else:
-                raise ValueError('unknown player action')
-            self._put_player(db, player)
-            result = {'player_id': player['id'], 'revision': player['revision']}
-            self._remember(db, operation_id, intent, result)
-            self._touch(db)
-            return result
+        raise ValueError('Upgrades are purchased automatically; controls follow the saved game level')
 
     def snapshot(self, side=None):
         with self.transaction() as db:
-            players = [json.loads(row[0]) for row in db.execute('SELECT data FROM players ORDER BY id')]
-            for player in players:
-                player['is_test'] = player['id'] in TEST_PLAYERS
+            events=self.events_snapshot(db)
+            players = [json.loads(row[0]) for row in db.execute("SELECT data FROM players WHERE json_extract(data,'$.event_id')=? ORDER BY id",(events['active_id'],))]
             roster = {row['side']: row['player_id'] for row in db.execute('SELECT * FROM sessions')}
             by_id = {player['id']: player for player in players}
             active = [json.loads(row[0]) for row in db.execute("SELECT data FROM attempts WHERE json_extract(data,'$.outcome')='running'")]
             return {'revision': db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0],
+                    'events':events, 'saved_games': self.games_snapshot(db),
                     'players': [{'id': p['id'], 'name': p['name'], 'is_test': p['is_test']} for p in sorted(players, key=lambda p: (not p['is_test'], p['name'].casefold(), p['id']))],
                     'roster': {team: by_id[pid] for team, pid in roster.items()},
                     'player': by_id.get(roster.get(side)),
+                    'shop':quote(db,by_id.get(roster.get(side))),
+                    'latest_result':self.latest_result(db,roster.get(side)),
                     'active_attempts': [{'run_id': a['run_id'], 'reward_enabled': a['reward_enabled'], 'participants': a['participants'], 'banked_kills': a['kills']} for a in active]}
 
     def control_policy(self, side):
@@ -346,6 +275,16 @@ class ProgressStore:
             db.execute('DELETE FROM lesson_rosters WHERE id=?', (reservation_id,))
             self._touch(db)
 
+    def release_start_reservation(self, reservation_id):
+        """Only undo an unconsumed Start lock; never release a calibration lock."""
+        with self.transaction(write=True) as db:
+            key=identifier(reservation_id)
+            if not db.execute('SELECT 1 FROM ready_rosters WHERE id=?',(key,)).fetchone():return
+            if db.execute("SELECT 1 FROM attempts WHERE json_extract(data,'$.outcome')='running' LIMIT 1").fetchone():
+                raise ValueError('A match is active; its Start reservation cannot be released')
+            db.execute('DELETE FROM ready_rosters WHERE id=?',(key,))
+            self._touch(db)
+
     def complete_lesson(self, value):
         player_id = identifier(value.get('player_id'))
         operation_id = identifier(value.get('operation_id'))
@@ -369,11 +308,12 @@ class ProgressStore:
 
     def begin(self, data):
         run_id = identifier(data.get('run_id'))
-        if type(data.get('reward_enabled')) is not bool:
-            raise ValueError('reward eligibility is required')
+        if data.get('reward_enabled') is not True:
+            raise ValueError('Every match must belong to an event and award earned progress')
         meta = data.get('metadata')
         if not isinstance(meta, dict) or len(encoded(meta)) > 100000:
             raise ValueError('invalid attempt metadata')
+        if meta.get('reward_rules') is not None:validate_reward_rule(meta['reward_rules'])
         with self.transaction(write=True) as db:
             existing = db.execute('SELECT data FROM attempts WHERE id=?', (run_id,)).fetchone()
             if existing:
@@ -387,8 +327,8 @@ class ProgressStore:
                 self._idle(db, p['id'], data.get('reservation_id'))
                 participants.append({'player_id': p['id'], 'name': p['name'], 'side': row['side'],
                                      'control_tier': p['current_control_tier'], 'levels': p['levels']})
-            test_players = [p['player_id'] for p in participants if p['player_id'] in TEST_PLAYERS]
-            reward_enabled = data['reward_enabled'] and not test_players
+            event=self._event(db,data.get('event_id'))
+            reward_enabled=True
             if reward_enabled and any(self._player(db, p['player_id'])['progression_stage'] != 'playing' for p in participants):
                 raise ValueError('complete required calibration before scored play')
             if reward_enabled and len(participants) != 2:
@@ -400,10 +340,22 @@ class ProgressStore:
             expected = data.get('expected_roster')
             if expected is not None and expected != participants:
                 raise ValueError('players changed while preparing the run; retry Start')
-            attempt = {'run_id': run_id, 'started_at': time.time(), 'finished_at': None,
+            if 'expected_game_id' in data and data['expected_game_id'] != (self._active_game(db) or {}).get('id'):
+                raise ValueError('saved game changed while preparing the run; retry Start')
+            game=self._active_game(db)
+            if not game or set(game.get('atoms',{}))!={'green','purple'}:raise ValueError('Select one starting Atom for each player')
+            if meta.get('contract_control_tier')!=game['level']:raise ValueError('Saved level changed; retry Start')
+            for member in participants:
+                if self._player(db,member['player_id'])['event_id']!=event['id']:raise ValueError('Player event mismatch')
+                primary=game['atoms'][member['side']]['track']
+                choices=('damage-machine-gun','damage-flamethrower') if member['side']=='green' else ('damage-mortar','damage-tesla-coil')
+                member['eligible_tracks']=[primary]+([t for t in choices if t!=primary] if game['level']==4 else [])
+            attempt = {'run_id': run_id, 'event_id':event['id'], 'assisted':game.get('assisted',False), 'started_at': time.time(), 'finished_at': None,
+                       'game_id': self._lock_game_pair(db, participants),
                        'outcome': 'running', 'reward_enabled': reward_enabled, 'metadata': meta,
-                       'requested_reward_enabled': data['reward_enabled'], 'test_player_ids': test_players,
-                       'practice_reason': 'test_player' if test_players else None,
+                       'requested_reward_enabled': True,
+                       'wallet_at_start':{p['player_id']:self._player(db,p['player_id'])['credits'] for p in participants},
+                       'catalog_revision':quote(db,None)['catalog_revision'],
                        'participants': participants, 'kills': 0, 'sequence': 0, 'result': None}
             db.execute('INSERT INTO attempts VALUES(?,?)', (run_id, encoded(attempt)))
             if data.get('reservation_id'):
@@ -426,11 +378,12 @@ class ProgressStore:
         sequence = integer(data.get('sequence'), 1)
         outcome = data.get('outcome')
         if final:
-            if outcome not in ('won', 'overrun', 'aborted', 'interrupted'):
+            if outcome not in ('won', 'overrun', 'operator_ended', 'aborted', 'interrupted'):
                 raise ValueError('invalid terminal outcome')
             finite(data.get('active_seconds'))
             finite(data.get('finished_at'))
             integer(data.get('released_orcs', 0))
+            validate_heatmap(data.get('kill_heatmap'),kills)
             if data.get('telemetry') is not None and (not isinstance(data['telemetry'],dict) or len(encoded(data['telemetry']))>20000):
                 raise ValueError('invalid result telemetry')
         with self.transaction(write=True) as db:
@@ -458,14 +411,25 @@ class ProgressStore:
                 return a
             if kills < a['kills']:
                 raise ValueError('kill checkpoints must be cumulative')
+            credit_total, bonus_total, reward = validate_reward(a,data,final)
             delta = kills - a['kills']
+            credit_delta=credit_total-a.get('kill_credits',a['kills'])
+            bonus_delta=bonus_total-a.get('bonus_credits',0)
+            if credit_delta<0 or bonus_delta<0:raise ValueError('rewards must be cumulative')
             for participant in a['participants']:
                 p = self._player(db, participant['player_id'])
-                if a['reward_enabled'] and delta:
-                    p['credits'] += delta
+                current_game_progress = self._result_game_progress(db, p, a.get('game_id'))
+                if a['reward_enabled'] and (credit_delta or bonus_delta or delta):
+                    p['credits'] += credit_delta+bonus_delta
                     p['lifetime_score'] += delta
+                    p['lifetime_kills'] += delta
+                    p['lifetime_kill_credits'] += credit_delta
+                    p['lifetime_bonus_credits'] += bonus_delta
+                    p['lifetime_credits_earned'] += credit_delta+bonus_delta
                     key = f'{run_id}:{sequence}:{p["id"]}'
-                    db.execute('INSERT INTO ledger VALUES(?,?,?,?)', (key, p['id'], delta, encoded({'kind': 'earned', 'run_id': run_id, 'at': time.time()})))
+                    db.execute('INSERT INTO ledger VALUES(?,?,?,?)', (key, p['id'], credit_delta, encoded({'kind': 'earned', 'run_id': run_id, 'kills':delta,'kill_credits':credit_delta,'at': time.time()})))
+                    if bonus_delta:
+                        db.execute('INSERT INTO ledger VALUES(?,?,?,?)',(f'{run_id}:bonus:{p["id"]}',p['id'],bonus_delta,encoded({'kind':'stack_bonus','run_id':run_id,'at':time.time()})))
                 if final and a['reward_enabled']:
                     if not recovered_result:
                         p['attempts'] += 1
@@ -474,19 +438,24 @@ class ProgressStore:
                         p['wins'] += 1
                         tier = participant['control_tier']
                         p['wins_by_tier'][tier - 1] += 1
-                        if tier == previous_tier and tier < 4 and p['wins_by_tier'][tier-1] >= 3:
-                            p['current_control_tier'] += 1
-                            p['selected_control'] = p['unlocked_control'] = p['current_control_tier']
-                            a.setdefault('unlocks', {})[p['id']] = p['current_control_tier']
-                            if tier == 2:
-                                p['progression_stage'] = 'calibration_pending'
-                                p['calibration_milestone'] = f'{run_id}:{p["id"]}'
-                                a.setdefault('calibration_milestones', {})[p['id']] = p['calibration_milestone']
-                if a['reward_enabled'] and (delta or final):
-                    self._put_player(db, p)
-            a.update(kills=kills, sequence=sequence)
+                        if 'game_wins_by_tier' in p:
+                            p['game_wins_by_tier'][tier - 1] += 1
+                        if tier==previous_tier and (reward or {}).get('victory_method')=='center_stack':
+                            self._advance_player(p,run_id,a)
+                    if outcome in ('won','overrun','operator_ended'):
+                        self.settle_upgrades(db,p,participant,a,forced=outcome=='operator_ended')
+                if credit_delta or bonus_delta or delta or final:
+                    self._put_result_player(db,p,a.get('game_id'),current_game_progress)
+            if final and a.get('unlocks'):
+                row=db.execute('SELECT data FROM saved_games WHERE id=?',(a['game_id'],)).fetchone()
+                game=json.loads(row[0]);game['level']=max(a['unlocks'].values());self._write_game(db,game)
+            a.update(kills=kills, sequence=sequence,kill_credits=credit_total,bonus_credits=bonus_total,reward=reward)
             if final:
-                a.update(outcome=outcome, finished_at=data['finished_at'], result=data)
+                a['assisted']=bool(a.get('assisted') or outcome=='operator_ended' or (data.get('telemetry') or {}).get('operator_actions'))
+                a.update(outcome=outcome, finished_at=data['finished_at'], result=data,
+                         wallet_after_save={p['player_id']:self._player(db,p['player_id'])['credits'] for p in a['participants']})
+                if outcome in ('won','overrun','operator_ended'):
+                    a['statistics']=statistics_at_finish(a,event_attempts(db,a['event_id']))
             db.execute('UPDATE attempts SET data=? WHERE id=?', (encoded(a), run_id))
             self._touch(db)
             return a
@@ -497,9 +466,12 @@ class ProgressStore:
             unfinished = [json.loads(row[0]) for row in db.execute('SELECT data FROM attempts')]
         for a in unfinished:
             if a['outcome'] == 'running':
+                if a['metadata'].get('reward_rules') and not a.get('reward'):
+                    a['kill_credits']=0
+                    a['reward']={'version':1,'revision':a['metadata']['reward_rules']['revision'],'sequence':0,'kill_credits':0,'counts':dict.fromkeys(('grunt','runner','breaker','brute'),0),'combat_kills':dict.fromkeys(('grunt','runner','breaker','brute'),0),'purge_kills':dict.fromkeys(('grunt','runner','breaker','brute'),0)}
                 self.record({'run_id': a['run_id'], 'kills': a['kills'], 'sequence': a['sequence'] + 1,
                              'outcome': 'interrupted', 'active_seconds': 0, 'finished_at': time.time(), 'released_orcs': 0,
-                             'recovery_interrupted': True}, final=True)
+                             'recovery_interrupted': True, **({'reward':{**a['reward'],'stack_bonus':0,'total_earned':a['kill_credits'],'victory_method':None}} if a.get('reward') else {})}, final=True)
 
     def attempt(self, run_id):
         with self.transaction() as db:
@@ -509,33 +481,34 @@ class ProgressStore:
 
     def history(self, player_id, query):
         with self.transaction() as db:
+            event_id=self.events_snapshot(db)['active_id']
             if query.get('combined'):
-                attempts = [json.loads(row[0]) for row in db.execute('SELECT data FROM attempts')]
+                attempts = [json.loads(row[0]) for row in db.execute("SELECT data FROM attempts WHERE json_extract(data,'$.event_id')=?",(event_id,))]
             else:
-                self._player(db, player_id)
+                if self._player(db,player_id).get('event_id')!=event_id:raise ValueError('Player belongs to another event')
                 attempts = [json.loads(row[0]) for row in db.execute('SELECT a.data FROM attempts a JOIN participants p ON a.id=p.run_id WHERE p.player_id=?', (player_id,))]
         rows = []
-        dataset = query.get('dataset', 'scored')
-        if dataset not in ('scored', 'practice'):
-            raise ValueError('invalid history dataset')
         for a in attempts:
-            if a['outcome'] == 'running' or a['reward_enabled'] != (dataset == 'scored'):
+            if a['outcome'] == 'running':
                 continue
             if not a['participants']:
                 continue
             p = next((p for p in a['participants'] if (p['side']==query['side_at_run'] if query.get('combined') and query.get('side_at_run') else p['player_id']==player_id)), a['participants'][0])
             meta = a['metadata']
             result = a['result'] or {}
+            banked = banks_kill_credits(a)
             cohort = fingerprint({'metadata': {k: v for k, v in meta.items() if k not in ('settings_revision',)},
                                   'loadouts': [{k: p[k] for k in ('side', 'control_tier', 'levels')} for p in a['participants']]})
-            row = {'run_id': a['run_id'], 'finished_at': a['finished_at'], 'outcome': a['outcome'],
-                   'score': a['kills'] if a['reward_enabled'] else 0, 'kills': a['kills'],
+            row = {'event_id':a['event_id'],'assisted':bool(a.get('assisted') or a.get('manual_advance') or a['outcome']=='operator_ended'), 'manual_advance':a.get('manual_advance'), 'run_id': a['run_id'], 'finished_at': a['finished_at'], 'outcome': a['outcome'],
+                   'score': a.get('kill_credits',a['kills']) if banked else 0, 'kills': a['kills'],
+                   'kill_credits':a.get('kill_credits',a['kills']) if banked else 0,'bonus_credits':a.get('bonus_credits',0) if a['reward_enabled'] else 0,
+                   'total_earned':(a.get('kill_credits',a['kills'])+a.get('bonus_credits',0)) if banked else 0,'reward':a.get('reward'),
                    'active_seconds': None if a['outcome'] == 'interrupted' else result.get('active_seconds'),
                    'control_tier': p['control_tier'], 'side': p['side'], 'levels': p['levels'],
                    'partner': ' + '.join(other['name'] for other in a['participants'] if other['player_id'] != player_id) or 'Solo',
                    'completion_awarded': a['reward_enabled'] and a['outcome'] == 'won',
                    'unlocked_control': a.get('unlocks', {}).get(player_id),
-                   'released_orcs': result.get('released_orcs'),'telemetry':result.get('telemetry'), 'metadata': meta, 'cohort': cohort,
+                   'released_orcs': result.get('released_orcs'),'kill_heatmap':result.get('kill_heatmap'),'telemetry':result.get('telemetry'), 'metadata': meta, 'cohort': cohort,
                    'calibration_milestones':a.get('calibration_milestones',{})}
             row['participants'] = [{k: participant[k] for k in ('player_id', 'name', 'side', 'control_tier', 'levels')} for participant in a['participants']]
             if query.get('side_at_run') and p['side']!=query['side_at_run']:
@@ -556,7 +529,7 @@ class ProgressStore:
             c['count'] += 1
         if query.get('cohort'):
             rows = [r for r in rows if r['cohort'] == query['cohort']]
-        comparable = len({r['cohort'] for r in rows}) == 1
+        comparable = len({r['cohort'] for r in rows}) == 1 and not any(r['assisted'] for r in rows)
         scores = [r['score'] for r in rows if r['outcome'] != 'interrupted']
         times = [r['active_seconds'] for r in rows if r['outcome'] == 'won' and r['active_seconds'] is not None]
         def change(values, reverse=False):
@@ -576,136 +549,21 @@ class ProgressStore:
         return {'rows': rows[offset:offset + limit], 'total': len(rows), 'summary': summary,
                 'cohorts': list(cohorts.values()), 'next_cursor': offset + limit if offset + limit < len(rows) else None}
 
-    def export(self):
-        with self.transaction() as db:
-            return {'schema_version': SCHEMA, 'exported_at': time.time(), 'tables': {
-                table: [dict(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY 1')]
-                for table in ('players', 'attempts', 'participants', 'ledger', 'operations')}}
-
-    def import_backup(self, backup, *, preview=False):
-        if not isinstance(backup, dict) or type(backup.get('schema_version')) is not int or backup['schema_version'] not in (1, SCHEMA):
-            raise ValueError('unsupported backup schema')
-        tables = backup.get('tables')
-        columns = {'players': ('id', 'data'), 'attempts': ('id', 'data'), 'participants': ('run_id', 'player_id'),
-                   'ledger': ('id', 'player_id', 'amount', 'data'), 'operations': ('id', 'data')}
-        if not isinstance(tables, dict) or set(tables) != set(columns) or len(encoded(backup)) > 20000000:
-            raise ValueError('invalid or oversized backup')
-        for table, fields in columns.items():
-            if not isinstance(tables[table], list) or len(tables[table]) > 100000:
-                raise ValueError('invalid backup rows')
-            seen = set()
-            for row in tables[table]:
-                if not isinstance(row, dict) or set(row) != set(fields):
-                    raise ValueError('invalid backup columns')
-                key = tuple(row[f] for f in fields[:2 if table == 'participants' else 1])
-                for part in key:
-                    identifier(part)
-                if key in seen:
-                    raise ValueError('duplicate backup row')
-                seen.add(key)
-                if 'data' in row:
-                    value = normalize_legacy_tracks(json.loads(row['data']))
-                    if not isinstance(value, dict):
-                        raise ValueError('invalid saved record')
-                    row['data'] = encoded(value)
-                if table == 'players':
-                    p = json.loads(row['data'])
-                    if 'is_test' in p and (type(p['is_test']) is not bool or p['is_test'] != (p['id'] in TEST_PLAYERS)):
-                        raise ValueError('invalid saved test-player classification')
-                    if row['id'] in TEST_PLAYERS and p != self._new_player(row['id'], TEST_PLAYERS[row['id']], created_at=0):
-                        raise ValueError('built-in test profiles cannot contain earned progress')
-                    if backup['schema_version'] == 1:
-                        p = self._migrate_player(p)
-                        row['data'] = encoded(p)
-                    if 'damage-photon' in p.get('levels', {}):
-                        old = p['levels'].pop('damage-photon')
-                        p['levels']['damage-tesla-coil'] = max(old, p['levels'].get('damage-tesla-coil', 1))
-                        row['data'] = encoded(p)
-                    if p.get('id') != row['id'] or set(p.get('levels', {})) != set(TRACKS):
-                        raise ValueError('invalid saved player')
-                    for level in p['levels'].values():
-                        integer(level, 1, 4)
-                    integer(p['selected_control'], 1, integer(p['unlocked_control'], 1, 4))
-                    if p['current_control_tier'] != p['selected_control'] or p['selected_control'] != p['unlocked_control']:
-                        raise ValueError('saved required tier is inconsistent')
-                    if p['progression_stage'] not in ('playing', 'calibration_pending') or type(p['lesson'].get('complete')) is not bool:
-                        raise ValueError('invalid lesson state')
-                    integer(p['credits']); integer(p['lifetime_score']); integer(p['attempts']); integer(p['wins'])
-                    integer(p['revision'], 1)
-                    finite(p['created_at'])
-                    if not isinstance(p.get('name'), str) or not 1 <= len(p['name'].strip()) <= 32 or any(ord(c) < 32 for c in p['name']):
-                        raise ValueError('invalid saved player name')
-                    if p['credits'] > p['lifetime_score'] or p['wins'] > p['attempts']:
-                        raise ValueError('invalid player totals')
-                    if len(p['wins_by_tier']) != 4:
-                        raise ValueError('invalid mastery')
-                    for wins in p['wins_by_tier']:
-                        integer(wins)
-                    if sum(p['wins_by_tier']) != p['wins'] or any(w < 3 for w in p['wins_by_tier'][:p['unlocked_control']-1]):
-                        raise ValueError('invalid mastery totals')
-                if table == 'attempts':
-                    a = json.loads(row['data'])
-                    if a.get('run_id') != row['id'] or a.get('outcome') not in ('won', 'overrun', 'aborted', 'interrupted'):
-                        raise ValueError('backups may contain only finished attempts; finish live games before exporting')
-                    integer(a['kills'])
-                    integer(a['sequence'], 1)
-                    finite(a['started_at']); finite(a['finished_at'])
-                    if type(a.get('reward_enabled')) is not bool or not isinstance(a.get('metadata'), dict) or not isinstance(a.get('participants'), list):
-                        raise ValueError('invalid saved attempt')
-                    participants = set()
-                    for participant in a['participants']:
-                        identifier(participant['player_id'])
-                        integer(participant['control_tier'], 1, 4)
-                        if participant['side'] not in ('green', 'purple') or participant['side'] in participants:
-                            raise ValueError('invalid saved participants')
-                        participants.add(participant['side'])
-                        if set(participant['levels']) != set(TRACKS):
-                            raise ValueError('invalid frozen upgrade loadout')
-                        for level in participant['levels'].values():
-                            integer(level, 1, 4)
-                    if a['reward_enabled'] and any(p['player_id'] in TEST_PLAYERS for p in a['participants']):
-                        raise ValueError('test-player attempts cannot be scored')
-                    if not isinstance(a.get('result'), dict) or a['result'].get('outcome') != a['outcome'] or a['result'].get('kills') != a['kills']:
-                        raise ValueError('invalid saved result')
-                if table == 'ledger':
-                    integer(row['amount'], -1000000000)
-        with self.transaction(write=True) as db:
-            if db.execute('SELECT 1 FROM ready_rosters LIMIT 1').fetchone() or db.execute('SELECT 1 FROM lesson_rosters LIMIT 1').fetchone():
-                raise ValueError('finish the shared ready/calibration phase before loading a backup')
-            for row in db.execute('SELECT data FROM attempts'):
-                if json.loads(row[0])['outcome'] == 'running':
-                    raise ValueError('finish active attempts before loading a backup')
-            additions, conflicts = [], []
-            for table, fields in columns.items():
-                for row in tables[table]:
-                    keys = fields[:2] if table == 'participants' else fields[:1]
-                    clause = ' AND '.join(f'{k}=?' for k in keys)
-                    found = db.execute(f'SELECT * FROM {table} WHERE {clause}', tuple(row[k] for k in keys)).fetchone()
-                    if found and dict(found) != row:
-                        conflicts.append(f'{table}:{row[keys[0]]}')
-                    elif not found:
-                        additions.append((table, fields, row))
-            if conflicts:
-                raise ValueError('backup conflicts with existing records: ' + ', '.join(conflicts[:5]))
-            # Inserts and FK validation run even in preview; the preview is rolled back.
-            db.execute('SAVEPOINT preview')
-            for table, fields, row in additions:
-                db.execute(f'INSERT INTO {table} ({",".join(fields)}) VALUES({",".join("?" for _ in fields)})', tuple(row[f] for f in fields))
-            if db.execute('PRAGMA foreign_key_check').fetchone():
-                raise ValueError('backup has broken references')
-            for row in tables['players']:
-                player = self._player(db, row['id'])
-                credits, lifetime = db.execute('SELECT COALESCE(SUM(amount),0), COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0) FROM ledger WHERE player_id=?', (row['id'],)).fetchone()
-                if (credits, lifetime) != (player['credits'], player['lifetime_score']):
-                    raise ValueError('backup player balance does not match its ledger')
-            for row in tables['attempts']:
-                attempt = json.loads(row['data'])
-                members = {p['player_id'] for p in attempt['participants']}
-                linked = {p[0] for p in db.execute('SELECT player_id FROM participants WHERE run_id=?', (row['id'],))}
-                if members != linked or len(members) != len(attempt['participants']):
-                    raise ValueError('backup participant references do not match its attempt')
-            if preview:
-                db.execute('ROLLBACK TO preview')
-            else:
-                self._touch(db)
-            return {'new_records': len(additions), 'identical_records': sum(len(v) for v in tables.values()) - len(additions)}
+    @staticmethod
+    def latest_result(db, player_id):
+        if not player_id:return None
+        roster=[r[0] for r in db.execute('SELECT player_id FROM sessions')]
+        partner=next((pid for pid in roster if pid!=player_id),None) if player_id in roster and len(roster)==2 else None
+        row=db.execute("SELECT a.data FROM attempts a JOIN participants p ON p.run_id=a.id WHERE p.player_id=? AND json_extract(a.data,'$.outcome')!='running' AND (? IS NULL OR EXISTS(SELECT 1 FROM participants other WHERE other.run_id=a.id AND other.player_id=?)) ORDER BY json_extract(a.data,'$.finished_at') DESC,a.id DESC LIMIT 1",(player_id,partner,partner)).fetchone()
+        if not row:return None
+        a=json.loads(row[0]);r=a.get('reward') or {};result=a.get('result') or {}
+        participant=next(p for p in a['participants'] if p['player_id']==player_id)
+        eligible=a['reward_enabled'];credits=a.get('kill_credits',a['kills']) if banks_kill_credits(a) else 0;bonus=a.get('bonus_credits',0) if eligible else 0
+        return {'run_id':a['run_id'],'outcome':a['outcome'],'saved':True,'event_id':a['event_id'],'purchases':a.get('purchases',{}).get(player_id,[]),'balance':a.get('wallet_after_save',{}).get(player_id),'manual_advance':a.get('manual_advance'),
+                'kills':a['kills'],'kill_credits':credits,'stack_bonus':bonus,'total_earned':credits+bonus,
+                'active_seconds':result.get('active_seconds'),'control_tier':participant['control_tier'],
+                'victory_method':r.get('victory_method'),'core_health_at_stack':r.get('core_health_at_stack'),
+                'counts':r.get('counts'),'values':a['metadata'].get('reward_rules',{}).get('values'),
+                'statistics':result_view(db,a) if a['outcome'] in ('won','overrun','operator_ended') else None,
+                'player_id':player_id,'side':participant['side'],
+                'unlocked_control':a.get('unlocks',{}).get(player_id)}

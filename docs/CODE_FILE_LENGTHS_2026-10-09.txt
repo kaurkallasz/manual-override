@@ -1,0 +1,516 @@
+Tower defence source file length inventory
+Date: 2026-10-09 Europe/Tallinn
+Workspace: /Users/kaur/Documents/ChatGPT/Tower defence
+Git repository: manual-override at d7d4165a759ab14237ddc86bd949521f4f9a68ba
+Scope: union of tracked existing files and non-ignored files from rg --files --hidden.
+Excluded: .git, dependencies, caches, binary/media assets, JSON/TMJ/TSJ data, Markdown, lockfiles and generated machine toolpaths.
+Included: Python, JS/CJS, HTML, CSS, C++/headers, Objective-C++, Swift, PHP, shell and .command source.
+Count: physical lines, including blank lines, comments and inline scripts/styles; no minification adjustment.
+Output snapshots and skill scripts are counted but excluded from the proposed application size gate.
+A keep-by-size verdict is a length assessment, not a full correctness certification.
+Totals: 444 files; 140340 lines; 24 over 1000; 11 at 801-1000; 409 at 800 or fewer.
+Source and application runtime files were not edited by this review.
+
+All files, largest first:
+LINES | GROUP | LENGTH ACTION | LONGEST LINE BYTES | ABSOLUTE PATH
+ 5861 | application | split or consolidate | 465 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/robot_controls/controller.html
+ 5241 | application | merge into shared controller | 349 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/auto-pickup-game/controller.html
+ 4865 | application | split or consolidate | 292 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/engine.py
+ 4516 | application | split or consolidate | 265 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/photon_defence/engine.py
+ 3180 | tests | split or consolidate | 126 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_laser_tag_z.py
+ 3101 | application | split or consolidate | 294 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/tower-defence-view.js
+ 2886 | application | split or consolidate | 219 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/auto-pickup-game/prototype.py
+ 2341 | application | split or consolidate | 181 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/tag-game/game.html
+ 2161 | application | split or consolidate | 361 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/tower-defence-view.js
+ 1943 | application | split or consolidate | 179 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/2p-tag-game/game.html
+ 1622 | application | remove unserved page after route test | 349 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/auto-pickup-game/controller.html
+ 1596 | application | split or consolidate | 244 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/dobot-mg400-relay/prototype.py
+ 1553 | application | split or consolidate | 349 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/auto-pickup-game/game.html
+ 1524 | application | split or consolidate | 140 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/webcam/prototype.py
+ 1497 | tests | split or consolidate | 472 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_framework.py
+ 1371 | application | split or consolidate | 125 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/prototype.py
+ 1320 | application tooling | split or consolidate | 167 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/build_z_pixel_first_map.py
+ 1235 | map and asset tooling | split or consolidate | 240 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_tiled_level.py
+ 1205 | application | split or consolidate | 260 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/prototype.py
+ 1132 | application | remove unserved page after route test | 472 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/auto-pickup-game/calibrate.html
+ 1123 | application | split or consolidate | 2754 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/mobile.js
+ 1090 | application | split or consolidate | 134 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/atom-manager/prototype.py
+ 1058 | application | split or consolidate | 144 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/tag-game/controller.html
+ 1043 | firmware | split or consolidate | 103 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/atom-image-server/src/main.cpp
+  980 | application | watch growth | 144 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/2p-tag-game/controller.html
+  960 | application | watch growth | 143 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/2p-tag-game/controller.html
+  956 | application | watch growth | 121 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/dobot-mg400-relay/relay_arm.py
+  922 | application | watch growth | 2615 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-x/game.html
+  916 | application | watch growth | 143 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/tag-game/controller.html
+  915 | tests | watch growth | 245 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/cue_recovery.test.js
+  907 | map and asset tooling | watch growth | 158 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_z_pixel_first_map.py
+  888 | application | watch growth | 351 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/atom-manager/controller.html
+  863 | application | watch growth | 149 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/pickup-game/controller.html
+  863 | application | watch growth | 149 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/pickup-game/controller.html
+  846 | application | watch growth | 150 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-board/prototype.py
+  782 | application | keep by size | 187 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/cartesian-xyz-test/prototype.py
+  777 | application | keep by size | 187 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/cartesian-xyz-test/prototype.py
+  774 | application | keep by size | 148 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/camera-calibration/prototype.py
+  756 | application | keep by size | 2576 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag/game.html
+  744 | application | keep by size | 108 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hub/__init__.py
+  735 | application | keep by size | 125 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-x/prototype.py
+  711 | application | keep by size | 196 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-progress/store.py
+  699 | firmware | keep by size | 171 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/wt32-image-server/include/index_html.h
+  687 | firmware | keep by size | 175 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/atom-image-server/include/index_html.h
+  673 | application | keep by size | 156 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/playfield-areas/prototype.py
+  646 | application | keep by size | 149 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/joint-angles-test/index.html
+  627 | application | keep by size | 143 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/cartesian-xyz-test/index.html
+  627 | application | keep by size | 143 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/cartesian-xyz-test/index.html
+  627 | application | keep by size | 143 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/cartesian-xyz-test/index.html
+  626 | application | keep by size | 143 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/index.html
+  626 | application | keep by size | 143 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/index.html
+  620 | application | keep by size | 111 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/level_contract.py
+  620 | application | keep by size | 2048 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/ltz-score/index.html
+  620 | application | keep by size | 2048 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/ltz-score/index.html
+  606 | application | keep by size | 108 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/cartesian-xyz-test/prototype.py
+  590 | tests | keep by size | 367 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_board_tracking.py
+  581 | application | keep by size | 183 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/dobot-mg400-relay/controller.html
+  568 | application | keep by size | 104 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/joint-angles-test/prototype.py
+  562 | application | keep by size | 104 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/prototype.py
+  562 | application | keep by size | 104 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/prototype.py
+  560 | application | keep by size | 275 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/mobile-ltz-api/prototype.py
+  545 | application | keep by size | 6648 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/mobile.css
+  543 | application | keep by size | 217 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/playfield-areas/screen.html
+  539 | firmware | keep by size | 103 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/wt32-image-server/src/main.cpp
+  498 | application | keep by size | 89 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/cartesian-xyz-test/dobot_cartesian.py
+  498 | application | keep by size | 89 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/cartesian-xyz-test/dobot_cartesian.py
+  498 | application | keep by size | 89 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/cartesian-xyz-test/dobot_cartesian.py
+  494 | application | keep by size | 90 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/joint-angles-test/dobot_joint.py
+  494 | application | keep by size | 90 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/dobot_joint.py
+  494 | application | keep by size | 90 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/dobot_joint.py
+  493 | CAD tooling | keep by size | 415 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/TowerDefenseTable.py
+  493 | application | keep by size | 180 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-board/board_tracking.py
+  491 | application | keep by size | 129 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hub/dashboard.html
+  488 | application | keep by size | 144 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/playfield-areas/prototype.py
+  488 | application | keep by size | 144 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/playfield-areas/prototype.py
+  485 | application | keep by size | 3637 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/index.html
+  482 | tests | keep by size | 729 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_arm_bridge_smoke.cjs
+  481 | application | keep by size | 142 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/playfield-areas/controller.html
+  481 | application | keep by size | 142 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/playfield-areas/controller.html
+  481 | application | keep by size | 142 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/playfield-areas/controller.html
+  480 | application | keep by size | 208 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/auto-pickup-game/lesson.py
+  461 | application | keep by size | 129 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/playfield-areas/screen.html
+  461 | application | keep by size | 129 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/playfield-areas/screen.html
+  459 | application | keep by size | 108 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/cartesian-xyz-test/relay_client.py
+  454 | application | keep by size | 108 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/cartesian-xyz-test/relay_client.py
+  453 | CAD tooling | keep by size | 952 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r22.py
+  452 | tests | keep by size | 147 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_cue_targets.py
+  450 | CAD tooling | keep by size | 311 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r26.py
+  438 | application tooling | keep by size | 141 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/build_runtime_weapon_assets.py
+  426 | application | keep by size | 540 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/arm-bridge.js
+  422 | application | keep by size | 104 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/prototype.py
+  405 | application | keep by size | 103 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/atom-testing/prototype.py
+  405 | application | keep by size | 113 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/webcam/native-focus-lock/main.mm
+  402 | CAD tooling | keep by size | 797 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r20.py
+  396 | tests | keep by size | 247 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_control_journey.py
+  367 | application | keep by size | 255 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-x/stats.html
+  367 | application | keep by size | 255 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/stats.html
+  363 | CAD tooling | keep by size | 523 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r14.py
+  360 | tests | keep by size | 188 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_ltz_integration.py
+  354 | CAD tooling | keep by size | 867 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r21.py
+  354 | application | keep by size | 234 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/mobile_arm.py
+  348 | tests | keep by size | 127 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_cue.py
+  340 | application | keep by size | 161 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/webcam/controller.html
+  336 | application | keep by size | 85 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/joint-angles-test/relay_client.py
+  334 | application | keep by size | 85 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/relay_client.py
+  334 | application | keep by size | 85 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/relay_client.py
+  333 | application | keep by size | 88 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/cartesian-xyz-test/relay_client.py
+  324 | tests | keep by size | 135 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_atom_tower_buff.py
+  320 | application | keep by size | 125 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag/prototype.py
+  317 | application | keep by size | 254 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/journey.py
+  310 | CAD tooling | keep by size | 1230 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r06.py
+  308 | tests | keep by size | 258 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_teams.py
+  308 | tests | keep by size | 249 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_saved_calibrations.py
+  306 | tests | keep by size | 285 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_calibration_display.py
+  302 | tests | keep by size | 111 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_relay_reconnect.py
+  300 | application tooling | keep by size | 84 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/build_turret_activation_assets.py
+  295 | CAD tooling | keep by size | 876 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r05.py
+  290 | tests | keep by size | 145 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_progress.py
+  287 | application | keep by size | 92 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/pickup-game/prototype.py
+  284 | application | keep by size | 131 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/level-editor.js
+  284 | map and asset tooling | keep by size | 114 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/slice_game_art.py
+  283 | tests | keep by size | 303 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_calibration_marker_cache.py
+  282 | application | keep by size | 108 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/photon_defence/level_layout.py
+  282 | application | keep by size | 108 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/level_layout.py
+  281 | tests | keep by size | 119 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_webcam_lifecycle.py
+  272 | application tooling | keep by size | 275 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/gateway.py
+  271 | application | keep by size | 107 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/2p-tag-game/prototype.py
+  270 | application | keep by size | 145 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-board/cue_targets.py
+  269 | CAD tooling | keep by size | 554 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r13.py
+  269 | application | keep by size | 558 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/joint-rig.js
+  269 | tests | keep by size | 100 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_core_stack.py
+  266 | application | keep by size | 113 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/row_barriers.py
+  262 | tests | keep by size | 249 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_joint_rig.test.js
+  260 | application | keep by size | 676 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/data-flow.js
+  260 | application | keep by size | 230 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/mobile-ltz-api/monitor.js
+  258 | application | keep by size | 179 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/prototype.py
+  258 | application | keep by size | 111 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/camera-arm-overlay.js
+  254 | tests | keep by size | 199 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_row_barriers.py
+  253 | map and asset tooling | keep by size | 100 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_orc_enemy_sprite_pass.py
+  247 | output snapshots | retain historical output | 2144 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/output/joint-rig-before/mobile.js
+  247 | application | keep by size | 221 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-progress/prototype.py
+  245 | CAD tooling | keep by size | 423 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r18.py
+  243 | application | keep by size | 2042 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/camera-calibration/controller.html
+  243 | application | keep by size | 107 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/tag-game/prototype.py
+  236 | map and asset tooling | keep by size | 110 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_z_pixel_asset_pass.py
+  235 | CAD tooling | keep by size | 1261 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r10.py
+  234 | tests | keep by size | 123 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_brutes.py
+  232 | tests | keep by size | 238 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/cal2_boundary.test.js
+  230 | application | keep by size | 122 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/settings.py
+  228 | CAD tooling | keep by size | 428 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r16.py
+  227 | CAD tooling | keep by size | 271 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r25.py
+  223 | application | keep by size | 142 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/mobile_cue.py
+  223 | tests | keep by size | 157 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_api_monitor.py
+  220 | tests | keep by size | 154 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_motion_renderer.cjs
+  218 | tests | keep by size | 358 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_ltz_fixture.py
+  214 | application | keep by size | 164 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/pickup-game/game.html
+  213 | CAD tooling | keep by size | 697 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r03.py
+  211 | CAD tooling | keep by size | 282 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r24.py
+  210 | tests | keep by size | 256 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_calibration_browser.cjs
+  209 | map and asset tooling | keep by size | 128 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_sunken_road_assets.py
+  208 | tests | keep by size | 177 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/cue_start_feedback.test.js
+  207 | CAD tooling | keep by size | 537 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r11.py
+  205 | tests | keep by size | 136 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_camera_marker_alignment.py
+  205 | tests | keep by size | 218 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_xyz.py
+  200 | CAD tooling | keep by size | 521 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r15.py
+  199 | output snapshots | retain historical output | 7102 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/output/joint-rig-before/mobile.css
+  198 | application | keep by size | 447 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-board/board-diagnostics.js
+  196 | CAD tooling | keep by size | 1001 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r02.py
+  196 | application | keep by size | 441 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/turret-overlay.js
+  194 | tests | keep by size | 158 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_companions.py
+  193 | CAD tooling | keep by size | 665 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r25.py
+  189 | CAD tooling | keep by size | 1046 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r23.py
+  189 | CAD tooling | keep by size | 120 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/verify_robot_stand_slicer.py
+  188 | skill tooling | keep by size | 156 | /Users/kaur/Documents/ChatGPT/Tower defence/.agents/skills/tiled-modular-map-builder/scripts/validate_modular_map.py
+  188 | application tooling | keep by size | 96 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/build_turret_kling_keyframes.py
+  185 | skill tooling | keep by size | 132 | /Users/kaur/Documents/ChatGPT/Tower defence/.agents/skills/tiled-modular-map-builder/scripts/normalize_components.py
+  182 | tests | keep by size | 128 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_board_settings.py
+  181 | application | keep by size | 151 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/progress_link.py
+  178 | application | keep by size | 1112 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/journey.js
+  178 | tests | keep by size | 351 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/cue_selection.test.js
+  176 | CAD tooling | keep by size | 163 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/pipe_connection_test_v3.py
+  176 | tests | keep by size | 620 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_laser_tag_y_camera.py
+  174 | CAD tooling | keep by size | 675 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r08.py
+  173 | CAD tooling | keep by size | 603 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r24.py
+  173 | CAD tooling | keep by size | 845 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r04.py
+  173 | CAD tooling | keep by size | 570 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r19.py
+  173 | tests | keep by size | 110 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_module_isolation.py
+  171 | tests | keep by size | 107 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_content.py
+  167 | CAD tooling | keep by size | 374 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r17.py
+  167 | application | keep by size | 122 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/photon_defence/settings.py
+  166 | application | keep by size | 138 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/mobile-ltz-api/delivery_diagnostics.py
+  164 | application | keep by size | 1662 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/game.html
+  163 | CAD tooling | keep by size | 623 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r09.py
+  163 | map and asset tooling | keep by size | 115 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_core_access_plaza.py
+  161 | CAD tooling | keep by size | 599 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_pipe_test_r21.py
+  155 | application | keep by size | 114 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/auto-pickup-game/tracking_output.py
+  154 | application | keep by size | 117 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hub/live.py
+  153 | tests | keep by size | 191 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_level_editor.py
+  152 | tests | keep by size | 250 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_cue_browser.cjs
+  150 | CAD tooling | keep by size | 675 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r07.py
+  150 | tests | keep by size | 145 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_relay_z_limits.py
+  149 | tests | keep by size | 303 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/progression_review_browser.cjs
+  146 | CAD tooling | keep by size | 163 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/pipe_connection_test_r21.py
+  145 | CAD tooling | keep by size | 184 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/pipe_connection_test_p6.py
+  145 | firmware | keep by size | 111 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/atom-image-server/include/names_discovery.h
+  145 | firmware | keep by size | 111 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/wt32-image-server/include/names_discovery.h
+  145 | application | keep by size | 2354 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/auto-pp-cal-2/calibrate2.html
+  145 | application | keep by size | 2354 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/robot_controls/calibrate2.html
+  145 | tests | keep by size | 183 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_ltz.py
+  145 | application tooling | keep by size | 99 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/extract_video_frames.swift
+  144 | tests | keep by size | 161 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_gateway.py
+  142 | map and asset tooling | keep by size | 102 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_seam_safe_roads.py
+  138 | CAD tooling | keep by size | 187 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/finish.py
+  138 | application | keep by size | 96 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hub/theme.css
+  138 | application | keep by size | 116 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-board/board_occupancy.py
+  138 | map and asset tooling | keep by size | 148 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_z_pixel_tiled_tilesets.py
+  136 | application | keep by size | 2240 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/index.html
+  135 | application | keep by size | 264 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/atom-testing/controller.html
+  133 | output snapshots | retain historical output | 129 | /Users/kaur/Documents/ChatGPT/Tower defence/output/calibration-analysis-2026-09-22/analyze.py
+  132 | tests | keep by size | 187 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_camera_contracts.py
+  131 | tests | keep by size | 211 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_performance.py
+  130 | CAD tooling | keep by size | 321 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_pipe_test_v3.py
+  127 | CAD tooling | keep by size | 321 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_pipe_test_p6.py
+  125 | application | keep by size | 107 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/2p-tag-game/controller.html
+  123 | firmware | keep by size | 89 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/atom-image-server/tools/atomctl.py
+  123 | application | keep by size | 107 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/tag-game/controller.html
+  123 | tests | keep by size | 150 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/artwork_recovery_renderer.cjs
+  122 | application | keep by size | 167 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/presets.py
+  121 | tests | keep by size | 366 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_browser_performance.cjs
+  121 | tests | keep by size | 103 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_webcam_screen_detection.py
+  121 | application tooling | keep by size | 147 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/service.py
+  120 | tests | keep by size | 203 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_arm_trajectory.test.js
+  116 | tests | keep by size | 259 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/calibration_commands.test.js
+  116 | tests | keep by size | 269 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_api_monitor_browser.cjs
+  115 | CAD tooling | keep by size | 678 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r21.py
+  115 | CAD tooling | keep by size | 597 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/verify_pipe_test_slicer.py
+  114 | CAD tooling | keep by size | 657 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r13.py
+  114 | application | keep by size | 1123 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/ltz-score/score.js
+  114 | application | keep by size | 1123 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/ltz-score/score.js
+  114 | tests | keep by size | 169 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_tracking_startup.test.js
+  114 | tests | keep by size | 215 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_xyz_controls_browser.cjs
+  113 | application | keep by size | 1751 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/tag-invaders/game.html
+  113 | tests | keep by size | 342 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/y_data_flow.cjs
+  112 | application | keep by size | 147 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/camera-calibration/screen.html
+  110 | tests | keep by size | 157 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_laser_tag_y_markers.py
+  109 | application | keep by size | 126 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/tag-invaders/prototype.py
+  109 | tests | keep by size | 126 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_connection_log.py
+  109 | application tooling | keep by size | 524 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/api.php
+  108 | CAD tooling | keep by size | 696 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r22.py
+  108 | CAD tooling | keep by size | 490 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/revision_r12.py
+  108 | tests | keep by size | 183 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/companions_browser.cjs
+  106 | CAD tooling | keep by size | 759 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r20.py
+  106 | application | keep by size | 1888 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/index.html
+  105 | tests | keep by size | 203 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/cal2_motion.test.js
+  105 | tests | keep by size | 236 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_xyz_browser.cjs
+  105 | tests | keep by size | 120 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_calibration_safety.py
+  105 | tests | keep by size | 166 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/webcam_status.test.js
+  104 | application | keep by size | 86 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hubctl.py
+  104 | application | keep by size | 119 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/mobile-ltz-api/connection_log.py
+  104 | application | keep by size | 277 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/mobile-ltz/prototype.py
+  104 | application | keep by size | 277 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/mobile-ltz/prototype.py
+  104 | tests | keep by size | 165 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_turret.py
+  103 | tests | keep by size | 151 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_performance_renderer.cjs
+  102 | tests | keep by size | 165 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_viewport.test.js
+  102 | tests | keep by size | 133 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/turret_bases_browser.cjs
+  100 | firmware | keep by size | 80 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/wt32-image-server/include/lgfx_wt32.h
+   99 | tests | keep by size | 212 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_relock_browser.cjs
+   98 | application | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/network.js
+   97 | CAD tooling | keep by size | 942 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r23.py
+   97 | tests | keep by size | 124 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_input_report.py
+   97 | application tooling | keep by size | 160 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/progression_balance.py
+   95 | map and asset tooling | keep by size | 130 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/validate_z_pixel_asset_pass.py
+   94 | CAD tooling | keep by size | 671 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/drawings_r10.py
+   93 | tests | keep by size | 221 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_targeting_browser.cjs
+   93 | tests | keep by size | 163 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_client_build.py
+   92 | application | keep by size | 266 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/calibration-history.js
+   92 | application | keep by size | 118 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/companions.py
+   92 | application | keep by size | 104 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/level_assets.py
+   92 | tests | keep by size | 224 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_waypoint_browser.cjs
+   89 | tests | keep by size | 137 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_relay_calibration_reservation.py
+   88 | CAD tooling | keep by size | 463 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout.py
+   88 | application | keep by size | 177 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/mobile-ltz-api/camera_view.py
+   88 | tests | keep by size | 365 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_progression_browser.cjs
+   87 | tests | keep by size | 281 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_camera_notice_smoke.cjs
+   87 | tests | keep by size | 184 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_clear_view_browser.cjs
+   86 | tests | keep by size | 131 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/turret_deployment_renderer.cjs
+   85 | tests | keep by size | 100 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_fps_renderer.cjs
+   85 | tests | keep by size | 102 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_enemy_motion_guides.py
+   83 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r03.py
+   83 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r04.py
+   82 | application tooling | keep by size | 175 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/validate_photon_map.py
+   81 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r02.py
+   81 | CAD tooling | keep by size | 129 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r26.py
+   81 | application tooling | keep by size | 154 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/measure-delivery.py
+   80 | application | keep by size | 443 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/physical-arm.js
+   80 | tests | keep by size | 139 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/relay_rotation_diagnostics.cjs
+   79 | skill tooling | keep by size | 133 | /Users/kaur/Documents/ChatGPT/Tower defence/.agents/skills/tiled-modular-map-builder/scripts/tiled_verify.py
+   79 | CAD tooling | keep by size | 514 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r14.py
+   79 | output snapshots | retain historical output | 127 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/output/joint-rig-before/prototype.py
+   79 | application | keep by size | 157 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/ltx/prototype.py
+   79 | tests | keep by size | 317 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/gm_saved_calibration_browser.cjs
+   78 | application | keep by size | 157 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/ltx/prototype.py
+   78 | tests | keep by size | 217 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_xyz_direction_browser.cjs
+   76 | CAD tooling | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r08.py
+   76 | CAD tooling | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r09.py
+   76 | CAD tooling | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r10.py
+   76 | CAD tooling | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r12.py
+   76 | tests | keep by size | 98 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_brute_renderer.cjs
+   75 | CAD tooling | keep by size | 958 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/load_review_r10.py
+   75 | tests | keep by size | 138 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/atom_buff_browser.cjs
+   75 | tests | keep by size | 252 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_sketch_drag.test.js
+   74 | tests | keep by size | 156 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/laser_tag_y_commands.test.js
+   73 | tests | keep by size | 300 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/calibration_exposure.test.js
+   72 | tests | keep by size | 251 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/ltz_player_controls_browser.cjs
+   72 | tests | keep by size | 130 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/relay_rotation_browser.cjs
+   71 | CAD tooling | keep by size | 206 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/clean_dxf_r10.py
+   71 | output snapshots | retain historical output | 572 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/output/joint-rig-before/index.html
+   71 | application | keep by size | 2193 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/settings.html
+   71 | tests | keep by size | 251 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_physical_smoke.cjs
+   70 | tests | keep by size | 246 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_boundary_browser.cjs
+   69 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r05.py
+   69 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r06.py
+   69 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r07.py
+   69 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r08.py
+   69 | CAD tooling | keep by size | 464 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/make_layout_r09.py
+   69 | tests | keep by size | 288 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_turret_browser.cjs
+   69 | tests | keep by size | 127 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_relay_rotation_diagnostics.py
+   68 | firmware | keep by size | 96 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/atom-image-server/tools/send_aruco.py
+   68 | tests | keep by size | 149 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_row_simulation.py
+   67 | tests | keep by size | 247 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_video_smoke.cjs
+   67 | tests | keep by size | 199 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_control_presets.py
+   66 | application | keep by size | 478 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/index.html
+   66 | tests | keep by size | 183 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_touch_navigation_browser.cjs
+   65 | application | keep by size | 76 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/stop-all.sh
+   65 | tests | keep by size | 255 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_arm_trajectory_browser.cjs
+   64 | output snapshots | retain historical output | 952 | /Users/kaur/Documents/ChatGPT/Tower defence/output/tower-defense-table/R13-plan/make_preview.py
+   63 | CAD tooling | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r06.py
+   63 | CAD tooling | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r07.py
+   62 | CAD tooling | keep by size | 330 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r05.py
+   62 | tests | keep by size | 225 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_base_step_smoke.cjs
+   62 | tests | keep by size | 196 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_cue_bullseye.test.js
+   62 | tests | keep by size | 169 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_journey_render_browser.cjs
+   61 | application | keep by size | 114 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/atom_buff.py
+   61 | application | keep by size | 197 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/live-game.js
+   61 | tests | keep by size | 191 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_tracking_startup_browser.cjs
+   61 | tests | keep by size | 127 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_content_renderer.cjs
+   61 | map and asset tooling | keep by size | 105 | /Users/kaur/Documents/ChatGPT/Tower defence/tools/build_center_road_adapters.py
+   60 | tests | keep by size | 342 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/calibration_marker_loading_browser.cjs
+   60 | application tooling | keep by size | 127 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/export.py
+   59 | application | keep by size | 259 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/mobile-ltz-api/index.html
+   59 | tests | keep by size | 281 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/ltz_browser.cjs
+   58 | application | keep by size | 80 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hub/landing.html
+   58 | application | keep by size | 94 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-board/marker_quality.py
+   58 | tests | keep by size | 138 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/atom_buff_renderer.cjs
+   58 | tests | keep by size | 190 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/ltz_browser_fixture.py
+   58 | tests | keep by size | 91 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_turret_kling_keyframes.py
+   58 | output snapshots | retain historical output | 275 | /Users/kaur/Documents/ChatGPT/Tower defence/output/tower-defense-table/R14-plan/make_preview.py
+   56 | tests | keep by size | 135 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/hub_navigation.test.js
+   56 | tests | keep by size | 160 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_game_sync.test.js
+   55 | CAD tooling | keep by size | 437 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/audit_r13.py
+   55 | application | keep by size | 230 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/viewport.js
+   54 | application | keep by size | 80 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hub/login.html
+   54 | application | keep by size | 213 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/connection-log.js
+   53 | tests | keep by size | 154 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/calibration_vacuum.test.js
+   53 | tests | keep by size | 94 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_cal2_capture.py
+   52 | tests | keep by size | 388 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_z_presets_browser.cjs
+   52 | tests | keep by size | 93 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_cartesian_boundary_recovery.py
+   51 | tests | keep by size | 148 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/ltz_test_players_browser.cjs
+   51 | tests | keep by size | 101 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_photon_board_preview.py
+   50 | application | keep by size | 861 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/screen.html
+   50 | tests | keep by size | 126 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/photon_performance_fixture.py
+   50 | tests | keep by size | 174 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/virtual_upgrades_browser.cjs
+   47 | tests | keep by size | 153 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_diagnostics_browser.cjs
+   47 | tests | keep by size | 195 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_xyz_steps_smoke.cjs
+   45 | tests | keep by size | 114 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_api_monitor_fixture.py
+   44 | application | keep by size | 930 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/auto-pp-cal-2/controller.html
+   44 | tests | keep by size | 165 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/ltz_control_ui.cjs
+   43 | application | keep by size | 83 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/auto-pickup-game/prototype.py
+   43 | tests | keep by size | 152 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_y_data_flow.py
+   42 | CAD tooling | keep by size | 151 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/verify_pipe_test_scale.py
+   42 | tests | keep by size | 152 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_cue_height.test.js
+   42 | tests | keep by size | 165 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_mobile_export.py
+   39 | CAD tooling | keep by size | 500 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/prepare_package_r12.py
+   39 | application | keep by size | 92 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/hub.py
+   39 | application | keep by size | 108 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/companion_layout.py
+   39 | tests | keep by size | 229 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_phone_browser.cjs
+   38 | application | keep by size | 365 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/screen.html
+   38 | application | keep by size | 78 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/auto-pickup-game/prototype.py
+   38 | tests | keep by size | 123 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/relay_z_limits_fixture.py
+   38 | tests | keep by size | 157 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/test_test_player_api.py
+   38 | tests | keep by size | 113 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/virtual_upgrades_fixture.py
+   36 | CAD tooling | keep by size | 354 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/rotate_camera_r13.py
+   35 | tests | keep by size | 178 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_connection_log.test.js
+   35 | tests | keep by size | 206 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_guided_motion_browser.cjs
+   34 | CAD tooling | keep by size | 186 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r15.py
+   34 | CAD tooling | keep by size | 192 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r16.py
+   34 | CAD tooling | keep by size | 192 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r17.py
+   34 | CAD tooling | keep by size | 215 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r18.py
+   34 | CAD tooling | keep by size | 215 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/package_r19.py
+   34 | application | keep by size | 113 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/webcam/native-focus-lock/build-app.sh
+   33 | application tooling | keep by size | 120 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/build_turret_activation_from_videos.sh
+   32 | application | keep by size | 78 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/auto-pp-x/prototype.py
+   31 | application | keep by size | 86 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/auto-pp-x/prototype.py
+   30 | application | keep by size | 88 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/2p-tag-game/prototype.py
+   30 | application | keep by size | 80 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/pickup-game/prototype.py
+   30 | application | keep by size | 83 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/tag-game/prototype.py
+   30 | application | keep by size | 88 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/2p-tag-game/prototype.py
+   30 | application | keep by size | 80 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/pickup-game/prototype.py
+   30 | application | keep by size | 83 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/tag-game/prototype.py
+   29 | application | keep by size | 2548 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-board/index.html
+   29 | application | keep by size | 204 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/ltz-score/prototype.py
+   29 | application | keep by size | 204 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/ltz-score/prototype.py
+   29 | tests | keep by size | 256 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_joint_modes_browser.cjs
+   29 | tests | keep by size | 131 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/saved_calibration_fixture.py
+   26 | application | keep by size | 85 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/webcam/view.html
+   26 | tests | keep by size | 341 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_three_way_browser.cjs
+   25 | tests | keep by size | 191 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_live_feed.test.js
+   25 | tests | keep by size | 200 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_stream_parser.test.js
+   24 | CAD tooling | keep by size | 134 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/finish_r02.py
+   24 | application | keep by size | 954 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/art.html
+   24 | tests | keep by size | 234 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_artwork_renderer.cjs
+   21 | output snapshots | retain historical output | 505 | /Users/kaur/Documents/ChatGPT/Tower defence/output/mg400-green-controls-20260918/process-assets.cjs
+   20 | application | keep by size | 78 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/run-all.sh
+   20 | application | keep by size | 82 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/auto-pp-cal-2/prototype.py
+   20 | tests | keep by size | 141 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/ltz_operation_id.test.js
+   19 | CAD tooling | keep by size | 179 | /Users/kaur/Documents/ChatGPT/Tower defence/cad/TowerDefenseTable/inventory_r22.py
+   19 | application | keep by size | 71 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/auto-pp-cal-2/prototype.py
+   19 | application | keep by size | 71 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/auto-pp-cal-2/prototype.py
+   19 | tests | keep by size | 310 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_auto_join_browser.cjs
+   19 | tests | keep by size | 417 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_limit_recovery_smoke.cjs
+   18 | application | keep by size | 677 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/data-flow.css
+   18 | tests | keep by size | 166 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/relay_z_limits.test.js
+   17 | application | keep by size | 189 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/calibration-display.js
+   15 | application | keep by size | 134 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/mobile_ltz/operation-id.js
+   14 | application | keep by size | 70 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/photon_defence/__init__.py
+   13 | tests | keep by size | 134 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tests/mobile_network.test.js
+   12 | application | keep by size | 177 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/calibration-history.css
+   10 | application | keep by size | 59 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-game/photon_game_runtime/__init__.py
+    9 | application | keep by size | 4245 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/mobile-ltz-api/monitor.css
+    6 | application tooling | keep by size | 77 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/index.php
+    5 | application | keep by size | 234 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-y/calibration-display.css
+    5 | application tooling | keep by size | 63 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/Start Mobile LTZ.command
+    5 | application tooling | keep by size | 77 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/tools/mobile-ltz/game_server.py
+    3 | application | keep by size | 1082 | /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-progress/index.html
+
+Exact duplicate groups of at least 100 lines (equality does not by itself authorize merging mutable state):
+627 lines each; 3 copies; 1254 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/cartesian-xyz-test/index.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/cartesian-xyz-test/index.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/cartesian-xyz-test/index.html
+498 lines each; 3 copies; 996 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/cartesian-xyz-test/dobot_cartesian.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/cartesian-xyz-test/dobot_cartesian.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/cartesian-xyz-test/dobot_cartesian.py
+494 lines each; 3 copies; 988 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/joint-angles-test/dobot_joint.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/dobot_joint.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/dobot_joint.py
+481 lines each; 3 copies; 962 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/playfield-areas/controller.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/playfield-areas/controller.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/playfield-areas/controller.html
+863 lines each; 2 copies; 863 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/pickup-game/controller.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/pickup-game/controller.html
+626 lines each; 2 copies; 626 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/index.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/index.html
+620 lines each; 2 copies; 620 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/ltz-score/index.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/ltz-score/index.html
+562 lines each; 2 copies; 562 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/prototype.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/prototype.py
+488 lines each; 2 copies; 488 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/playfield-areas/prototype.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/playfield-areas/prototype.py
+461 lines each; 2 copies; 461 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/playfield-areas/screen.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/playfield-areas/screen.html
+334 lines each; 2 copies; 334 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/joint-angles-test/relay_client.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/joint-angles-test/relay_client.py
+282 lines each; 2 copies; 282 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/laser-tag-z/photon_defence/level_layout.py
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/gamemaster/prototypes/photon-level/level_layout.py
+145 lines each; 2 copies; 145 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/atom-image-server/include/names_discovery.h
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/ESP/wt32-image-server/include/names_discovery.h
+145 lines each; 2 copies; 145 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/auto-pp-cal-2/calibrate2.html
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/shared/robot_controls/calibrate2.html
+114 lines each; 2 copies; 114 duplicate lines
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/green/prototypes/ltz-score/score.js
+  /Users/kaur/Documents/ChatGPT/Tower defence/manual-override/sandboxes/purple/prototypes/ltz-score/score.js
+
+Notes:
+The two simulation engines share 4099 matching lines; they are not identical and have different level inputs and behavior.
+The shared robot controller and Green Auto Pickup controller share 5039 matching lines; retain behavior differences when consolidating.
+Longest-line bytes are a diagnostic only: a short file can still contain densely packed code.
+The proposed standard is 800-line warning / 1000-line ceiling for maintained authored source, with explicit temporary exceptions and no padding of small files.

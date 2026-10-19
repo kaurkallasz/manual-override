@@ -1,0 +1,72 @@
+[
+  {
+    "name": "phone-small",
+    "cards": 15,
+    "receipt": "RESULT SAVED\nCenter stack victory\n105 kills\n170 kill credits\n+849 center health bonus · 80%\n1,019 earned\n7:30\n\n20 breakers × 2 · 5 large brutes × 10 · 70 grunts × 1 · 10 runners × 1\n\nJoint · 1/3 wins",
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "tings and loadouts; thick lines show the trailing three-game mean within that group.\n\nCompleted games; tap a game for its saved details\nControl\tKill credits\tSeconds\tResult\nJoint\t170\t450.0\twon\nCompletion time by control\n\nJoint: best 450.0s, recent 450.0s · XYZ: unavailable · Targeting: unavailable · Cue: unavailable\n\nSelect a graph point or table game to inspect its saved details.\n\nBack to controls",
+    "errors": []
+  },
+  {
+    "name": "phone",
+    "cards": 15,
+    "receipt": "RESULT SAVED\nCenter stack victory\n105 kills\n170 kill credits\n+849 center health bonus · 80%\n1,019 earned\n7:30\n\n20 breakers × 2 · 5 large brutes × 10 · 70 grunts × 1 · 10 runners × 1\n\nJoint · 1/3 wins",
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "tings and loadouts; thick lines show the trailing three-game mean within that group.\n\nCompleted games; tap a game for its saved details\nControl\tKill credits\tSeconds\tResult\nJoint\t170\t450.0\twon\nCompletion time by control\n\nJoint: best 450.0s, recent 450.0s · XYZ: unavailable · Targeting: unavailable · Cue: unavailable\n\nSelect a graph point or table game to inspect its saved details.\n\nBack to controls",
+    "errors": []
+  },
+  {
+    "name": "tablet",
+    "cards": 15,
+    "receipt": "RESULT SAVED\nCenter stack victory\n105 kills\n170 kill credits\n+849 center health bonus · 80%\n1,019 earned\n7:30\n\n20 breakers × 2 · 5 large brutes × 10 · 70 grunts × 1 · 10 runners × 1\n\nJoint · 1/3 wins",
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "tings and loadouts; thick lines show the trailing three-game mean within that group.\n\nCompleted games; tap a game for its saved details\nControl\tKill credits\tSeconds\tResult\nJoint\t170\t450.0\twon\nCompletion time by control\n\nJoint: best 450.0s, recent 450.0s · XYZ: unavailable · Targeting: unavailable · Cue: unavailable\n\nSelect a graph point or table game to inspect its saved details.\n\nBack to controls",
+    "errors": []
+  },
+  {
+    "name": "tablet-wide",
+    "cards": 15,
+    "receipt": "RESULT SAVED\nCenter stack victory\n105 kills\n170 kill credits\n+849 center health bonus · 80%\n1,019 earned\n7:30\n\n20 breakers × 2 · 5 large brutes × 10 · 70 grunts × 1 · 10 runners × 1\n\nJoint · 1/3 wins",
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "tings and loadouts; thick lines show the trailing three-game mean within that group.\n\nCompleted games; tap a game for its saved details\nControl\tKill credits\tSeconds\tResult\nJoint\t170\t450.0\twon\nCompletion time by control\n\nJoint: best 450.0s, recent 450.0s · XYZ: unavailable · Targeting: unavailable · Cue: unavailable\n\nSelect a graph point or table game to inspect its saved details.\n\nBack to controls",
+    "errors": []
+  },
+  {
+    "name": "score-green",
+    "cards": 15,
+    "receipt": "RESULT SAVED\nCenter stack victory\n105 kills\n170 kill credits\n+849 center health bonus · 80%\n1,019 earned\n7:30\n\n20 breakers × 2 · 5 large brutes × 10 · 70 grunts × 1 · 10 runners × 1\n\nJoint · 1/3 wins",
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "onfigurations. More comparable runs are needed for a recent-improvement percentage.\n\n0\n47\n94\n140\n187\n10/10/2026\n10/10/2026\n\nSelect a result for details. Dashed line: trailing three-result mean within a comparable configuration.\n\nCompleted\tMethod\tOutcome\tScore\tActive time\tPartner\tOrcs released / scheduled\tProgression\n10/10/2026, 11:37:08 PM\tJoint-angle\twon\t170\t7:30.0\tpurple pilot\t0 / —\tWin credited",
+    "errors": []
+  },
+  {
+    "name": "score-purple",
+    "cards": 15,
+    "receipt": "RESULT SAVED\nCenter stack victory\n105 kills\n170 kill credits\n+849 center health bonus · 80%\n1,019 earned\n7:30\n\n20 breakers × 2 · 5 large brutes × 10 · 70 grunts × 1 · 10 runners × 1\n\nJoint · 1/3 wins",
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "configurations. More comparable runs are needed for a recent-improvement percentage.\n\n0\n47\n94\n140\n187\n10/10/2026\n10/10/2026\n\nSelect a result for details. Dashed line: trailing three-result mean within a comparable configuration.\n\nCompleted\tMethod\tOutcome\tScore\tActive time\tPartner\tOrcs released / scheduled\tProgression\n10/10/2026, 11:37:08 PM\tJoint-angle\twon\t170\t7:30.0\tgreen pilot\t0 / —\tWin credited",
+    "errors": []
+  },
+  {
+    "name": "y-game",
+    "cards": 0,
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "locks through the selected control tier for Green and Purple mobile practice. Physical play uses the calibrated robot controller. Targeting uses tap-preview and Move; Cue autonomy runs queued pickup and placement.\n\nApply test unlocks\nUnlock all L4\nAll base levels\nUsing saved-player upgrades, or base levels without a player.\nPRESENTATION LOG\nY is display-only. Commands are validated by Photon Game.",
+    "errors": []
+  },
+  {
+    "name": "y-screen",
+    "cards": 0,
+    "overflow": false,
+    "missingImages": [],
+    "bodyText": "Match credits · 105 kills\n1,019\nwon · Wave 0 / 12 · 0 orcs",
+    "errors": []
+  }
+]

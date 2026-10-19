@@ -227,7 +227,7 @@ class LessonStore:
             session = state['sessions'].get(session_id)
             if session and session['side'] != side:
                 raise ValueError('session belongs to the other player')
-            if session and (session['player_id'] != value.get('player_id') or session['practice'] != bool(value.get('practice'))):
+            if session and (session['player_id'] != value.get('player_id') or session.get('purpose','progression') != value.get('purpose','progression')):
                 raise ValueError('calibration session identity changed')
             if session is None:
                 arm = copy.deepcopy(calibration['arms'][side])
@@ -235,7 +235,7 @@ class LessonStore:
                     point.update(camera=None, pose={'set': False})
                 arm['parallax_points'] = {str(marker): None for marker in (31,35,33,34)}
                 session = {'id': session_id, 'side': side, 'player_id': value.get('player_id'),
-                           'practice': bool(value.get('practice')), 'draft': arm, 'captures': {},
+                           'purpose':value.get('purpose','progression'), 'draft': arm, 'captures': {},
                            'ground': {}, 'stage': 'points', 'arrivals': [], 'calibration_revision': None,
                            'piece_ids':value.get('piece_ids',[]),'pickup_evidence':None}
                 state['sessions'][session_id] = session
@@ -321,6 +321,40 @@ class LessonStore:
             self._save(state)
             return self.snapshot()
 
+    def undo(self, side, value):
+        """Remove one draft measurement without capturing or moving the arm."""
+        action, marker = value.get('action'), value.get('marker')
+        markers = range(30,36) if action == 'undo_capture' else (31,35,33,34)
+        if action not in ('undo_capture','undo_raised') or type(marker) is not int or marker not in markers:
+            raise ValueError('valid calibration sample required')
+        with self.lock:
+            state = copy.deepcopy(self.state)
+            session = self._active(state, side, value.get('id'))
+            if session['stage'] not in ('points','perspective'):
+                raise ValueError('Only unfinished calibration measurements can be undone')
+            key = str(marker)
+            if action == 'undo_capture':
+                if key not in session['captures']:
+                    return self.snapshot()
+                point = next(p for p in session['draft']['points'].values() if p['marker'] == marker)
+                point.update(camera=None, pose={'set':False})
+                point.pop('camera_observed_at',None)
+                point.pop('camera_cached',None)
+                session['captures'].pop(key)
+                session['ground'].pop(key,None)
+                if marker in (31,35,33,34):
+                    session['draft']['parallax_points'][key] = None
+                session['stage'] = 'points'
+                set_capture_heights(session)
+            else:
+                if session['stage'] != 'perspective':
+                    raise ValueError('Capture all six arm points before editing raised samples')
+                if not session['draft']['parallax_points'].get(key):
+                    return self.snapshot()
+                session['draft']['parallax_points'][key] = None
+            self._save(state)
+            return self.snapshot()
+
     def parallax(self, side, value, measurement):
         marker = value.get('marker')
         if type(marker) is not int or marker not in (31,35,33,34):
@@ -388,7 +422,7 @@ class LessonStore:
             session = self._measured_session(state, side, session_id) if offline else self._active(state, side, session_id)
             session.update(stage='tutorial', calibration_revision=revision, committed_at=time.time())
             record={'id':session_id+':'+str(revision),'side':side,'revision':revision,
-                    'saved_at':session['committed_at'],'practice':session['practice'],
+                    'saved_at':session['committed_at'],'purpose':session.get('purpose','progression'),
                     'draft':copy.deepcopy(session['draft']),'transport_height':session.get('transport_height'),
                     'camera_revision':session.get('camera_revision')}
             state.setdefault('saved_calibrations',{})[record['id']]=record

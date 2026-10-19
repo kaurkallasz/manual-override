@@ -1,4 +1,5 @@
 """Gamemaster camera calibration using OpenCV's chessboard lens model."""
+from shared import delay_trace as trace
 
 import base64
 import json
@@ -47,6 +48,7 @@ _enabled = True
 _board_found = False
 _board_checked_at = 0.0
 _corrected_jpeg = None
+_mobile_preview = None
 _corrected_frame_at = 0.0
 _corrected_size = (0, 0)
 _corrected_thread = None
@@ -64,7 +66,7 @@ MINIMUM_PATTERN_SAMPLES = 6
 
 def _show_pattern(pattern):
     global _pattern_revision, _target_pattern
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _pattern_revision += 1
         _target_pattern = dict(pattern)
         return _pattern_revision
@@ -77,7 +79,7 @@ def _restore_alignment_pattern():
 def _wait_for_pattern(revision, timeout=2.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        with _lock:
+        with trace.locked(_lock, 'calibration.state_lock'):
             if _pattern_ack_revision >= revision:
                 return True
         time.sleep(0.025)
@@ -94,15 +96,16 @@ def hub_init(ctx):
 
 
 def hub_stop():
-    global _webcam, _hub_ctx, _corrected_thread, _corrected_jpeg, _corrected_frame_at
+    global _webcam, _hub_ctx, _corrected_thread, _corrected_jpeg, _corrected_frame_at, _mobile_preview
     _corrected_stop.set()
     thread = _corrected_thread
     if thread and thread.is_alive():
         thread.join(timeout=1)
     _webcam_read("set_tag_transformer", "hhh.webcam.transformer", None)
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _corrected_thread = None
         _corrected_jpeg = None
+        _mobile_preview = None
         _corrected_frame_at = 0
         _webcam = None
         _hub_ctx = None
@@ -194,6 +197,7 @@ def _frame():
     return frame if isinstance(frame, np.ndarray) and frame.ndim == 3 else None
 
 
+@trace.traced('calibration.corners')
 def _corners(frame, max_width=None):
     """Find board corners, optionally on a smaller image to protect capture FPS."""
     scale = 1.0
@@ -226,18 +230,19 @@ def _corners(frame, max_width=None):
     return found, corners
 
 
+@trace.traced('calibration.cached_board_check')
 def _cached_board_check(frame):
     """Run at most one lightweight board search per second across all clients."""
     global _board_found, _board_checked_at
     now = time.monotonic()
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         if now - _board_checked_at < 1.0:
             return _board_found
         # Reserve the check before doing the expensive OpenCV call so concurrent
         # status requests do not all start their own detection.
         _board_checked_at = now
     found, _ = _corners(frame, DETECT_MAX_WIDTH)
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _board_found = bool(found)
     return bool(found)
 
@@ -315,6 +320,7 @@ def _usable_calibration(calibration):
         return False
 
 
+@trace.traced('calibration.undistort')
 def _undistort(frame, calibration):
     height, width = frame.shape[:2]
     key = (id(calibration), width, height)
@@ -329,24 +335,40 @@ def _undistort(frame, calibration):
     return cv2.remap(frame, maps[0], maps[1], cv2.INTER_LINEAR)
 
 
+@trace.traced('calibration.mobile_preview_jpeg')
+def _mobile_preview_jpeg(frame, original):
+    """Bound presentation bandwidth without changing tracking coordinates."""
+    height, width = frame.shape[:2]
+    scale = min(1, 1920 / width, 1080 / height)
+    if scale == 1:
+        return original, (width, height)
+    size = (round(width * scale), round(height * scale))
+    resized = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+    ok, buf = trace.call('calibration.jpeg', cv2.imencode, '.jpg', resized, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+    return (buf.tobytes(), size) if ok else None
+
+
 def _corrected_worker():
     """Encode correction once; all Gamemaster/player viewers share this cache."""
-    global _corrected_jpeg, _corrected_frame_at, _corrected_size
+    global _corrected_jpeg, _corrected_frame_at, _corrected_size, _mobile_preview
     while not _corrected_stop.is_set():
         frame = _frame()
         if frame is not None:
-            with _lock:
+            with trace.locked(_lock, 'calibration.state_lock'):
                 calibration = _calibration
             if _usable_calibration(calibration):
                 try:
                     frame = _undistort(frame, calibration)
                 except cv2.error:
                     pass
-            ok, buf = cv2.imencode(
+            ok, buf = trace.call('calibration.jpeg', cv2.imencode,
                 ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if ok:
-                with _lock:
-                    _corrected_jpeg = buf.tobytes()
+                jpeg = buf.tobytes()
+                mobile = _mobile_preview_jpeg(frame, jpeg)
+                with trace.locked(_lock, 'calibration.state_lock'):
+                    _corrected_jpeg = jpeg
+                    _mobile_preview = mobile
                     _corrected_frame_at = time.time()
                     _corrected_size = (frame.shape[1], frame.shape[0])
         _corrected_stop.wait(1 / 12)
@@ -354,7 +376,7 @@ def _corrected_worker():
 
 def _ensure_corrected_worker():
     global _corrected_thread
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         if _corrected_stop.is_set():
             return
         if _corrected_thread is None or not _corrected_thread.is_alive():
@@ -366,7 +388,7 @@ def _ensure_corrected_worker():
 def _corrected_stream():
     _ensure_corrected_worker()
     while True:
-        with _lock:
+        with trace.locked(_lock, 'calibration.state_lock'):
             jpeg = _corrected_jpeg
         if jpeg:
             yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
@@ -380,7 +402,7 @@ def _preview_jpeg():
         cv2.putText(frame, "Open a camera in the Webcam tab", (45, 360),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (150, 160, 175), 2)
     else:
-        with _lock:
+        with trace.locked(_lock, 'calibration.state_lock'):
             calibration = _calibration
             enabled = _enabled
         if _usable_calibration(calibration) and enabled:
@@ -393,7 +415,7 @@ def _preview_jpeg():
         cv2.putText(frame, label, (18, 35), cv2.FONT_HERSHEY_SIMPLEX,
                     0.8, (80, 255, 120) if label == "CORRECTED" else (70, 210, 255),
                     2, cv2.LINE_AA)
-    ok, buf = cv2.imencode(".jpg", frame,
+    ok, buf = trace.call('calibration.jpeg', cv2.imencode, ".jpg", frame,
                            [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
     return buf.tobytes() if ok else None
 
@@ -478,12 +500,13 @@ def _correct_tag(tag, width, height, calibration):
     return result
 
 
+@trace.traced('calibration.correct_tag_sets')
 def correct_tag_sets(tags, detections):
     """Transform Webcam detections while preserving its reliable API route."""
     camera_status = _camera_status()
     width = int(camera_status.get("width") or 0)
     height = int(camera_status.get("height") or 0)
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         calibration = _calibration
     if not (_usable_calibration(calibration) and width and height):
         return tags, detections, False
@@ -497,6 +520,7 @@ def correct_tag_sets(tags, detections):
         return tags, detections, False
 
 
+@trace.traced('calibration.corrected_tag_snapshot')
 def corrected_tag_snapshot(tags, detections):
     """Versioned corrected tag output for physical-observation adapters."""
     camera_status = _camera_status()
@@ -548,7 +572,7 @@ def status():
 def _status_dict():
     frame = _frame()
     found = _cached_board_check(frame) if frame is not None else False
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         calibration = _calibration
         return {
             "camera_ready": frame is not None,
@@ -598,7 +622,7 @@ def select_camera():
 def config():
     global _board, _square_size
     if request.method == "GET":
-        with _lock:
+        with trace.locked(_lock, 'calibration.state_lock'):
             return jsonify({
                 "board": list(_board), "square_size": _square_size,
                 "pattern": {**_target_pattern, "revision": _pattern_revision},
@@ -611,7 +635,7 @@ def config():
             raise ValueError
     except (KeyError, TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid board configuration"}), 400
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         if (cols, rows) != _board:
             _samples.clear()
         _board = (cols, rows)
@@ -627,7 +651,7 @@ def pattern_ack():
         revision = int((request.get_json(silent=True) or {})["revision"])
     except (KeyError, TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid pattern revision"}), 400
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _pattern_ack_revision = max(_pattern_ack_revision, revision)
     return jsonify({"ok": True})
 
@@ -681,7 +705,7 @@ def capture():
                      f"at least {MINIMUM_PATTERN_SAMPLES} are required",
             "skipped": skipped,
         }), 422
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _samples.clear()
         _samples.extend(captured)
         _image_size = size
@@ -694,7 +718,7 @@ def capture():
 @bp.route("/api/reset", methods=["POST"])
 def reset():
     global _image_size
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _samples.clear()
         _image_size = None
     return jsonify({"ok": True})
@@ -703,7 +727,7 @@ def reset():
 @bp.route("/api/calibration", methods=["DELETE"])
 def clear_calibration():
     global _calibration, _image_size
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _calibration = None
         _samples.clear()
         _image_size = None
@@ -723,7 +747,7 @@ def clear_calibration():
 @bp.route("/api/calibrate", methods=["POST"])
 def calibrate():
     global _calibration
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         samples = [x.copy() for x in _samples]
         size = _image_size
     if size is None or not samples:
@@ -749,7 +773,7 @@ def calibrate():
         "rms": float(rms), "samples": len(samples),
         "aspect_constrained": True,
     }
-    with _lock:
+    with trace.locked(_lock, 'calibration.state_lock'):
         _save_calibration(data)
         _calibration = data
     return jsonify({"ok": True, "rms": float(rms)})
@@ -762,13 +786,15 @@ def enabled():
     return jsonify({"ok": True, "enabled": _enabled})
 
 
-def preview_frame():
-    """hhh.camera-frame v1: shared corrected JPEG, without diagnostic overlays."""
+@trace.traced('calibration.preview_frame')
+def preview_frame(*, mobile=False):
+    """hhh.camera-frame v1; mobile=True selects the shared <=1920x1080 JPEG."""
     _ensure_corrected_worker()
-    with _lock:
-        ready = bool(_corrected_jpeg and 0 <= time.time()-_corrected_frame_at <= 2)
+    with trace.locked(_lock, 'calibration.state_lock'):
+        jpeg, size = (_mobile_preview or (None, (0, 0))) if mobile else (_corrected_jpeg, _corrected_size)
+        ready = bool(jpeg and 0 <= time.time()-_corrected_frame_at <= 2)
         return {'contract':'hhh.camera-frame', 'version':1,
                 'status':'ready' if ready else 'unavailable',
                 'coordinate_space':'corrected-camera-normalized',
-                'frame_at':_corrected_frame_at, 'width':_corrected_size[0], 'height':_corrected_size[1],
-                'jpeg':_corrected_jpeg if ready else None}
+                'frame_at':_corrected_frame_at, 'width':size[0], 'height':size[1],
+                'jpeg':jpeg if ready else None}

@@ -89,13 +89,30 @@ class MobileTurretTests(unittest.TestCase):
         camera=load('camera-calibration')
         with patch.object(camera,'_ensure_corrected_worker'):
             camera._corrected_jpeg=b'image';camera._corrected_size=(1280,720);camera._corrected_frame_at=time.time()
+            camera._mobile_preview=(b'mobile', (640,360))
             self.assertEqual(camera.preview_frame()['jpeg'],b'image')
+            mobile=camera.preview_frame(mobile=True)
+            self.assertEqual((mobile['jpeg'],mobile['width'],mobile['height']),(b'mobile',640,360))
+            self.assertEqual(mobile['frame_at'],camera.preview_frame()['frame_at'])
             camera._corrected_frame_at=time.time()-5
             self.assertIsNone(camera.preview_frame()['jpeg'])
+            self.assertIsNone(camera.preview_frame(mobile=True)['jpeg'])
         camera.hub_stop()
+        self.assertIsNone(camera._mobile_preview)
+
+    def test_mobile_preview_preserves_aspect_and_does_not_upscale(self):
+        camera=load('camera-calibration')
+        for width,height,expected in [(3840,2160,(1920,1080)),(2160,3840,(608,1080)),(1280,720,(1280,720))]:
+            frame=camera.np.zeros((height,width,3),dtype=camera.np.uint8)
+            original=camera.cv2.imencode('.jpg',frame)[1].tobytes()
+            jpeg,size=camera._mobile_preview_jpeg(frame,original)
+            self.assertEqual(size,expected)
+            image=camera.cv2.imdecode(camera.np.frombuffer(jpeg,dtype=camera.np.uint8),camera.cv2.IMREAD_COLOR)
+            self.assertEqual((image.shape[1],image.shape[0]),expected)
+            if width==1280:self.assertIs(jpeg,original)
 
     def test_camera_frame_is_authenticated_and_fresh(self):
-        camera=SimpleNamespace(preview_frame=lambda:dict(contract='hhh.camera-frame',version=1,status='ready',
+        camera=SimpleNamespace(preview_frame=lambda **options:dict(contract='hhh.camera-frame',version=1,status='ready',
             coordinate_space='corrected-camera-normalized',frame_at=time.time(),jpeg=b'jpeg-fixture'))
         self.facade.hub_init(FakeContext({'camera-calibration':camera}))
         self.assertEqual(self.client.get('/api/assets/mobile-camera.jpg').status_code,403)

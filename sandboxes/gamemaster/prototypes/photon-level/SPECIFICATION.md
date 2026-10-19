@@ -56,11 +56,17 @@ Repository-boundary smoke test: `.venv/bin/python -m unittest discover -s tests 
 
 ## Input
 
-Its only runtime mutation is `update_layout(sockets, expected_revision=...)` or
+Its gameplay geometry mutation is `update_layout(sockets, expected_revision=...)` or
 authenticated `POST /api/layout`. The input must contain every one of the 16
 stable socket IDs, integer center coordinates, and a size from 96 through 208
 pixels. Editing is an optimistic, complete replacement: a stale expected
 revision is rejected and no partial layout is accepted.
+
+After editing artwork files, publish the changes through the Artwork page's
+**Refresh artwork** button, authenticated `POST /api/assets/refresh`, or the
+public `refresh_presentation_assets()` function. This validates artwork only;
+it does not change gameplay geometry or restart the game. The HTTP response is
+the `photon.level.assets` v1 descriptor (503 with an explicit error on failure).
 
 Photon Level validates socket identity, ArUco IDs 40–55, marker and playfield
 bounds, marker/turret overlap, spacing, linked gate geometry, route reachability,
@@ -80,9 +86,11 @@ ring topology, and the complete candidate TMJ before one atomic file replace.
   The additive `presentation` field carries `photon.level.assets` v1 below.
 - Optional `runtime_status()` publishes `photon.level.runtime` v2 health,
   revision and presentation metadata without copying runtime geometry or waves.
-  Health and layout revisions are immediate; artwork is revalidated within
-  250 ms. Source reload invalidates that cache. Returned descriptors are isolated
-  copies, and direct `presentation_assets()` reads remain fresh.
+  Health and published layout revisions are immediate. Artwork is validated at
+  startup, on layout publication, and on explicit artwork refresh. All routine
+  readers, including `presentation_assets()` and asset allowlist checks, use the
+  published manifest without filesystem validation. Returned descriptors are
+  isolated copies. File edits become visible after refresh or hub restart.
 - `GET /api/tiled-map` publishes the editable TMJ with tileset references
   rewritten to Photon Level's own HTTP asset boundary.
 - `waves_document()` and `GET /api/waves` publish the authored wave document.
@@ -150,8 +158,14 @@ page (`/art`) browses that same manifest; it is not another module.
   Scene IDs are resolved from Level's own authored tilesets, not a copied map
   filename table. The editor and runtime resolve to the same image files.
 - Each URL has `?v=<SHA-256 of file bytes>`; `revision` fingerprints the manifest.
-  File metadata is checked on reads; unchanged files are not rehashed. Changed
-  artwork updates its URL and revision without changing gameplay geometry.
+  File metadata is checked during explicit publication; unchanged files are not
+  rehashed. Changed artwork updates its URL and revision without changing gameplay
+  geometry. Refreshes and layout publishers serialize on a writer-only lock;
+  concurrent refresh requests share a completed publication. Scanning, hashing,
+  and editor file checks never hold the gameplay publication lock. Readers keep
+  the preceding complete publication while a refresh runs; completion publishes
+  the new descriptor, including any missing-file errors, atomically. Source
+  failures remain explicit and immediate once detected. No periodic scan runs.
 - File responses revalidate (`no-cache`), not permanent `immutable`: old version
   URLs are not promises that Level stores historical bytes. Missing files are
   omitted and make content explicitly unavailable; remaining files and Canvas
@@ -164,6 +178,9 @@ during a run; a pending geometry revision and its associated scene/manifest
 are deferred together until setup/reset.
 
 Smoke test: `.venv/bin/python -m unittest discover -s tests -p test_photon_content.py`.
+Contention regression: `PYTHONPATH=tests .venv/bin/python -m unittest test_photon_asset_publication`.
+This injects a two-second scan while reading the real mobile facade, and checks
+refresh coalescing, source/art atomicity, authorization, missing files and recovery.
 
 ## Independence rule
 
@@ -181,3 +198,18 @@ contain a stationary base in the left cell and rotating head in the right cell.
 Y removes the magenta matte and caches 256-pixel layers at load time. The field
 atlas has three horizontal rows rendered with additive compositing. Missing
 upgrade textures fall back to the existing base/head art.
+
+## Breaker archer artwork
+
+Level owns `game-art/sprites/breaker-archer-v1/archer-atlas.png`, published as
+`enemy/breaker/archer-atlas` through the usual SHA-256 URLs and asset allowlist.
+`enemy_variants.breaker-archer` describes `photon.enemy-art` v1: a 4×2 atlas,
+down-facing, with walk-1..4, aim, draw, release and recover poses. The manifest
+revision covers these descriptors and the asset URLs. Game forwards them.
+The original transparent 1774×887 generated PNG is unchanged; runtime Canvas
+caches eight equal cells. `provenance.json` preserves the exact prompt, original
+reference, output hash and review notes. Existing hammer walk sprites remain
+available for melee runs. Level adds no combat rules.
+
+
+The published Level asset manifest includes the twelve illustrated weapon upgrade cards under `shop/`. These are the existing Score artwork, copied into Level's owned publication bundle for the shared landscape shop and hosted mobile export.

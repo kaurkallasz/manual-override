@@ -15,7 +15,7 @@ def fixture_app(folder):
     context = FakeContext({'photon-level':level, 'photon-game':game})
     game.hub_init(context)
     view.hub_init(context)
-    game.apply_command({'action':'set_virtual','virtual_play':True})
+    game._engine.set_virtual_play(True)
     app = Flask('virtual-upgrade-fixture')
     @app.before_request
     def identity(): request.environ['hhh.roles'] = {'gamemaster'}

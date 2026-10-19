@@ -1,5 +1,132 @@
 # Photon Game
 
+
+## Operator turret and Atom controls
+
+Authenticated Game Master commands `operator_atom` (`socket_id`, explicit nullable
+`atom_tag_id`) and `operator_turret` (`socket_id`, `activation`: `green`, `purple`,
+`deactivated`) are accepted in setup, running event matches, including
+paused play. Calibration and finished games reject intervention. Other scored-run
+placement/loadout restrictions remain in force. Y
+forwards through its existing operator command route; no robot commands are added.
+
+Each non-null operator Atom selection installs, replenishes or rebuilds the turret:
+a new turret uses the Atom's team and fixed role; an existing turret retains its
+weapon and original owner, including after destruction. An accepted number selection is a manual
+activation: it never enters effective occupancy and
+leaves health/damage multipliers at 1 (other upgrades and link bonuses still apply).
+Identical pending number selections are idempotent. Explicit clearing, moving to
+another target, or observed departure re-arms activation; unchanged camera evidence
+cannot double-activate. Camera-confirmed occupancy can still grant the normal buff. Selecting the same Atom after X rebuilds it without a boost. Null retains
+legacy manual-occupancy clearing behavior without destroying the turret. Locked
+initial weapons are rejected before changing occupancy. In physical mode, fresh validated
+Board occupancy wins both conflicts: the physical Atom's ID and its target socket.
+No held manual choice remains to restore after physical removal or camera loss.
+Established Board dwell/grace policy remains
+unchanged. A command refreshes cached Board evidence before checking priority.
+
+Legacy team-activation commands (not exposed as G/P buttons in Y) create a new turret using the effective Atom's fixed weapon role, with the
+chosen team as initial owner. No Atom means no new installation. An existing
+weapon and original owner are retained, including when restoring a destroyed unit;
+last activation team is recorded separately. Physical placement/replenishment also
+updates the last activating team. Repeating the same active team is idempotent.
+The X control sends the `deactivated` command value for compatibility, but now
+destroys the turret through normal damage/destruction handling: zero HP,
+`destroyed` true, destruction timestamp/event, companions destroyed and linked
+defenses updated. It does not merely retain a disabled turret. Repeated X commands
+do not replay destruction. A destroyed turret cannot fire, take damage, power links
+or row barriers, grant an Atom buff, or run a companion weapon. Reactivation uses ordinary replenishment and
+installation timing; projectiles already launched retain their normal lifecycle.
+The current physical visit is consumed on manual activation/deactivation: unchanged
+frames cannot heal or undo X, while confirmed departure and return can reactivate.
+
+Every snapshot and incremental update includes `turret_controls`, contract
+`photon.game.turret-controls` v1. Its `sockets` list supplies `socket_id`, `aruco_id`,
+`activation` (`initial`, `green`, `purple`, `deactivated`), `last_activation_team`,
+nullable `atom_id` and `atom_source` (`physical`, `manual`), and `occupancy_status`.
+Destroyed turrets show deactivated. Public primary and companion records include
+`deactivated` and set `operational` false while inactive. Reset clears controls;
+Start retains configured setup choices as it retains existing setup turrets.
+
+Smoke tests: `PYTHONPATH=tests .venv/bin/python -m unittest test_event_game`.
+
+### Operator core layers (ArUco 38)
+
+The authorized `operator_core` command takes an explicit nullable `atom_tag_id`.
+An Atom selection uses the existing core activation rules with source `operator`:
+running game, completed 8–16-turret ring, one first layer, then an opposing-team
+second Atom. Same-team selections fail; identical layer retries return without advancing or
+replacing layer one. There is no kill requirement. The ordinary radial purge and victory path runs after layer
+two, including its existing score handling. Event games accept this
+referee command; calibration and terminal games reject it.
+
+Null is X: it clears a pending first layer without damaging the core or ending the
+game. It cannot undo detonation. The reset consumes resting camera evidence; a
+new physical visit is required to re-arm automatically. A fresh physical first
+layer overrides a manual first layer, and physical covers retain the normal
+opposing-team and post-first-layer dwell rules. Manual selection moves that Atom
+out of its manual turret occupancy/buff; a physically occupied turret Atom cannot
+be manually assigned to the core.
+
+`core_sequence` adds `first_source`, `second_atom_tag_id` and `second_source`.
+The additive `turret_controls.core` capability gives the core's `aruco_id`,
+`blocked_reason`, `can_clear` and `cleared` state for the overlay. All state resets
+with the game and is published through the existing snapshot/SSE path.
+Smoke tests: `PYTHONPATH=tests .venv/bin/python -m unittest test_operator_core test_photon_core_stack`.
+
+## Wave timeline
+
+Snapshots and SSE include additive `wave_timeline` (`photon.wave-timeline`,
+integer version 1): `time_s` is paused simulation time, `end_s` is the final
+release horizon (extended by overtime), `queued_orcs` is deferred pressure,
+and `waves` contains `wave`, `start_s`, `end_s`, `duration_s` and
+`state` (`upcoming`, `spawning`, `released`). Setup previews the selected
+map/tier preset. Running windows retain actual launch and completion times;
+the frozen event settings remain unchanged until the next match.
+Durations describe release windows, including admission to the deferred queue,
+not the time to kill every orc. Reading the projection never advances play.
+Smoke test: `PYTHONPATH=tests .venv/bin/python -m unittest test_wave_timeline`.
+
+## Event matches and progression
+
+Game Master `/api/event` creates/selects an event through Progress v2 under the
+same command/journey locks as Start, after confirming connected arms stopped.
+Start requires that event, both linked players, physical Board input, and one
+starting Atom per side. Board's stable target placement determines the Atom;
+Game Master can explicitly select its configured ArUco as a camera fallback.
+Starting Atoms are immutable in a save through L3; L4 enables both team Atoms.
+
+`end_match`, `unlock_next_level` and `next_match` carry `event_id` and `run_id`.
+End match confirms arm stops before ending running/paused play. Progress atomically
+settles actual earnings plus one forced turret tier per player, including debt.
+Repeated requests return the saved receipt. An old run ID cannot end a newer match.
+Unlock advances both control/force-field levels at most once for the finished match.
+Continue clears only the battlefield and runs required calibration before readiness.
+Results remain visible until Continue; there is no shop timer.
+
+The completed ring alone unlocks the center for an eligible 100-series Atom at
+every level, including with zero kills. An opposing Atom stack advances controls
+and force field together; wave-clear victory
+alone does not. The one-time event preset rollout copies selected venue settings
+into retained new revisions, using enemy-health factors 1/2/8/10 by level (maximum
+10). Previous presets remain available; subsequent GM selections are preserved.
+`event-progression-v1` is provisional tuning, supported by deterministic traces in
+`output/event-progression-2026-10-17/balance-event.json`, not human measurements.
+Those traces used the superseded kill gate; they do not predict ring-only completion.
+Start freezes `core_rule_version: 2` for comparable event statistics. Wave timing,
+kill scoring, health-based stack bonuses and automatic purchases are unchanged.
+Rejected physical placement evidence is not consumed, so fresh valid frames can
+retry the same placement without lifting the Atom. Normal stale-evidence, phase,
+ring, eligible-Atom and opposing-team guards still apply.
+Smoke test: `PYTHONPATH=tests .venv/bin/python -m unittest test_ring_core_unlock`.
+
+Practice, test matches, player grants, arbitrary test tiers and virtual gameplay
+are removed from public commands and UI. Standalone engine simulation helpers are
+retained for developer regression/benchmark fixtures only. Calibration setup stays
+independent. It grants only the guarded calibration movement scope, never credits,
+turret tiers or normal player controls. L1/L2 tolerate a different camera correction
+while retaining physical limits; L3/L4 keep the image-calibration guards.
+
 ## Atom tower buff
 
 An accepted Atom on a turret's fixed marker grants **2× maximum health and
@@ -16,12 +143,28 @@ replaces a destroyed turret. A separate accepted-visit record prevents camera
 gaps, pump changes, relation-ID changes and source recovery from granting heals.
 Reacquisition without observed departure restores capacity at the remaining
 percentage. Occupancy continues to reconcile while the simulation is paused.
+Board-confirmed reappearance of a previously covered marker counts as departure.
+A cached placement overlap cannot replenish or consume that return visit while
+occupancy reports departure/unavailability, including a vertically lifted Atom
+still visible at the marker's XY. A fresh accepted return heals once as usual.
 
 Game validates Board's separately versioned `photon.board.occupancy` v1 through
-its public `occupancy_snapshot()` function, independently of unavailable arm
+its public `occupancy_snapshot(scope=...)` function, independently of unavailable arm
 placement evidence. Installation/replenishment/replacement still require the
 ordinary placement gate. Board owns coordinates and dwell; Game owns ownership,
 socket selection, accepted visits and all health/damage calculations.
+Game registers its run/layout scope through Board's public
+`game_observation(scope=..., fixed_ids=...)`, validates `photon.board.runtime` v1
+and the exact scope/ID acknowledgement, and reads occupancy for that same scope.
+The scope comes from `shared.fixed_board.cue_layout`, as on the displays. Missing
+scoped APIs or mismatched scope fail closed. Board's confirmed fixed coordinates
+remain eligible while hidden for that game, with fresh moving-Atom evidence and
+all existing placement/occupancy gates. The engine's ownership, activation order,
+buff and replenishment rules are unchanged.
+Game validates the advertised finite `policy.grace_s` within 0.35–0.9 seconds
+and uses it for evidence expiry. Legacy publishers without the field retain
+the 0.35-second limit. Malformed or larger limits fail closed. Brief detection
+gaps within the limit preserve health, damage and the existing accepted visit.
 
 Every public primary/companion record includes `atom_buff_state` (`active`,
 `inactive`, `unavailable`), nullable `occupying_atom_id`,
@@ -70,8 +213,18 @@ Regression command: `.venv/bin/python -m unittest discover -s tests -p 'test_pho
 
 ## L4 companion weapons
 
+Weapon upgrade bonuses are saved combat settings: `weapon_upgrade_l2_percent`,
+`weapon_upgrade_l3_percent`, and `weapon_upgrade_l4_percent` default to 30, 40,
+and 50. They scale both damage and health relative to L1 (1.3×, 1.4×, 1.5×),
+not cumulatively. `l4_turrets_per_socket` defaults to 2; setting it to 1 disables
+companions. Game Settings exposes these controls under Weapon upgrade levels.
+They use the existing draft and immutable per-map/control-tier preset revisions,
+freeze at Start, and are projected into both player shops from the selected
+next-match preset. Older settings files inherit these defaults without losing
+their other tuning. Force-field upgrade capacity is unchanged.
+
 At an eligible Level anchor, an effective L4 weapon creates one same-type
-companion. It inherits the parent's owner, damage/link multipliers and aim/spread
+companion when doubling is enabled. It inherits the parent's owner, damage/link multipliers and aim/spread
 inputs, while targeting from its own origin with independent charge, cooldown,
 shots and projectiles. New pairs activate together. Promotion during practice
 testing gives the new companion its normal three-second activation and an empty
@@ -331,7 +484,7 @@ practice before checking scored-only restrictions and freezes the test IDs in
 run metadata. Progress independently enforces eligibility using its owned IDs.
 The delivery adapter reports the eligibility returned by Progress. A mixed
 real/test roster is practice for both participants and cannot affect scored
-statistics or earned upgrades/control mastery.
+statistics or control mastery. Its validated kill credits fund persistent upgrades.
 Scored Start requires ready progress, selected profiles, physical Board input,
 no virtual setup placements and a non-Training preset. Place, aim, loadout,
 virtual switching and core assistance are rejected during a scored attempt.
@@ -347,7 +500,7 @@ score presentations show this grant as practice access and never save it as
 earned progression. Disabled/unavailable input clears that presentation grant.
 The existing v2 snapshot and SSE contract remain compatible with additive fields.
 
-Weapon levels multiply health and damage by 1/1.1/1.2/1.3, with link bonuses
+Weapon levels default to health and damage multipliers of 1/1.3/1.4/1.5, with link bonuses
 composed once. Force-field capacity uses 1/1.2/1.4/1.6 and the minimum endpoint
 upgrade; its visual width is 8/9.5/11/12.5 px. Geometry remains authoritative.
 
@@ -486,14 +639,46 @@ the other team's mobile endpoint or aim its turret.
 
 ## Mobile co-op journey and level presets (2026-10-01)
 
+The player controller replaces its compact name-entry window with a mission
+briefing after a profile is selected. Its glass background is 20% opaque, with
+readable text describing turret activation, the eight-turret core ring, the
+two-color ATOM stack, and aiming. Ready closes the briefing and shows “Get ready”
+in the countdown typography, repeatedly growing and fading while awaiting Start.
+The saved Ready acknowledgement preserves this waiting view across refreshes.
+Calibration and explicitly opened player/upgrade windows hide the waiting text;
+Start replaces it immediately with the authoritative countdown.
+
+The Game Start command begins a five-second countdown before advancing combat
+or the existing first-wave preparation clock. Both player controllers render
+the additive `start_countdown` snapshot (`photon.game.start-countdown` v1):
+remaining seconds, configured duration, run start identity and gameplay elapsed
+time. The sequence is 5, 4, 3, 2, 1, GO!, with each glyph growing and fading.
+GO lasts the first second of gameplay. Pause freezes the countdown, Reset clears
+it, and joining/reloading reads the current sequence instead of restarting it.
+Reduced-motion users see the same sequence without the scaling animation.
+Direct engine calls may omit the countdown for headless simulation tooling;
+operator starts always request five seconds.
+
 Game owns `journey.py` and `presets.py`; their data files live beside its run
 log. `journey_snapshot()` returns `photon.game.journey` v1. Its phases are
 lobby, playing, upgrades, calibration and ready. A scored terminal result starts
 one server deadline of 30 seconds. The third XYZ win immediately queues Green
 then Purple calibration. The partner waits with purchases and history; expiry
-never starts a second countdown after calibration. Ready binds both selected
-profile IDs/revisions and reserves their loadouts transactionally. A restarted
+never starts a second countdown after calibration. Player Ready acknowledgements
+bind selected profile IDs/revisions and are advisory. Game Master's Start can
+end shopping immediately, including an untimed practice shop, without either
+Ready acknowledgement. Scored Start reserves the current profiles/loadouts
+transactionally; purchases completed before reservation remain included. A restarted
 scored run reads its canonical interrupted receipt and returns to upgrades.
+
+Game Master `next_level` takes the saved journey `run_id` and prepares setup
+without waiting for player readiness or the upgrade deadline. Test-player shops
+advance the practice tier through the existing idempotent `advance_test` owner
+operation. Regular shops retain earned tiers and reserve current loadouts.
+Start directly from setup closes shopping and uses the current tier. Calibration,
+fresh Board evidence, motion-stop confirmation and durable result checks still
+apply. `next_loadouts.teams` includes profile IDs/revisions so the operator can
+distinguish current Ready acknowledgements from ones invalidated by purchases.
 
 The journey's `calibration_side` identifies the queued turn for presentation,
 including while camera/arm feedback or a previous stop prevents activation.
@@ -519,7 +704,7 @@ Cal 2 owns both measured-target and guided-exercise receipts.
 tutorial or waiting. Waiting/expired transitions block motion. Operator
 `calibration_test` accepts Green/Purple/Both; `journey_cancel` requires no active
 run. `virtual_test_loadout` grants the selected test tier to BOTH arms in
-physical or virtual practice; it grants no saved mastery or credits.
+physical or virtual practice; its matches bank kill credits for upgrades without granting scored mastery.
 
 Operator `show_game` closes a saved practice calibration or pauses earned
 calibration, preserving its draft/sequence under `deferred_calibration`. Loading
@@ -548,3 +733,243 @@ release windows, overlap and the scheduled release end. Saving a settings draft
 alone does not replace a selected level/tier preset. All run settings and preset
 metadata are frozen at Start. See `docs/CONTROL_BALANCE_REPORT.json` for the
 provisional simulator matrix; historical control-speed factors remain unknown.
+
+## Breaker archer (combat v1, 10 October 2026)
+
+`photon_game_runtime/ranged_enemies.py` owns ranged Breaker state and hostile arrows.
+Existing `breaker` waves can use `melee` or `ranged`; settings freeze at Start.
+The four **Breaker archer candidate** tier presets are appended once without
+selecting them or changing saved legacy revisions. Loading an older revision
+projects the missing keys as melee defaults. Scored archer presets retain the
+existing increasing tier schedule checks. Start requires an enabled Y renderer
+that advertises `photon.renderer` v1 and integer `enemy_combat_version: 1`.
+
+Ranged breakers stop voluntary movement, retain normal collision separation,
+aim at the nearest exposed primary/companion tower before the core, draw, then
+release fixed-endpoint arrows. A newly exposed tower supersedes a core target.
+Tower targets remain stable while valid. Acquisition range is 220 map units,
+retention 110%, initial draw 0.5s, release interval 1.5s, tower/core base damage
+12 each, speed 420 units/s. All are validated Game Settings; draw must be less
+than interval. Existing damage multipliers apply once. Ranged breakers have no
+contact damage. Each installation's existing `aim_instance` prevents arrows
+from hitting a replacement; companion hits use the parent's single health pool.
+
+Tick order: refresh topology/spawns/purge; advance previously released arrows;
+resolve burn/mortar/field damage; acquire/aim; movement/collision constraints;
+release due arrows; melee/core contact; tower fire; remove dead enemies; resolve
+terminal outcome. A tower kill later in a release tick does not retract that
+arrow. Death before release cancels the draw. Shields use authoritative powered
+rows and operational field segments, including changes during flight. Arrows
+end at pod/core surfaces, with no marker-based blockers or field-contact wear.
+
+Pause freezes simulation time; reset clears combat state. Accepted center
+stacks capture `telemetry.core_health_at_stack`, cancel draws and neutralize
+arrows. All-wave wins wait for damaging arrows; a final core hit can defeat.
+Harmless flights do not delay victory and clear at completion.
+
+Full/compact snapshots publish `enemy_combat` (`photon.enemy-combat`, integer
+v1), per-enemy `combat` variant/state/times, `enemy_arrows`, and bounded
+`enemy_arrow_impacts`. Held enemies publish a hold motion guide. Game alone
+resolves damage. Telemetry records scheduled/released/killed class counts,
+combat/purge kills and bounded shot/hit/block/miss/damage/destruction/time
+aggregates; existing Progress terminal flushing persists them off the tick.
+
+Validation: `PYTHONPATH=tests .venv/bin/python -m unittest test_ranged_breakers test_ranged_delivery test_control_presets`.
+See `docs/LTZ_RANGED_BREAKER_REPORT_2026-10-10.md` for balance limits and rollout.
+
+
+## LTZ score and horde candidate (2026-10-10)
+
+The engine-owned `MatchRewards` freezes exact per-class scheduled counts (including periodic brute replacement), values and bonus rules at Start. Its cumulative `photon.match-score` v1 output separates raw kills, weighted kill credits and saved bonus; `victory_method` distinguishes `center_stack` and `waves_cleared`. Telemetry retains combat/purge counts, center health at accepted stack, bounded horde timeline, actual peak/cap/deferred counts and longest 900+ interval. No client computes currency.
+
+`photon.next-match` v1 projects the four actually selected immutable tier presets, scheduled counts and full-clear credits. `/api/economy` is Gamemaster-only and forwards the named Progress economy contract. Upgrade prices are saved separately from combat settings. `result_save` distinguishes playing/saving/saved; `next_loadouts` is an operator-only projection removed by Mobile.
+
+`LTZ score and horde candidate` is an opt-in four-tier family, added without changing existing revisions or selections. Cue uses 4,092 finite orcs on the current map, cap 1,000 and unchanged lossless 2,000 deferred-pressure capacity. The seeded reference trace deploys 16 primaries and 12 companions; actual lower-tier and dense performance evidence is recorded in the implementation report. The candidate remains separate until performance and supervised human playtests qualify it. No victory gate or minimum wave was introduced.
+
+
+## Game Master test match → shop → next level (2026-10-11)
+
+`test_end_match {run_id}` is a Game Master command restricted to a running or
+paused practice attempt containing a built-in test player. It stops virtual
+arm input and simulation, records `aborted` with `gamemaster_test_end` telemetry,
+and delivers the actual kills/duration through the durable result outbox.
+It creates no victory, currency, mastery or scored-history row. The shop opens
+only after the result saves; failures remain visible as Saving and retries are
+idempotent. Natural terminal test results use the same practice shop.
+
+`test_next_level {run_id}` closes the saved practice shop through Progress's
+named admin contract, prepares the next tier, resets the battlefield and clears
+GM control/loadout overrides so the purchased per-player upgrades apply at
+Start. A Level 4 win ends the campaign; repeating it requires an explicit replay choice. The normal Start command still checks the current
+board/motion state; this operation does not start robot motion or manufacture
+calibration evidence. Shared practice shops block ordinary mobile motion after
+a finished match. Once reset/restart has returned the engine to `setup`, an
+explicit GM test control tier permits setup positioning for both arms; the saved
+shop remains available for purchases and Next level. Setup without that grant,
+calibration ownership and unconfirmed stops remain blocked. Real-player mastery and the three-win
+rule remain unchanged. Stale run IDs cannot end or reset a newer match.
+
+`/api/player-admin` GET/POST is Game Master-only and validates
+`photon.progress.admin` v1. POST accepts credit grants only. Tier advancement
+is available exclusively through the validated game transition, not this
+wallet endpoint. Test shops and advancement receipts survive restart.
+
+Motion policy includes `blocked` and a specific `error` when blocked. Mobile
+projects the same `photon.game.motion` v1 decision used by Relay; clients must
+not infer motion permission from a test tier or journey phase alone.
+
+## Saved co-op game switching (2026-10-17)
+
+`POST /api/saved-game?side=green|purple` and owner-public
+`saved_game_command(side, value)` expose New/Save/Load to authenticated players.
+These are between-match operations, serialized by the same command lock as Start.
+They reject running matches and calibration transitions. Pending results must
+finish saving first. New/Load revoke physical motion through the existing Relay
+stop-and-settle contract for each connected arm before replacing player bindings.
+A failed stop leaves game selection unchanged and motion blocked until a successful
+retry. New/Load clear old practice overrides, result display and readiness,
+retain physical/virtual play selection and return to setup. Loading the same game
+restores a calibration turn checkpoint saved by Reset, including its session ID;
+other games do not inherit it. They never start a match or replay a movement.
+
+Normal fresh Start prepares both players at L1; loading an existing game restores
+its control progression. An explicit GM test override continues to be a separate
+practice path.
+
+
+## Start retries and player readiness (2026-10-18)
+
+The Game snapshot exposes `journey.readiness`: `status`, `all_ready` and two
+`players` entries with `id`, `name`, `ready`, and `state` (`unselected`, `waiting`,
+`calibration`, `ready`). This presentation uses the selected pair, controls and
+loadouts captured when each player taps Ready. Bookkeeping revision changes from
+preparing a fresh game do not invalidate Ready. New/Load resets acknowledgements;
+a changed partner, control tier or upgrade requires confirmation again. Existing
+acknowledgements with only profile IDs/revisions remain accepted for that profile.
+For the first game, readiness remains advisory and Game Master starts it.
+For a completed level, both players' Continue / Ready acknowledgements trigger
+the next attempt automatically through the existing `next_match` and `start`
+commands, including the five-second countdown. Mobile Ready includes `event_id`
+and the finished `run_id`; stale receipts cannot acknowledge a newer result.
+Readiness itself grants no motion or calibration permission.
+
+Game serializes player continuation with operator commands. A pending
+`journey.auto_start` records the agreed event, saved pair, result, next level and
+loadouts. Required calibration starts only after both Continue acknowledgements;
+the intent survives its Green/Purple turns and automatically starts after they
+finish. Fresh camera evidence, confirmed arm stops, saved results and the normal
+Start checks remain mandatory. A failed Start is visible in both player panels
+and can be retried by either phone, with no background retry loop. Changed
+players/equipment require both acknowledgements again. Cancelling the journey or
+loading a new pair clears the intent. Delayed duplicate Continue requests cannot
+reset or start an additional match. No extra charge, upgrade or result is issued.
+Tests: `test_player_continue` and the two-phone Continue flow in
+`tests/level_results_browser.cjs`.
+
+Game releases its own unused Start reservation before preparing/rebinding a retry,
+including a reservation persisted by an older process. It reserves only after
+Start metadata is validated and releases that reservation if journey persistence
+or attempt creation fails. Progress atomically consumes it on successful begin.
+Calibration reservations remain protected. Tests: `test_start_readiness` and
+`tests/event_progression_browser.cjs` (isolated fake hardware).
+
+
+Start uses helper references retained at module initialization, with no request-time
+prototype imports. The obsolete combat-target helper was removed by the ring-only
+rule. The hub removes prototype helper packages from `sys.modules`
+and the prototype directory from `sys.path` after loading; retained function
+references remain valid. `test_start_readiness` exercises Start after that cleanup.
+Unexpected command errors are logged with their traceback and returned as JSON 500
+responses with a readable message; expected validation failures remain JSON 400.
+
+## Game Master Reset (2026-10-18)
+
+Reset prepares a new game in the active event and returns both phones to name
+selection. It requests arm stops through the existing relay stop contract,
+settles any unfinished attempt as `aborted`, cancels calibration/readiness and
+pending automatic continuation, then asks Progress to reselect the same event.
+That owner transaction clears both selected players and the active linked save;
+it retains player records, wallets, turret upgrades, saved pairs and completed
+event results. Reset never forces a turret purchase or level unlock. An already
+completed result keeps its actual outcome and existing settlement.
+
+The command requires `event_id`, `run_id` (nullable), `game_id` (nullable), a unique
+`operation_id` and `reset_generation` (the previous `journey.reset_operation`, or
+null). Serialized duplicate requests do not reset a newly selected pair or match;
+older generations and stale event/game/run identities are rejected before stopping
+arms. Unavailable stop confirmation does not block Reset: Journey persists a motion
+inhibit and retries the existing stop contract before movement or Start can resume.
+The required sides are captured at Reset: connected arms, the active calibration
+arm, outstanding calibration stops, and both participants if a match is running.
+An unrelated disconnected waiting arm does not gain a new stop obligation.
+Each confirmed side is removed durably from `reset_stop_sides`, so disconnecting
+it later cannot undo that confirmation. Required disconnected arms remain blocked
+until the relay confirms their stop. Legacy unscoped errors remain conservative
+until confirmed or explicitly recovered from verified operator evidence.
+Calibration release uses its owner's durable deferred-stop gate. A save failure
+retains the recoverable game and blocks motion until retry.
+The final reset receipt is persisted in Journey. Old Continue requests cannot mark
+players ready after Reset.
+
+The new lobby clears phone drafts, result browsing and panel scroll position.
+Choosing a name prepares L1 controls/force field; explicitly loading a linked game
+restores that game's progression. Before Reset, Game checkpoints the exact
+calibration queue, turn and session ID by saved-game/event/player identity in
+its durable Journey file; measured points remain with the calibration owner.
+Loading that game resumes the interrupted side with its partial measurements,
+including after restart, without repeating a completed Green turn or reusing
+old Continue acknowledgements. Start still requires both player names and the
+normal Game Master/physical readiness checks. Older saves without a turn checkpoint
+use their saved player completion records to skip finished turns. A verified
+completion receipt can recover the original sibling draft when the player pair,
+calibration milestone and session evidence match. Existing incorrect Green turns
+are reconciled before hardware readiness, so an offline Purple arm still shows
+Purple's turn without granting motion. Setup/replay lessons remain explicit.
+Tests: `test_event_reset`,
+`tests/reset_calibration_browser.cjs`, and the GM Reset flow in
+`tests/level_results_browser.cjs` (temporary data and fake arms).
+Run the reset browser with `LTZ_CALIBRATION_LEGACY=1` to cover missing checkpoints.
+
+
+## Campaign results and ring notices (19 October 2026)
+
+A won Level 4 stays on **You Win! Game Over** with the saved level statistics.
+The victory heading, immediate kill/score/time stats and kill heatmap appear from
+the terminal simulation state even while result saving is unavailable. Replay
+choices appear after durable settlement. Configuration SSE includes an optional
+`terminal_result` with the same provisional data for LTZ Score; phones receive
+the terminal `kill_heatmap` in their regular game snapshot. Live gameplay does
+not transmit the heatmap grid.
+Continue is available after earlier levels; every results screen offers Replay
+last level, Replay whole game, and New game. Both players must choose the same
+option, through the existing authenticated journey API (`ready`, `choice`,
+`run_id`, `event_id`). Mismatched choices wait. New game returns to name selection;
+Replay whole game starts L1 with the same pair and starting Atoms. Replay last
+level uses the level just played, even when its win unlocked the next level.
+Replays retain wallets, weapon purchases, and historical scores. A replay gets a
+new linked save and a fresh attempt; duplicate requests cannot duplicate either.
+Existing arm stops, fresh camera checks, calibration gates and countdown still
+apply. A blocked start can be retried from either phone.
+
+The simulation records a 32 × 18 kill-count grid per run, at the same point that
+lethal damage is counted, including shared force-field and core-purge kills.
+The final outbox carries `kill_heatmap` with board dimensions, frozen road/marker
+landmarks, center position, and an explicit count for unavailable positions.
+The grid resets for every attempt and is never inferred from browser frame rates.
+
+`core_sequence.ring_notice` is the latest numbered activation/incomplete message.
+A broken, occluded or unavailable ring boundary locks the center and clears any
+pending first Atom. Repairing the ring reactivates it. Incomplete notices remain
+visible until repair; activation notices last eight seconds. Phones, Game Master
+and projector receive the same simulation state, and reconnects preserve the
+incomplete warning without repeatedly announcing unchanged snapshots.
+
+Verification: `test_result_save_isolation`, `test_results_replay_heatmap`, `test_player_continue`,
+`test_level_results`, `test_ring_core_unlock`, and
+`tests/results_replay_browser.cjs` / `tests/level_results_browser.cjs` use temporary
+player stores and fake hardware. Browser evidence is in
+`output/results-replay-2026-10-19/`.
+The isolation regression purges sandbox helper imports exactly as the production
+hub does, completes repeated L4 replays, and recovers a failed save from the
+durable outbox without duplicate rewards. Browser coverage keeps saving
+unavailable across a phone reload before retrying it.

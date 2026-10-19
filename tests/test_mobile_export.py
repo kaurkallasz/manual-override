@@ -19,6 +19,7 @@ class MobileExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);runtime=root/'.mobile-ltz-runtime'
             shutil.copytree(ROOT/'shared/mobile_ltz',root/'shared/mobile_ltz')
+            shutil.copytree(ROOT/'shared/ltz_ui',root/'shared/ltz_ui')
             runtime.mkdir()
             (root/'hub-config.json').write_text(json.dumps({'sandboxes':{'green':{'password':'fixture-only'}}}))
             (runtime/'tunnel.json').write_text(json.dumps({'url':'https://fixture.invalid'}))

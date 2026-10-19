@@ -97,12 +97,79 @@ freeze/resume, export, stream closure and desktop/phone layouts without POSTs.
 Deterministic counter samples also verify graph rates, build means, aligned
 spikes/cursors, 15-second expiry, missing intervals and module restarts.
 
+## Optional MCAM1 presentation
+
+Player state/SSE includes `mobile_mcam1` (`mobile.mcam1`, integer version 1).
+The facade discovers enabled MCAM1 through hub context and validates its
+published `hhh.camera.still` v1 output, JPEG bytes, dimensions and 1.5-second
+freshness limit. Only metadata enters game state. `GET /api/assets/mcam1.jpg`
+revalidates the frame and returns uncached JPEG bytes under the existing player
+team guard and hosted asset proxy. Unavailable inputs are explicit and do not
+change game readiness; the frame route returns 503. This path never starts
+capture, reads USB controls, or supplies robot/game perception evidence.
+
 ## Physical cue evidence
 
-`mobile_cue_targets` carries the Board's `photon.board.cue-targets` v1 evidence in
+`mobile_cue_targets` carries the Board's `photon.board.cue-targets` v2 evidence in
 the existing player state/SSE stream. `GET /api/cue-targets?side=green|purple`
 provides the same read-only, team-authenticated evidence for an explicit command
-refresh. The facade adds `scope`, `scope_since` and `server_time`, and filters
-observations older than the active level layout or calibration display. Unavailable
+refresh. The facade adds `scope`, `scope_since` and `server_time`, and validates
+the owner-acknowledged run/layout or calibration-display scope. Fixed coordinates
+learned before a particular reader joins remain available in that same scope.
+`fixed_tags` is display memory, separate from current `tags` and motion status. Unavailable
 or malformed Board inputs remain unavailable. Neither path reads camera hardware
 or issues robot commands. Virtual cues keep their existing simulation behavior.
+
+## Breaker archer projection
+
+The compact player enemy projection retains the additive `combat` variant,
+state and timing descriptor. Game's `enemy_combat`, `enemy_arrows` and
+`enemy_arrow_impacts` are forwarded without local simulation. The existing
+renderer endpoint serves Y's owned bundle, including its archer helper; Level's
+published asset allowlist includes the content-hashed red archer atlas.
+Offline export integrity and projection checks: `tests/test_ranged_delivery.py`.
+
+
+## LTZ result/shop delivery (2026-10-10)
+
+The existing player projection forwards authoritative `match_score`, `next_match`, `result_save` and the selected player's Progress `shop`/`latest_result`. Operator `next_loadouts` remains excluded. The published asset manifest adds four explicitly allowlisted shared UI PNGs under `ui/ltz/`; the existing asset route serves only that allowlist. Level-owned upgrade artwork remains accessed through the existing published Level contract. No separate progress, purchasing or hardware API was introduced.
+
+## Delay Analysis (optional recording)
+
+A separate `delay-analysis` manifest page exposes authenticated `delay.analysis`
+v1 capture controls, ranked nested timings, incidents, coverage and JSONL/CSV
+exports. `hub_init` installs the shared timing recorder; `hub_stop` releases it.
+Recording defaults off and toggles at runtime without restarting any game module.
+The default duration is until manually stopped. Whole-capture statistics are
+checkpointed separately from bounded incident detail, so exhausting the 650 MiB
+detail budget warns without stopping summary recording. The latest checkpoint
+reopens after restart with recording off. Incident windows retain board validation
+evidence and driver failure details; incomplete coverage is displayed prominently.
+The regular player state includes a short capture descriptor. The existing
+team-scoped diagnostics POST accepts bounded timing batches, including one final
+stop acknowledgement, without giving players capture administration access.
+
+See [Delay Analysis](../../../../docs/DELAY_ANALYSIS.md) for lifecycle, timing
+semantics, bounds, endpoint examples and verification. Timings are observational;
+all robot leases, feedback deadlines and command authorization remain authoritative.
+
+## Motion transition permission (2026-10-12)
+
+Player snapshots include `mobile_motion_policy`, the team's validated
+`photon.game.motion` v1 contract from Game. The phone and embedded physical
+controller use its ready status, scope and explicit `blocked: false` for
+transition admission, retaining their separate freshness, pause, feedback and
+calibration checks. Missing or invalid policies fail closed. Calibration
+recovery may still connect to confirm a previous stop without granting motion.
+Blocked controls show the owner's specific reason, also returned by Relay.
+
+## Linked-game player actions (2026-10-17)
+
+`POST /api/saved-game?side=green|purple` uses authenticated side and same-origin
+checks, then calls Photon Game's serialized New/Save/Load operation. The hosted
+gateway permits this route. `mobile_progress.saved_games` publishes the active
+ID, pair lock and linked-player previews including current credits and upgrades.
+The phone exposes these actions between matches. Locked pairs disable individual
+selection. A changed saved-game ID clears pending inputs and requires physical
+reconnection. Allowed L1/L2 camera mismatches show an approximate-positioning
+warning; connected arms blocked from moving are labeled explicitly.

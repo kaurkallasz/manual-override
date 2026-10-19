@@ -71,7 +71,8 @@ class CueTargetTests(unittest.TestCase):
         self.map = self.board.CueTargets(fixed_ids=[42])
         self.learn()
         value = self.frame(detections=[dict(id=42, nx=.8, ny=.5, missing=0)])
-        self.assertEqual(value['status'], 'unavailable')
+        self.assertEqual(value['status'], 'ready')
+        self.assertEqual(value['blocked_fixed_ids'], [42])
         self.assertEqual(value['pending_fixed_ids'], [42])
         self.now += .3
         self.frame()
@@ -163,7 +164,8 @@ class CueTargetTests(unittest.TestCase):
         epoch = self.map.epoch
         original = copy.deepcopy(self.map.records[42])
         value = self.frame(detections=[dict(id=42,nx=.7,ny=.5,missing=0)])
-        self.assertEqual(value['status'], 'unavailable')
+        self.assertEqual(value['status'], 'ready')
+        self.assertEqual(value['blocked_fixed_ids'], [42])
         self.assertEqual(value['epoch'], epoch)
         for key in ('tag', 'last_seen', 'mapped'):
             self.assertEqual(self.map.records[42][key], original[key])
@@ -171,7 +173,8 @@ class CueTargetTests(unittest.TestCase):
         # Merely losing the suspect fixed tag does not prove the map unchanged.
         self.now += .3
         value = self.frame(ids=())
-        self.assertEqual(value['status'], 'unavailable')
+        self.assertEqual(value['status'], 'ready')
+        self.assertEqual(value['blocked_fixed_ids'], [42])
         self.assertEqual(value['epoch'], epoch)
         # Its normal position recovers the same map with Atom 100 still hidden.
         self.now += .3
@@ -180,19 +183,15 @@ class CueTargetTests(unittest.TestCase):
         self.assertEqual(value['epoch'], epoch)
         self.assertFalse(next(t for t in value['tags'] if t['id'] == 100)['visible'])
 
-    def test_confirmed_fixed_coordinate_contradiction_relearns_the_whole_map(self):
-        self.learn()
-        epoch = self.map.epoch
-        for n in range(3):
+    def test_repeated_single_marker_conflict_never_relearns_unrelated_coordinates(self):
+        self.learn(); epoch = self.map.epoch
+        for n in range(6):
             value = self.frame(ids=(42,), detections=[dict(id=42,nx=.7,ny=.5,missing=0)])
-            if n < 2:
-                self.assertEqual(value['status'], 'unavailable')
-                self.assertEqual(value['epoch'], epoch)
+            self.assertEqual(value['status'], 'ready')
+            self.assertEqual(value['epoch'], epoch)
+            self.assertEqual(value['blocked_fixed_ids'], [42])
+            self.assertAlmostEqual(value['fixed_tags'][0]['nx'], .342)
             self.now += .3
-        self.assertNotEqual(value['epoch'], epoch)
-        self.assertEqual(value['epoch_reason'], 'fixed_marker_changed')
-        self.assertEqual(value['epoch_marker_id'], 42)
-        self.assertEqual(value['tags'], [])
 
     def test_repeated_or_inconsistent_contradictions_cannot_confirm_a_map_change(self):
         for reason in ('same-frame', 'different-positions', 'outage', 'long-gap'):
@@ -205,7 +204,8 @@ class CueTargetTests(unittest.TestCase):
                     if reason != 'same-frame':
                         self.now += .8 if reason == 'long-gap' else .3
                 self.assertEqual(value['epoch'], epoch)
-                self.assertEqual(value['status'], 'unavailable')
+                self.assertEqual(value['status'], 'ready')
+                self.assertEqual(value['blocked_fixed_ids'], [42])
 
     def test_real_camera_change_invalidates_even_with_a_pending_fixed_outlier(self):
         self.learn(); epoch = self.map.epoch
@@ -235,30 +235,25 @@ class CueTargetTests(unittest.TestCase):
         self.assertLess(self.map.snapshot(self.now)['tags'][0]['nx'], 1)
         self.assertEqual(self.frame(camera_identity=None)['status'], 'unavailable')
 
-    def test_mobile_route_rejects_an_old_layouts_cached_positions(self):
-        mobile = load('mobile-ltz-api')
-        game = {'contract':'photon.game','version':2,'level':{'id':'one','layout_revision':1,
-                'sockets':[{'aruco_id':42}], 'core':{'marker_x':100, 'marker_y':100}}}
-        evidence = dict(contract='photon.board.cue-targets',version=1,status='ready',tags=[dict(id=42,last_seen=100.)])
-        calls = []
+    def test_mobile_route_uses_owner_scope_and_keeps_positions_learned_before_reader(self):
+        mobile=load('mobile-ltz-api')
+        game={'contract':'photon.game','version':2,'run_id':'one','level':{'id':'one','layout_revision':1,
+              'sockets':[{'aruco_id':42}], 'core':{'marker_x':100,'marker_y':100}}}
+        calls=[]
         def snapshot(**kwargs):
             calls.append(kwargs)
-            return dict(copy.deepcopy(evidence), layout_scope=kwargs['scope'], fixed_ids=sorted(kwargs['fixed_ids']))
-        mobile.hub_init(FakeContext({
-            'photon-game':SimpleNamespace(game_snapshot=lambda:copy.deepcopy(game)),
-            'photon-board':SimpleNamespace(cue_targets_snapshot=snapshot)}))
-        app = Flask('cue-map-test');app.register_blueprint(mobile.bp)
-        def get():
-            return app.test_client().get('/api/cue-targets?side=green',environ_overrides={'hhh.roles':{'green'}})
+            tags=[dict(id=42,last_seen=100.,fixed=True)] if len(calls)==1 or kwargs['scope']==calls[0]['scope'] else []
+            return dict(contract='photon.board.cue-targets',version=2,status='ready',tags=tags,fixed_tags=copy.deepcopy(tags),
+                        layout_scope=kwargs['scope'],fixed_ids=sorted(kwargs['fixed_ids']))
+        mobile.hub_init(FakeContext({'photon-game':SimpleNamespace(game_snapshot=lambda:copy.deepcopy(game)),
+                                     'photon-board':SimpleNamespace(cue_targets_snapshot=snapshot)}))
+        app=Flask('cue-map-test');app.register_blueprint(mobile.bp)
+        def get():return app.test_client().get('/api/cue-targets?side=green',environ_overrides={'hhh.roles':{'green'}})
         with patch.object(mobile.time,'time',return_value=101.):
-            self.assertEqual(get().json['tags'], [])
-            evidence['tags'][0]['last_seen'] = 102.
-            self.assertEqual(get().json['tags'][0]['id'], 42)
-        with patch.object(mobile.time,'time',return_value=103.):
-            game['level']['layout_revision'] = 2
-            self.assertEqual(get().json['tags'], [])
-        self.assertEqual(calls[0]['fixed_ids'], [42, 38])
-        self.assertNotEqual(calls[0]['scope'], calls[-1]['scope'])
+            self.assertEqual(get().json['tags'][0]['last_seen'],100.,'Reading later does not remove fixed memory')
+            game['level']['layout_revision']=2
+            self.assertEqual(get().json['tags'],[])
+        self.assertEqual(calls[0]['fixed_ids'],[42,38]);self.assertNotEqual(calls[0]['scope'],calls[-1]['scope'])
         self.assertEqual(app.test_client().get('/api/cue-targets?side=purple',environ_overrides={'hhh.roles':{'green'}}).status_code,403)
 
     def test_public_scoped_snapshot_uses_sampler_and_never_inherits_other_layouts(self):
@@ -294,6 +289,21 @@ class CueTargetTests(unittest.TestCase):
                            ('game', [True]), ('game',[40,40]), ('game',[100]), ('game',[29])):
             with self.subTest(scope=scope, ids=ids), self.assertRaises(ValueError):
                 self.board.cue_targets_snapshot(scope=scope, fixed_ids=ids)
+
+    def test_cue_snapshot_carries_cached_stack_evidence_without_aliasing_or_retiming(self):
+        stack = dict(contract='photon.board.stacking', version=1, status='ready',
+                     sampled_at=99.5, source_epoch='camera',
+                     relations=[dict(lower_id=103, upper_id=100, stable=True)])
+        observation = dict(status='ready', placement=dict(stacking=stack))
+        with patch.object(self.board, 'runtime_observation', return_value=observation):
+            value = self.board.cue_targets_snapshot()
+        self.assertEqual(value['stacking'], stack)
+        value['stacking']['relations'][0]['lower_id'] = 104
+        self.assertEqual(stack['relations'][0]['lower_id'], 103)
+        with patch.object(self.board, 'runtime_observation', return_value=dict(status='unavailable')):
+            value = self.board.cue_targets_snapshot()
+        self.assertEqual(value['status'], 'unavailable')
+        self.assertEqual(value['stacking']['status'], 'unavailable')
 
     def test_mobile_projection_requires_owner_scope_acknowledgement(self):
         mobile = load('mobile-ltz-api')
@@ -337,115 +347,178 @@ class CueMapVerificationTests(unittest.TestCase):
         self.assertIn(49, [t['id'] for t in value['tags']])
         return value
 
-    def test_bad_size_or_shape_then_hidden_49_retains_map_with_independent_anchors(self):
-        for bad in ({'nx':.65, 'size':90}, {'nx':.65, 'ncorners':None},
-                    {'nx':.65, 'ncorners':[[.65+x/1280,.5+y/720] for x,y in ((-35,-5),(35,-5),(35,5),(-35,5))]},
-                    {'nx':.65, 'ncorners':[[.1,.1],[.2,.2],[.1,.2],[.2,.1]]}):
+    def test_bad_geometry_and_total_occlusion_keep_all_fixed_positions(self):
+        for bad in ({'nx':.65,'size':90}, {'ncorners':None},
+                    {'ncorners':[[.1,.1],[.2,.2],[.1,.2],[.2,.1]]}):
             with self.subTest(bad=bad):
-                self.setUp(); epoch = self.learn()['epoch']
-                saved = copy.deepcopy(self.map.records[49])
-                for _ in range(3):
-                    value = self.frame(changes={49:bad})
-                    self.assertEqual(value['status'], 'ready')
-                    self.assertEqual(value['epoch'], epoch, 'Invalid geometry cannot confirm movement')
-                    self.assertEqual(value['quarantined_tags'][0]['reason'], 'marker_geometry')
+                self.setUp(); initial=self.learn(); epoch=initial['epoch']
+                original={t['id']:(t['nx'],t['ny']) for t in initial['fixed_tags']}
+                self.frame(changes={49:bad})
                 for _ in range(200):
-                    value = self.frame(hidden=(49,))
-                    self.assertEqual(value['status'], 'ready')
-                    self.assertEqual(value['verification']['anchor_ids'], [40,42,43,44])
-                    self.assertEqual(value['epoch'], epoch)
-                    self.assertNotIn(49, [t['id'] for t in value['tags']], 'No new acquisition of disputed 49')
-                self.assertEqual(self.map.records[49]['tag'], saved['tag'])
-                self.assertEqual(self.map.records[49]['last_seen'], saved['last_seen'])
+                    value=self.frame(hidden=tuple(self.positions))
+                    self.assertEqual(value['status'],'ready')
+                    self.assertEqual(value['epoch'],epoch)
+                    self.assertEqual(value['blocked_fixed_ids'],[])
+                    self.assertEqual({t['id']:(t['nx'],t['ny']) for t in value['tags']},original)
+                    self.assertTrue(all(t['cached'] and not t['visible'] for t in value['tags']))
+                self.assertEqual(value['quarantined_tags'][0]['reason'],'marker_geometry')
 
-    def test_single_valid_size_position_outlier_is_isolated_but_confirmed_move_resets_map(self):
-        epoch = self.learn()['epoch']
-        for n in range(3):
-            value = self.frame(changes={49:{'nx':.65}})
-            if n < 2:
-                self.assertEqual(value['status'], 'ready')
-                self.assertEqual(value['quarantined_tags'][0]['reason'], 'position_conflict')
-                self.assertEqual(value['epoch'], epoch)
-        self.assertNotEqual(value['epoch'], epoch)
-        self.assertEqual(value['epoch_marker_id'], 49)
-        self.assertEqual(value['tags'], [], 'New positions must qualify again')
+    def test_fixed_pose_and_corners_are_immutable_but_live_timestamps_advance(self):
+        initial=self.learn(); original=copy.deepcopy(self.map.records[40]['tag'])
+        for delta in (.002,-.002,.003,0):
+            value=self.frame(changes={40:{'nx':.2+delta}})
+            target=next(t for t in value['tags'] if t['id']==40)
+            self.assertEqual(target['nx'],original['nx'])
+            self.assertEqual(target['ncorners'],original['ncorners'])
+            self.assertGreater(target['last_seen'],initial['frame_at'])
+            self.assertTrue(target['visible'])
+        value['fixed_tags'][0]['nx']=999
+        self.assertEqual(self.map.snapshot(self.now)['fixed_tags'][0]['nx'],.2)
 
-    def test_position_outlier_followed_by_occlusion_does_not_require_the_target_to_reappear(self):
-        self.learn()
-        self.frame(changes={49:{'nx':.65}})
-        for _ in range(20):
-            value = self.frame(hidden=(49,))
-            self.assertEqual(value['status'], 'ready')
-            self.assertEqual(value['pending_fixed_ids'], [49])
-        value = self.frame()
-        self.assertEqual(value['pending_fixed_ids'], [])
-        self.assertIn(49, [t['id'] for t in value['tags']])
+    def test_late_identification_adds_to_same_board_without_waiting_for_every_tag(self):
+        for _ in range(3):value=self.frame(hidden=(49,))
+        epoch=value['epoch'];self.assertEqual(value['status'],'ready')
+        self.assertNotIn(49,[t['id'] for t in value['tags']])
+        for _ in range(3):value=self.frame()
+        self.assertEqual(value['epoch'],epoch)
+        self.assertIn(49,[t['id'] for t in value['tags']])
 
-    def test_lost_or_shifted_anchors_revoke_retained_authority_until_verified_again(self):
-        for failure in ('missing', 'shifted'):
-            with self.subTest(failure=failure):
-                self.setUp(); self.learn()
-                self.frame(changes={49:{'size':90}})
-                value = self.frame(hidden=(49,44) if failure=='missing' else (49,),
-                    changes={i:{'nx':x+.006} for i,(x,y) in self.positions.items() if i!=49} if failure=='shifted' else {})
-                self.assertEqual(value['status'], 'unavailable')
-                for _ in range(3):
-                    value = self.frame(hidden=(49,))
-                self.assertEqual(value['status'], 'ready')
-                self.assertEqual(value['pending_fixed_ids'], [49])
+    def test_single_geometry_valid_conflict_blocks_only_that_id_and_recovers(self):
+        epoch=self.learn()['epoch']
+        for _ in range(6):
+            value=self.frame(changes={49:{'nx':.65}})
+            self.assertEqual(value['status'],'ready')
+            self.assertEqual(value['blocked_fixed_ids'],[49])
+            self.assertEqual(value['epoch'],epoch)
+            self.assertEqual(next(t for t in value['tags'] if t['id']==49)['nx'],.5)
+        self.assertEqual(self.frame(hidden=(49,))['blocked_fixed_ids'],[49])
+        self.assertEqual(self.frame()['blocked_fixed_ids'],[])
 
-    def test_clustered_collinear_or_distant_anchors_cannot_verify_target(self):
-        for positions in ({40:(.2,.2),42:(.4,.4),43:(.6,.6),44:(.8,.8)},
-                          {40:(.47,.47),42:(.53,.47),43:(.53,.53),44:(.47,.53)},
-                          {40:(.1,.1),42:(.35,.1),43:(.35,.35),44:(.1,.35)}):
-            with self.subTest(positions=positions):
-                self.setUp(); self.positions.update(positions);self.learn()
-                value = self.frame(changes={49:{'size':90}})
-                self.assertEqual(value['status'], 'unavailable')
+    def test_coherent_translation_rotation_and_resize_hold_then_relearn(self):
+        import math
+        for angle,scale in ((0,1),(.1,1),(0,.8)):
+            with self.subTest(angle=angle,scale=scale):
+                self.setUp(); epoch=self.learn()['epoch']
+                changes={i:dict(nx=.53+scale*((x-.5)*math.cos(angle)-(y-.5)*math.sin(angle)),
+                                ny=.53+scale*((x-.5)*math.sin(angle)+(y-.5)*math.cos(angle)),size=40*scale)
+                         for i,(x,y) in self.positions.items()}
+                for n in range(3):
+                    value=self.frame(changes=changes)
+                    if n<2:
+                        self.assertEqual(value['status'],'unavailable')
+                        self.assertGreaterEqual(len(value['board_motion_ids']),2)
+                        self.assertEqual(value['tags'],[])
+                        self.assertEqual(value['epoch'],epoch)
+                self.assertNotEqual(value['epoch'],epoch)
+                self.assertEqual(value['epoch_reason'],'board_moved')
+                self.assertEqual(value['fixed_tags'],[])
+                for _ in range(3):value=self.frame(changes=changes)
+                self.assertEqual(value['status'],'ready')
+                self.assertAlmostEqual(next(t for t in value['tags'] if t['id']==40)['nx'],changes[40]['nx'])
 
-    def test_frozen_reference_prevents_gradual_camera_drift_from_validating_old_target(self):
-        self.learn(); ref = copy.deepcopy(self.map.records[40]['reference'])
-        self.frame(changes={49:{'size':90}})
-        for delta in (.002, .004, .006, .008):
-            value = self.frame(hidden=(49,), changes={i:{'nx':x+delta} for i,(x,y) in self.positions.items() if i!=49})
-        self.assertEqual(value['status'], 'unavailable')
-        self.assertEqual(self.map.records[40]['reference'], ref)
-
-    def test_repeated_frames_reads_and_camera_failure_cannot_renew_anchor_authority(self):
-        self.learn(); self.frame(changes={49:{'size':90}})
-        stamp = self.now
+    def test_two_separated_markers_detect_board_movement_without_all_targets(self):
+        self.learn();epoch=self.map.epoch
         for _ in range(3):
-            value = self.frame(hidden=(49,), frame_at=stamp)
-        self.assertEqual(value['status'], 'unavailable')
-        self.assertEqual(value['verification']['observed_at'], stamp)
-        self.assertEqual(self.frame(hidden=(49,), status='unavailable')['status'], 'unavailable')
-        epoch = value['epoch']
-        value = self.frame(hidden=(49,), camera_identity='other')
-        self.assertNotEqual(value['epoch'], epoch)
-        self.assertEqual(value['tags'], [])
+            value=self.frame(hidden=(43,44,49),changes={40:{'nx':.25},42:{'nx':.85}})
+        self.assertNotEqual(value['epoch'],epoch)
 
-    def test_fixed_marker_uses_its_own_learned_size_so_a_larger_core_is_valid(self):
-        self.positions[38] = (.5,.3)
+    def test_board_motion_confirms_when_extra_anchors_flicker(self):
+        self.learn();epoch=self.map.epoch
+        change={i:{'nx':x+.04} for i,(x,y) in self.positions.items()}
+        for hidden in ((43,), (44,), (49,)):
+            value=self.frame(hidden=hidden,changes=change)
+        self.assertNotEqual(value['epoch'],epoch)
+        self.assertEqual(value['epoch_reason'],'board_moved')
+        self.assertEqual(value['fixed_tags'],[])
+
+    def test_tightly_clustered_or_wrong_scale_decodes_cannot_confirm_board_motion(self):
+        self.positions={40:(.4,.4),42:(.45,.4)};self.learn_pair()
+        epoch=self.map.epoch
+        for _ in range(4):self.frame(changes={40:{'nx':.5},42:{'nx':.55}})
+        self.assertEqual(self.map.epoch,epoch)
+        self.setUp();self.learn();epoch=self.map.epoch
         for _ in range(4):
-            value = self.frame(changes={38:{'size':65}})
-        self.assertIn(38, [t['id'] for t in value['tags']])
-        self.assertEqual(value['pending_fixed_ids'], [])
+            value=self.frame(changes={i:{'nx':x+.05,'size':90} for i,(x,y) in self.positions.items()})
+        self.assertEqual(value['epoch'],epoch)
+        self.assertEqual(value['status'],'ready','Wrong-sized projected detections do not move the board')
 
-    def test_quarantine_keeps_occupancy_without_publishing_target_coordinates(self):
-        self.learn(); self.frame(changes={49:{'size':90}})
-        atom = CueTargetTests.sized(dict(id=103,nx=.5,ny=.5,missing=0))
-        tags = [CueTargetTests.sized(dict(id=i,nx=x,ny=y,missing=0))
-                for i,(x,y) in self.positions.items() if i!=49] + [atom]
-        value = self.frame(hidden=(49,), detections=tags, visible_ids=[t['id'] for t in tags])
-        self.assertEqual(value['status'], 'ready')
-        self.assertEqual(value['quarantined_tags'][0]['covered_by'], [103])
-        self.assertNotIn('nx', value['quarantined_tags'][0])
+    def learn_pair(self):
+        for _ in range(3):self.frame()
 
-    def test_invalid_marker_geometry_cannot_establish_a_new_fixed_position(self):
+    def test_board_motion_hold_does_not_clear_on_occlusion_or_repeat_frames(self):
+        self.learn();epoch=self.map.epoch
+        change={i:{'nx':x+.04} for i,(x,y) in self.positions.items()}
+        first=self.frame(changes=change)
+        for _ in range(3):
+            value=self.frame(changes=change,frame_at=first['frame_at'])
+            self.assertEqual(value['status'],'unavailable')
+            self.assertEqual(value['epoch'],epoch)
         for _ in range(4):
-            value = self.frame(changes={49:{'ncorners':None}})
-        self.assertNotIn(49, [t['id'] for t in value['tags']])
-        self.assertNotIn(49, self.map.records)
+            value=self.frame(hidden=tuple(self.positions))
+            self.assertEqual(value['status'],'unavailable')
+        for _ in range(4):value=self.frame()
+        self.assertEqual(value['status'],'ready')
+        self.assertEqual(value['epoch'],epoch)
+
+    def test_gradual_board_drift_uses_original_reference_not_last_detection(self):
+        self.learn();original=copy.deepcopy(self.map.records[40]['reference'])
+        for delta in (.003,.006,.009,.012):
+            value=self.frame(changes={i:{'nx':x+delta} for i,(x,y) in self.positions.items()})
+        self.assertEqual(value['status'],'unavailable')
+        self.assertEqual(self.map.records[40]['reference'],original)
+
+    def test_camera_staleness_stops_motion_but_retains_display_only_memory(self):
+        self.learn();stamp=self.now
+        value=self.map.snapshot(stamp+1.6)
+        self.assertEqual(value['status'],'unavailable');self.assertEqual(value['tags'],[])
+        self.assertEqual(len(value['fixed_tags']),5)
+        value=self.frame(status='unavailable')
+        self.assertEqual(value['tags'],[]);self.assertEqual(len(value['fixed_tags']),5)
+        value=self.frame(camera_identity='new')
+        self.assertEqual(value['fixed_tags'],[])
+
+    def test_fixed_marker_uses_its_own_size_including_larger_core(self):
+        self.positions[38]=(.5,.3)
+        for _ in range(4):value=self.frame(changes={38:{'size':65}})
+        self.assertIn(38,[t['id'] for t in value['tags']]);self.assertEqual(value['pending_fixed_ids'],[])
+
+    def test_occupancy_survives_bad_geometry_and_atom_battery_loss(self):
+        self.learn();self.frame(changes={49:{'size':90}})
+        atom=CueTargetTests.sized(dict(id=103,nx=.5,ny=.5,missing=0))
+        value=self.frame(detections=[atom],visible_ids=[103])
+        target=next(t for t in value['tags'] if t['id']==49)
+        self.assertEqual(target['covered_by'],[103])
+        self.now+=60;value=self.frame(hidden=tuple(self.positions))
+        self.assertEqual(next(t for t in value['tags'] if t['id']==49)['covered_by'],[103])
+
+    def test_invalid_geometry_never_establishes_a_new_fixed_position(self):
+        for _ in range(4):value=self.frame(changes={49:{'ncorners':None}})
+        self.assertNotIn(49,[t['id'] for t in value['tags']]);self.assertNotIn(49,self.map.records)
+
+class FixedScopeTests(unittest.TestCase):
+    def test_each_run_has_its_own_shared_board_scope(self):
+        from shared.fixed_board import cue_layout
+        game=dict(run_id='first',level=dict(id='same',sockets=[{'aruco_id':40}],core=dict(marker_x=1,marker_y=1)))
+        scope,ids=cue_layout(game)
+        self.assertEqual(ids,[40,38])
+        self.assertEqual(cue_layout(copy.deepcopy(game))[0],scope)
+        game['run_id']='second';self.assertNotEqual(cue_layout(game)[0],scope)
+
+    def test_operator_and_mobile_register_the_same_owner_scope(self):
+        game=dict(contract='photon.game',version=2,run_id='first',level=dict(id='same',sockets=[{'aruco_id':40}]))
+        calls=[]
+        def cue(**kw):
+            calls.append(kw)
+            return dict(contract='photon.board.cue-targets',version=2,layout_scope=kw['scope'],fixed_ids=kw['fixed_ids'],
+                        status='ready',tags=[],fixed_tags=[])
+        board=SimpleNamespace(cue_targets_snapshot=cue,
+            tracking_snapshot=lambda:dict(contract='photon.board.tracking',version=1,status='ready'),
+            camera_markers_snapshot=lambda:dict(contract='photon.board.camera-markers',version=1,status='ready'))
+        ctx=FakeContext({'photon-game':SimpleNamespace(game_snapshot=lambda:game),'photon-board':board})
+        mobile,y=load('mobile-ltz-api'),load('laser-tag-y');mobile.hub_init(ctx);y.hub_init(ctx)
+        first=mobile._cue_targets_projection(game);second=y._marker_diagnostics()['fixed_board']
+        self.assertEqual(first['scope'],second['scope']);self.assertEqual(calls[0],calls[1])
+        self.assertEqual(first['version'],2)
 
 
 if __name__ == '__main__':

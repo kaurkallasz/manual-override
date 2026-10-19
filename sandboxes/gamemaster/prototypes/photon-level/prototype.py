@@ -7,7 +7,6 @@ import json
 import math
 import os
 import threading
-import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -41,12 +40,20 @@ MANIFEST = {
 }
 bp = Blueprint("photon_level", __name__)
 _lock = threading.RLock()
+# Serialize explicit publishers, never gameplay readers, around filesystem work.
+_publish_lock = threading.RLock()
 _live = live.LiveState()
 _raw_map: dict = {}
 _runtime: dict = {}
 _waves: dict = {}
 _map_asset_paths: dict = {}
 _load_error: str | None = None
+_runtime_asset_cache: dict = {
+    "contract": "photon.level.assets", "version": 1, "status": "unavailable",
+    "error": "Artwork has not been validated", "revision": "unavailable",
+    "base": "/p/photon-level/assets", "assets": {},
+}
+_asset_publication = 0
 
 
 class LevelError(ValueError):
@@ -129,22 +136,27 @@ def _scene_asset_paths(raw_map, runtime):
 
 def _reload_source():
     global _raw_map, _runtime, _waves, _load_error, _map_asset_paths
-    global _runtime_asset_cache
-    _runtime_asset_cache = None
-    try:
-        raw_map, runtime, waves = _load_source()
-        map_assets = _scene_asset_paths(raw_map, runtime)
-    except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError) as exc:
-        _load_error = str(exc)
-        return False
-    _raw_map, _runtime, _waves = raw_map, runtime, waves
-    _map_asset_paths = map_assets
-    _load_error = None
-    return True
+    global _runtime_asset_cache, _asset_publication
+    with _publish_lock:
+        try:
+            raw_map, runtime, waves = _load_source()
+            map_assets = _scene_asset_paths(raw_map, runtime)
+            presentation = asset_snapshot(ASSET_ROOT, map_assets)
+        except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError) as exc:
+            with _lock:
+                _load_error = str(exc)
+            return False
+        # Readers see a complete geometry/artwork pair, or the preceding pair.
+        with _lock:
+            _raw_map, _runtime, _waves = raw_map, runtime, waves
+            _map_asset_paths = map_assets
+            _runtime_asset_cache = presentation
+            _asset_publication += 1
+            _load_error = None
+        return True
 
 
-with _lock:
-    _reload_source()
+_reload_source()
 
 
 def level_snapshot():
@@ -183,40 +195,51 @@ def runtime_bundle():
         }
 
 
-_runtime_asset_cache = None
-_runtime_asset_checked_at = 0.0
-
-
 def runtime_status():
-    """Optional Level runtime v2 metadata read; no runtime/wave copies.
-
-    Module health and layout revision are immediate. Artwork is revalidated at
-    most every 250 ms; direct presentation_assets() reads remain uncached.
-    """
-    global _runtime_asset_cache, _runtime_asset_checked_at
+    """Published Level runtime v2 metadata; no file I/O or validation on reads."""
     with _lock:
-        now = time.monotonic()
-        if _runtime_asset_cache is None or now - _runtime_asset_checked_at >= 0.25:
-            _runtime_asset_cache = presentation_assets()
-            _runtime_asset_checked_at = now
-        presentation = copy.deepcopy(_runtime_asset_cache)
-        if _load_error:
-            presentation.update(status="unavailable", error=_load_error)
         return {
             "contract": RUNTIME_CONTRACT, "version": RUNTIME_VERSION,
             "revision": _runtime.get("layout_revision", 0),
             "status": "ready" if _load_error is None else "unavailable",
-            "error": _load_error, "presentation": presentation,
+            "error": _load_error, "presentation": presentation_assets(),
         }
 
 
 def presentation_assets():
-    """Static content descriptor embedded in the runtime bundle."""
+    """Isolated copy of the last explicitly validated content publication."""
     with _lock:
-        output = asset_snapshot(ASSET_ROOT, _map_asset_paths)
+        output = copy.deepcopy(_runtime_asset_cache)
         if _load_error:
             output.update(status="unavailable", error=_load_error)
         return output
+
+
+def refresh_presentation_assets():
+    """Validate changed artwork and publish it without blocking game reads.
+
+    Explicit concurrent refreshes coalesce onto the publication completed while
+    they waited. Layout publishers use the same writer lock, so an old scan can
+    never overwrite a newer layout's manifest. No periodic refresh is scheduled.
+    """
+    global _runtime_asset_cache, _asset_publication
+    with _lock:
+        generation = _asset_publication
+    with _publish_lock:
+        with _lock:
+            if generation != _asset_publication or _load_error is not None:
+                return presentation_assets()
+            paths = dict(_map_asset_paths)
+        try:
+            output = asset_snapshot(ASSET_ROOT, paths)
+        except (OSError, TypeError, KeyError, ValueError) as exc:
+            output = presentation_assets()
+            output.update(status="unavailable", error=str(exc))
+        with _lock:
+            _runtime_asset_cache = output
+            _asset_publication += 1
+        _live.bump()
+    return presentation_assets()
 
 
 def presentation_asset_response(filename):
@@ -233,37 +256,39 @@ def editor_snapshot():
     with _lock:
         if _load_error is not None:
             raise LevelError(_load_error)
-        level = simple_level(_runtime)
-        asset_root = Path(ASSET_ROOT).resolve()
-        assets = _scene_asset_paths(_raw_map, _runtime)
-        for asset_id, relative in assets.items():
-            if not (asset_root / relative).is_file():
-                raise LevelError(f"preview asset unavailable: {asset_id}")
+        raw_map, runtime = copy.deepcopy(_raw_map), copy.deepcopy(_runtime)
+    # Editor-only filesystem checks must not hold the gameplay publication lock.
+    level = simple_level(runtime)
+    asset_root = Path(ASSET_ROOT).resolve()
+    assets = _scene_asset_paths(raw_map, runtime)
+    for asset_id, relative in assets.items():
+        if not (asset_root / relative).is_file():
+            raise LevelError(f"preview asset unavailable: {asset_id}")
 
-        # Publish an affine display transform, not a second copy of the rules.
-        # Resizing changes only the marker's optical offset, not its footprint.
-        sockets = {socket["socket_id"]: socket for socket in level["sockets"]}
-        for layer in _raw_map["layers"]:
-            for obj in layer.get("objects", []):
-                props = properties(obj)
-                socket = sockets.get(props.get("socket_id"))
-                if socket is None:
-                    continue
-                slope = float(props["aruco_optical_center_v"]) - 0.5
-                angle = math.radians(float(obj.get("rotation", 0)))
-                socket["marker_resize_x"] = -slope * math.sin(angle)
-                socket["marker_resize_y"] = slope * math.cos(angle)
+    # Publish an affine display transform, not a second copy of the rules.
+    # Resizing changes only the marker's optical offset, not its footprint.
+    sockets = {socket["socket_id"]: socket for socket in level["sockets"]}
+    for layer in raw_map["layers"]:
+        for obj in layer.get("objects", []):
+            props = properties(obj)
+            socket = sockets.get(props.get("socket_id"))
+            if socket is None:
+                continue
+            slope = float(props["aruco_optical_center_v"]) - 0.5
+            angle = math.radians(float(obj.get("rotation", 0)))
+            socket["marker_resize_x"] = -slope * math.sin(angle)
+            socket["marker_resize_y"] = slope * math.cos(angle)
 
-        for marker_id in (38, *range(40, 56)):
-            relative = f"aruco/{marker_id}.png"
-            if not (asset_root / relative).is_file():
-                raise LevelError(f"preview marker unavailable: {marker_id}")
-            assets[f"marker/{marker_id}"] = relative
-        return {
-            "contract": "photon.level.editor", "version": 1,
-            "status": "ready", "revision": _runtime["layout_revision"],
-            "level": level, "assets": assets,
-        }
+    for marker_id in (38, *range(40, 56)):
+        relative = f"aruco/{marker_id}.png"
+        if not (asset_root / relative).is_file():
+            raise LevelError(f"preview marker unavailable: {marker_id}")
+        assets[f"marker/{marker_id}"] = relative
+    return {
+        "contract": "photon.level.editor", "version": 1,
+        "status": "ready", "revision": runtime["layout_revision"],
+        "level": level, "assets": assets,
+    }
 
 
 def tiled_map_snapshot(asset_base: str):
@@ -292,10 +317,11 @@ def waves_document():
 
 def update_layout(sockets, *, expected_revision=None):
     """Validate and atomically publish all sixteen authored socket positions."""
-    with _lock:
-        if _load_error is not None:
-            raise LevelError(_load_error)
-        current = int(_runtime["layout_revision"])
+    with _publish_lock:
+        with _lock:
+            if _load_error is not None:
+                raise LevelError(_load_error)
+            current = int(_runtime["layout_revision"])
         if expected_revision is not None:
             try:
                 expected_revision = int(expected_revision)
@@ -360,6 +386,18 @@ def level_asset(filename):
 @bp.route("/api/assets")
 def assets_api():
     response = jsonify(presentation_assets())
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.route("/api/assets/refresh", methods=["POST"])
+def refresh_assets_api():
+    denied = _operator_only()
+    if denied:
+        return denied
+    output = refresh_presentation_assets()
+    response = jsonify(output)
+    response.status_code = 200 if output.get("status") == "ready" else 503
     response.headers["Cache-Control"] = "no-store"
     return response
 

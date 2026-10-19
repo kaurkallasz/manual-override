@@ -105,6 +105,34 @@ class MobileMonitorTests(unittest.TestCase):
         self.assertEqual(data['active_streams'], 2)
         self.assertEqual(data['sse_bytes'], len(one) + len(two))
 
+    def test_shop_clock_and_profile_changes_do_not_resend_static_scene(self):
+        # The shop carries a live server clock. Treating progress as static
+        # forced a full level/art snapshot on every real player's SSE tick.
+        value = {**self.value, 'mobile_progress': {
+            'revision': 1, 'player': {'current_control_tier': 1},
+            'shop': {'server_time': 100}}}
+        with patch.object(self.facade, 'mobile_snapshot', side_effect=lambda: copy.deepcopy(value)):
+            response = self.client.get('/api/events', environ_overrides=self.green, buffered=False)
+            try:
+                stream = iter(response.response)
+                def state(chunk):
+                    return json.loads(chunk.decode().split('data: ', 1)[1])
+                self.assertEqual(state(next(stream))['kind'], 'snapshot')
+                value['mobile_progress']['shop']['server_time'] += 1
+                value['mobile_progress']['player']['current_control_tier'] = 2
+                self.facade._live.bump()
+                update = state(next(stream))
+                self.assertEqual(update['kind'], 'update')
+                self.assertNotIn('level', update['state'])
+                self.assertEqual(update['state']['mobile_progress'], value['mobile_progress'])
+                value['level'] = {'name': 'new map'}
+                self.facade._live.bump()
+                full = state(next(stream))
+                self.assertEqual(full['kind'], 'snapshot')
+                self.assertEqual(full['state']['level'], value['level'])
+            finally:
+                response.close()
+
     def test_error_responses_are_counted_without_changing_status(self):
         response = self.client.post('/api/command?side=purple', json={'action': 'connect'}, environ_overrides=self.green)
         self.assertEqual(response.status_code, 403)

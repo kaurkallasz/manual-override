@@ -10,9 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from .engine import DEFAULT_SETTINGS, CONTROL_ORC_KEYS, CONTROL_PACE_KEYS, PIECE_KEYS
+from . import ranged_enemies, rewards, upgrades
 
 
 RULES = {
+    **upgrades.RULES,
+    **ranged_enemies.RULES,
+    **rewards.RULES,
+    "breaker_attack_mode": (str, 0, 0),
     **{key: (int, 0, 999) for key in PIECE_KEYS},
     "wave_count": (int, 1, 12),
     "wave_interval_s": (float, 2.0, 600.0),
@@ -90,6 +95,11 @@ def validate_settings(incoming: dict[str, Any]) -> tuple[dict[str, Any], dict[st
         try:
             if isinstance(raw, bool):
                 raise ValueError
+            if kind is str:
+                if raw not in ('melee', 'ranged'):
+                    raise ValueError
+                clean[key] = raw
+                continue
             if kind is int:
                 numeric = float(raw)
                 if not numeric.is_integer():
@@ -102,13 +112,17 @@ def validate_settings(incoming: dict[str, Any]) -> tuple[dict[str, Any], dict[st
             if key == 'difficulty_offset' and value not in (-.10,-.05,0,.05,.10):
                 raise ValueError
         except (TypeError, ValueError, OverflowError):
-            errors[key] = f"must be between {lower:g} and {upper:g}"
+            errors[key] = "must be melee or ranged" if kind is str else f"must be between {lower:g} and {upper:g}"
             continue
         clean[key] = value
-    for keys in (CONTROL_ORC_KEYS,CONTROL_PACE_KEYS):
+    for keys in (CONTROL_ORC_KEYS,CONTROL_PACE_KEYS,upgrades.BONUS_KEYS):
         for previous,current in zip(keys,keys[1:]):
             if previous in clean and current in clean and clean[current]<=clean[previous]:
-                errors[current]='must be greater than the preceding control method'
+                errors[current]='must be greater than the preceding upgrade level' if keys == upgrades.BONUS_KEYS else 'must be greater than the preceding control method'
+    if all('reward_'+k in clean for k in rewards.TYPES) and clean['reward_brute'] <= max(clean['reward_'+k] for k in rewards.TYPES if k!='brute'):
+        errors['reward_brute'] = 'large brutes must be worth more than every smaller class'
+    if clean.get('breaker_draw_s', 0) >= clean.get('breaker_interval_s', 6):
+        errors['breaker_draw_s'] = 'must be shorter than the shot interval'
     codes = [clean.get(key) for key in PIECE_KEYS]
     if len(set(codes)) != len(codes):
         for key in PIECE_KEYS:
@@ -136,7 +150,7 @@ class SettingsStore:
             incoming = data.get("settings")
             legacy = set(incoming) - set(PIECE_KEYS) if isinstance(incoming, dict) else set()
             if isinstance(incoming,dict):
-                for key in ('first_wave_delay_s','difficulty_offset',*CONTROL_PACE_KEYS):
+                for key in ('first_wave_delay_s','difficulty_offset',*CONTROL_PACE_KEYS,*ranged_enemies.DEFAULTS,*rewards.DEFAULTS,*upgrades.DEFAULTS):
                     incoming.setdefault(key,DEFAULTS[key])
                 legacy = set(incoming)-set(PIECE_KEYS)
             if not isinstance(incoming, dict) or set(incoming) - set(RULES) or legacy not in (
@@ -200,7 +214,7 @@ class SettingsStore:
                 "presets": {key: dict(value) for key, value in PRESETS.items()},
                 "limits": {
                     key: {"min": lower, "max": upper, "integer": kind is int}
-                    for key, (kind, lower, upper) in RULES.items()
+                    for key, (kind, lower, upper) in RULES.items() if kind is not str
                 },
             }
 

@@ -1,0 +1,519 @@
+{
+  "status": "synthetic design traces; human playtest still required",
+  "placement_rule": "four nearby towers at 180/240/420/480s, or 16 towers every15s from180s; refill120s from600s; early stack>=650s when ring ready",
+  "map_revision": 19,
+  "scenarios": [
+    {
+      "scenario": "partial",
+      "tier": 1,
+      "upgrade": 1,
+      "mode": "melee",
+      "seed": 42055,
+      "phase": "won",
+      "seconds": 1408.3,
+      "core_hp": 8807.75,
+      "kills": 1009,
+      "released": 1009,
+      "peak_alive": 111,
+      "peak_stopped": 0,
+      "towers_destroyed": 0,
+      "stacked": false,
+      "defense_bodies": 4,
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 420.0
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared",
+        "enemy_counts": {
+          "scheduled": {
+            "grunt": 495,
+            "runner": 234,
+            "breaker": 263,
+            "brute": 17
+          },
+          "released": {
+            "grunt": 495,
+            "runner": 234,
+            "breaker": 263,
+            "brute": 17
+          },
+          "killed": {
+            "grunt": 495,
+            "runner": 234,
+            "breaker": 263,
+            "brute": 17
+          },
+          "combat_kills": {
+            "grunt": 495,
+            "runner": 234,
+            "breaker": 263,
+            "brute": 17
+          },
+          "purge_kills": {
+            "grunt": 0,
+            "runner": 0,
+            "breaker": 0,
+            "brute": 0
+          }
+        },
+        "breaker_combat": {
+          "version": 1,
+          "stats": {
+            "shots": 0,
+            "hits": 0,
+            "blocks": 0,
+            "misses": 0,
+            "cancelled_draws": 0,
+            "deaths_before_release": 0,
+            "tower_damage": 0,
+            "core_damage": 0,
+            "tower_destructions": 0,
+            "core_destructions": 0,
+            "stopped_s": 0,
+            "aim_s": 0
+          },
+          "mode": "melee"
+        }
+      }
+    },
+    {
+      "scenario": "partial",
+      "tier": 1,
+      "upgrade": 1,
+      "mode": "ranged",
+      "seed": 42055,
+      "phase": "overrun",
+      "seconds": 1374.4,
+      "core_hp": 0.0,
+      "kills": 812,
+      "released": 1009,
+      "peak_alive": 209,
+      "peak_stopped": 95,
+      "towers_destroyed": 2,
+      "stacked": false,
+      "defense_bodies": 4,
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 420.0
+        },
+        "placements": {
+          "green": 2,
+          "purple": 2
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "core destroyed",
+        "enemy_counts": {
+          "scheduled": {
+            "grunt": 495,
+            "runner": 234,
+            "breaker": 263,
+            "brute": 17
+          },
+          "released": {
+            "grunt": 495,
+            "runner": 234,
+            "breaker": 263,
+            "brute": 17
+          },
+          "killed": {
+            "grunt": 396,
+            "runner": 234,
+            "breaker": 168,
+            "brute": 14
+          },
+          "combat_kills": {
+            "grunt": 396,
+            "runner": 234,
+            "breaker": 168,
+            "brute": 14
+          },
+          "purge_kills": {
+            "grunt": 0,
+            "runner": 0,
+            "breaker": 0,
+            "brute": 0
+          }
+        },
+        "breaker_combat": {
+          "version": 1,
+          "stats": {
+            "shots": 5916,
+            "hits": 5854,
+            "blocks": 0,
+            "misses": 44,
+            "cancelled_draws": 87,
+            "deaths_before_release": 48,
+            "tower_damage": 6809.5169007259965,
+            "core_damage": 9135.459999999835,
+            "tower_destructions": 2,
+            "core_destructions": 1,
+            "stopped_s": 8801.000000014486,
+            "aim_s": 3587.999999997832
+          },
+          "mode": "ranged"
+        }
+      }
+    },
+    {
+      "scenario": "full-rows",
+      "tier": 4,
+      "upgrade": 4,
+      "mode": "melee",
+      "seed": 42055,
+      "phase": "won",
+      "seconds": 1283.4,
+      "core_hp": 10000.0,
+      "kills": 1250,
+      "released": 1250,
+      "peak_alive": 154,
+      "peak_stopped": 0,
+      "towers_destroyed": 0,
+      "stacked": false,
+      "defense_bodies": 28,
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 210.1
+        },
+        "placements": {
+          "green": 8,
+          "purple": 8
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared",
+        "enemy_counts": {
+          "scheduled": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "released": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "killed": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "combat_kills": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "purge_kills": {
+            "grunt": 0,
+            "runner": 0,
+            "breaker": 0,
+            "brute": 0
+          }
+        },
+        "breaker_combat": {
+          "version": 1,
+          "stats": {
+            "shots": 0,
+            "hits": 0,
+            "blocks": 0,
+            "misses": 0,
+            "cancelled_draws": 0,
+            "deaths_before_release": 0,
+            "tower_damage": 0,
+            "core_damage": 0,
+            "tower_destructions": 0,
+            "core_destructions": 0,
+            "stopped_s": 0,
+            "aim_s": 0
+          },
+          "mode": "melee"
+        }
+      }
+    },
+    {
+      "scenario": "full-rows",
+      "tier": 4,
+      "upgrade": 4,
+      "mode": "ranged",
+      "seed": 42055,
+      "phase": "won",
+      "seconds": 1208.5,
+      "core_hp": 3429.24,
+      "kills": 1250,
+      "released": 1250,
+      "peak_alive": 262,
+      "peak_stopped": 160,
+      "towers_destroyed": 17,
+      "stacked": false,
+      "defense_bodies": 28,
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 210.1
+        },
+        "placements": {
+          "green": 8,
+          "purple": 8
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "all waves cleared",
+        "enemy_counts": {
+          "scheduled": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "released": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "killed": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "combat_kills": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "purge_kills": {
+            "grunt": 0,
+            "runner": 0,
+            "breaker": 0,
+            "brute": 0
+          }
+        },
+        "breaker_combat": {
+          "version": 1,
+          "stats": {
+            "shots": 20343,
+            "hits": 20051,
+            "blocks": 10,
+            "misses": 282,
+            "cancelled_draws": 331,
+            "deaths_before_release": 106,
+            "tower_damage": 72330.44100843226,
+            "core_damage": 6099.839999999761,
+            "tower_destructions": 17,
+            "core_destructions": 0,
+            "stopped_s": 30250.199999840293,
+            "aim_s": 12431.100000027693
+          },
+          "mode": "ranged"
+        }
+      }
+    },
+    {
+      "scenario": "early-stack",
+      "tier": 4,
+      "upgrade": 4,
+      "mode": "melee",
+      "seed": 42055,
+      "phase": "won",
+      "seconds": 652.4,
+      "core_hp": 10000.0,
+      "kills": 291,
+      "released": 291,
+      "peak_alive": 66,
+      "peak_stopped": 0,
+      "towers_destroyed": 0,
+      "stacked": true,
+      "defense_bodies": 28,
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 210.1
+        },
+        "placements": {
+          "green": 8,
+          "purple": 8
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "core activation",
+        "enemy_counts": {
+          "scheduled": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "released": {
+            "grunt": 185,
+            "runner": 45,
+            "breaker": 58,
+            "brute": 3
+          },
+          "killed": {
+            "grunt": 185,
+            "runner": 45,
+            "breaker": 58,
+            "brute": 3
+          },
+          "combat_kills": {
+            "grunt": 163,
+            "runner": 45,
+            "breaker": 58,
+            "brute": 1
+          },
+          "purge_kills": {
+            "grunt": 22,
+            "runner": 0,
+            "breaker": 0,
+            "brute": 2
+          }
+        },
+        "breaker_combat": {
+          "version": 1,
+          "stats": {
+            "shots": 0,
+            "hits": 0,
+            "blocks": 0,
+            "misses": 0,
+            "cancelled_draws": 0,
+            "deaths_before_release": 0,
+            "tower_damage": 0,
+            "core_damage": 0,
+            "tower_destructions": 0,
+            "core_destructions": 0,
+            "stopped_s": 0,
+            "aim_s": 0
+          },
+          "mode": "melee"
+        },
+        "core_health_at_stack": {
+          "hp": 10000.0,
+          "max_hp": 10000.0
+        }
+      }
+    },
+    {
+      "scenario": "early-stack",
+      "tier": 4,
+      "upgrade": 4,
+      "mode": "ranged",
+      "seed": 42055,
+      "phase": "won",
+      "seconds": 652.4,
+      "core_hp": 10000.0,
+      "kills": 291,
+      "released": 291,
+      "peak_alive": 95,
+      "peak_stopped": 58,
+      "towers_destroyed": 4,
+      "stacked": true,
+      "defense_bodies": 28,
+      "telemetry": {
+        "version": 1,
+        "first_placement_s": {
+          "green": 180.1,
+          "purple": 210.1
+        },
+        "placements": {
+          "green": 8,
+          "purple": 8
+        },
+        "pickup_to_placement_s": {
+          "green": [],
+          "purple": []
+        },
+        "pause_count": 0,
+        "outcome_reason": "core activation",
+        "enemy_counts": {
+          "scheduled": {
+            "grunt": 612,
+            "runner": 288,
+            "breaker": 327,
+            "brute": 23
+          },
+          "released": {
+            "grunt": 185,
+            "runner": 45,
+            "breaker": 58,
+            "brute": 3
+          },
+          "killed": {
+            "grunt": 185,
+            "runner": 45,
+            "breaker": 58,
+            "brute": 3
+          },
+          "combat_kills": {
+            "grunt": 163,
+            "runner": 45,
+            "breaker": 58,
+            "brute": 1
+          },
+          "purge_kills": {
+            "grunt": 22,
+            "runner": 0,
+            "breaker": 0,
+            "brute": 2
+          }
+        },
+        "breaker_combat": {
+          "version": 1,
+          "stats": {
+            "shots": 4086,
+            "hits": 4058,
+            "blocks": 0,
+            "misses": 28,
+            "cancelled_draws": 36,
+            "deaths_before_release": 19,
+            "tower_damage": 17038.989268575104,
+            "core_damage": 0,
+            "tower_destructions": 4,
+            "core_destructions": 0,
+            "stopped_s": 6093.2000000046355,
+            "aim_s": 2467.899999998851
+          },
+          "mode": "ranged"
+        },
+        "core_health_at_stack": {
+          "hp": 10000.0,
+          "max_hp": 10000.0
+        }
+      }
+    }
+  ]
+}

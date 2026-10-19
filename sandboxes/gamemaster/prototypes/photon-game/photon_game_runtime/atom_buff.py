@@ -18,6 +18,9 @@ def validated(value, now=None):
             return unavailable(value.get('error') or 'Board occupancy unavailable')
         def number(n):
             return type(n) in (int, float) and math.isfinite(n)
+        grace = value.get('policy', {}).get('grace_s', .35)
+        if not number(grace) or not .35 <= grace <= .9:
+            raise ValueError('Invalid occupancy dropout policy')
         stamp, frame = value.get('sampled_at'), value.get('frame_at')
         epoch, revision = value.get('source_epoch'), value.get('revision')
         relations = value.get('relations')
@@ -51,11 +54,11 @@ def validated(value, now=None):
                 markers.add(marker)
             clean.append({key: rec[key] for key in ('movable_id', 'marker_id', 'relation_id',
                          'state', 'observed_since', 'evidence_at', 'departed_at')})
-            if state == 'present' and now - evidence > .35:
+            if state == 'present' and now - evidence > grace:
                 clean[-1]['state'] = 'unavailable'
         return {'contract': 'photon.board.occupancy', 'version': 1,
                 'status': 'ready', 'error': None, 'sampled_at': stamp,
                 'frame_at': frame, 'source_epoch': epoch, 'revision': revision,
                 'relations': clean}
-    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
         return unavailable(exc)

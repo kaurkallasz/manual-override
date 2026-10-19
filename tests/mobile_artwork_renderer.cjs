@@ -17,7 +17,7 @@ function finish(){for(const image of pending.splice(0))image.onload()}
  const requests=reports.at(-1).requested;view.applyState({phase:'setup',level_revision:1});view.renderMap();
  assert.equal(reports.at(-1).requested,requests);assert.equal(reports.at(-1).revision,'["/art","first","ready"]');assert.equal(view.level.name,'first');
  view.applyState(state(2,'second'));assert.equal(view.level.name,'first','keep the old map while replacement art loads');view.renderMap();assert.ok(drawn.includes('/art/first.png'));
- const older=pending.splice(0);view.applyState(state(3,'third'));for(const image of older)image.onload();await settle();assert.equal(view.level.name,'first','late artwork cannot publish an obsolete level');
+ const older=pending.splice(0).map(image=>image.onload);view.applyState(state(3,'third'));for(const onload of older)onload();await settle();assert.equal(view.level.name,'first','late artwork cannot publish an obsolete level');
  finish();await settle();assert.equal(view.level.name,'third');view.renderMap();assert.ok(drawn.includes('/art/third.png'));
  view.applyState({status:'unavailable'});view.renderMap();assert.equal(view.level.name,'third');assert.equal(reports.at(-1).revision,'["/art","third","ready"]');view.destroy();
  console.log('Artwork survives missing descriptors, loads atomically and rejects superseded map loads.');

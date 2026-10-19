@@ -1,0 +1,165 @@
+{
+  "seconds": 30,
+  "views": 2,
+  "results": [
+    {
+      "samples": 29,
+      "minFps": 45,
+      "medianFps": 60,
+      "maxFps": 60,
+      "belowTarget": 0,
+      "intervalP95": 19.299999713897705,
+      "intervalP99": 33.40000009536743,
+      "longTasks": 0,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/photon-level/assets/upgrades/tesla-coil-l4-atlas.png?v=f2bf1457dbd58ba0ec44c1338c9f1af6e45e2b5ce19003f47064a791e53fafd6",
+        "last_error": null,
+        "ready": true,
+        "base": "/s/gamemaster/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 60,
+          "drawMs": 1.9000000953674316,
+          "frameMs": 16.599999999998545,
+          "quality": "dense",
+          "fieldMs": 0.6883333603541056,
+          "towerMs": 0.34333332379659015,
+          "enemyMs": 0.8516666889190674,
+          "combatMs": 0.1266666571299235,
+          "cacheBytes": 3533584
+        },
+        {
+          "fps": 60,
+          "drawMs": 2,
+          "frameMs": 16.69999999999709,
+          "quality": "dense",
+          "fieldMs": 0.6786885261535645,
+          "towerMs": 0.3524590320274478,
+          "enemyMs": 0.8672130928664911,
+          "combatMs": 0.11803279939245005,
+          "cacheBytes": 3533584
+        },
+        {
+          "fps": 60,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 16.69999999999709,
+          "quality": "dense",
+          "fieldMs": 0.6933334112167359,
+          "towerMs": 0.341666571299235,
+          "enemyMs": 0.8616666873296102,
+          "combatMs": 0.11166668732961019,
+          "cacheBytes": 3533584
+        },
+        {
+          "fps": 60,
+          "drawMs": 1.700000286102295,
+          "frameMs": 16.60000000000582,
+          "quality": "dense",
+          "fieldMs": 0.6967213192924124,
+          "towerMs": 0.35409836690933977,
+          "enemyMs": 0.8704918329832984,
+          "combatMs": 0.11147536606085105,
+          "cacheBytes": 3533584
+        },
+        {
+          "fps": 60,
+          "drawMs": 2.1000003814697266,
+          "frameMs": 16.599999999998545,
+          "quality": "dense",
+          "fieldMs": 0.6799999475479126,
+          "towerMs": 0.34500006834665936,
+          "enemyMs": 0.8516666491826376,
+          "combatMs": 0.125,
+          "cacheBytes": 3533584
+        }
+      ],
+      "heapBytes": 17858947
+    },
+    {
+      "samples": 29,
+      "minFps": 43,
+      "medianFps": 60,
+      "maxFps": 61,
+      "belowTarget": 0,
+      "intervalP95": 17.300000190734863,
+      "intervalP99": 33.40000009536743,
+      "longTasks": 0,
+      "assets": {
+        "requested": 89,
+        "loaded": 89,
+        "failed": 0,
+        "pending": 0,
+        "last_url": "/s/gamemaster/p/photon-level/assets/game-art/z-pixel-v2/normalized/structures/runtime/activation/mortar-activation-v2.png?v=45945d539bfb06a63ce7c27adb1ac19f9f4153889cfccca7abde8cdbc48a942f",
+        "last_error": null,
+        "ready": true,
+        "base": "/s/gamemaster/p/photon-level/assets",
+        "revision": "[\"/p/photon-level/assets\",\"e3a856f0b7acbb1b3b5eb8920fec905172ceeebd599809dd975ffe880b26f02b\",\"ready\"]"
+      },
+      "passes": [
+        {
+          "fps": 60,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 16.599999999998545,
+          "quality": "dense",
+          "fieldMs": 0.6599999984105428,
+          "towerMs": 0.3516666571299235,
+          "enemyMs": 0.8933333396911621,
+          "combatMs": 0.12333332697550456,
+          "cacheBytes": 3471632
+        },
+        {
+          "fps": 60,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 16.700000000000728,
+          "quality": "dense",
+          "fieldMs": 0.7065573442177694,
+          "towerMs": 0.35409836690933977,
+          "enemyMs": 0.9016393833473081,
+          "combatMs": 0.12295077277011558,
+          "cacheBytes": 3471632
+        },
+        {
+          "fps": 60,
+          "drawMs": 2,
+          "frameMs": 16.69999999999709,
+          "quality": "dense",
+          "fieldMs": 0.6819671881003458,
+          "towerMs": 0.3704918095322906,
+          "enemyMs": 0.8754098298119717,
+          "combatMs": 0.1213114613392314,
+          "cacheBytes": 3471632
+        },
+        {
+          "fps": 60,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 16.700000000000728,
+          "quality": "dense",
+          "fieldMs": 0.7032786744539855,
+          "towerMs": 0.35737702103911856,
+          "enemyMs": 0.8885246183051437,
+          "combatMs": 0.129508198284712,
+          "cacheBytes": 3471632
+        },
+        {
+          "fps": 60,
+          "drawMs": 2.0999999046325684,
+          "frameMs": 16.700000000004366,
+          "quality": "dense",
+          "fieldMs": 0.6754098407557754,
+          "towerMs": 0.34754099611376155,
+          "enemyMs": 0.9032786400591741,
+          "combatMs": 0.11475411399466093,
+          "cacheBytes": 3471632
+        }
+      ],
+      "heapBytes": 12547071
+    }
+  ],
+  "errors": []
+}

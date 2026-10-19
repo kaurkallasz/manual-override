@@ -5,7 +5,7 @@ for(const [,script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g))new vm.Scr
 let now=1000,calls=[],elements=new Map(),response={};
 const node=id=>{if(!elements.has(id))elements.set(id,{options:[1,2,3,4].map(value=>({value:String(value)}))});return elements.get(id);};
 const ctx={TEAM:'green',URLSearchParams,AbortSignal,AbortController,setTimeout,clearTimeout,performance:{now:()=>now},
- window:{},observeAutoPpxPickupFailure(){},autoPpxCueDisplayTags:()=>[],
+ window:{},parent:{},observeAutoPpxPickupFailure(){},autoPpxCueDisplayTags:()=>[],
  LTZ:true,MOBILE_LTZ:true,location:{search:'?ltz=1&mobile=1'},document:{hidden:false,body:{classList:{toggle(){}}},querySelector:()=>node('heading')},
  gid:node,pauseUserMoves(){},autoPpxAbort:false,autoPpxRunning:false,autoPpxClickOverride:false,armConnectBusy:false,
  playerJointStatus:{control_session:'current-connection',motion_epoch:7},
@@ -17,7 +17,7 @@ vm.runInContext(html.slice(html.indexOf('async function api('),html.indexOf('fun
 const run=code=>vm.runInContext(code,ctx);
 (async()=>{
  assert.equal((await run("api('/api/move',{x:1})")).ok,false);assert.equal(calls.length,0);
- response={contract:'photon.game',version:2,status:'ready',virtual_play:false,phase:'setup',virtual_test_control:1,mobile_safety:{status:'ready'}};
+ response={contract:'photon.game',version:2,status:'ready',virtual_play:false,phase:'setup',virtual_test_control:1,mobile_motion_policy:{contract:'photon.game.motion',version:1,status:'ready',scope:'player',tier:1,blocked:false},mobile_safety:{status:'ready'}};
  await run('pollMobileGame()');assert(run('mobileRobotReady()'));assert(ctx.layout.visibility.joint_angles);
  calls=[];assert.equal((await run("api('/api/move',{x:1})")).ok,false);assert.equal(calls.length,0,'XYZ locked at tier 1');
  await run("api('/api/joint-move',{joints:[1,2,3,4],cal2_guard:{token:'test'}})");

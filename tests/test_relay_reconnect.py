@@ -235,6 +235,24 @@ class RelayReconnectTests(unittest.TestCase):
 
 
 class PlayerFeedbackTests(unittest.TestCase):
+    def test_connection_errors_distinguish_relay_failure_from_network_loss(self):
+        from test_mobile_teams import player_module
+        for side in ('green', 'purple'):
+            for slug in ('cartesian-xyz-test', 'joint-angles-test'):
+                player = player_module(side, slug)
+                app = Flask('connect-errors-'+side+'-'+slug)
+                app.register_blueprint(player.bp)
+                for status, expected in [(200, 'Relay connection failed'), (None, 'Could not reach relay')]:
+                    adapter = Mock()
+                    adapter.connect.side_effect = player.RelayError('worker startup failed', status=status)
+                    with self.subTest(side=side, slug=slug, status=status), \
+                         patch.object(player, '_identity', return_value={'is_player':True,'side':side}), \
+                         patch.object(player, 'RelayClient', return_value=adapter):
+                        response = app.test_client().post('/api/connect', json={'mode':'relay'})
+                        self.assertFalse(response.json['ok'])
+                        self.assertIn(expected, response.json['error'])
+                        self.assertIn('worker startup failed', response.json['error'])
+
     def test_both_adapters_preserve_feedback_age_mode_and_acquired_motion_generation(self):
         for side in ('green', 'purple'):
             path = ROOT/'sandboxes'/side/'prototypes/cartesian-xyz-test/relay_client.py'

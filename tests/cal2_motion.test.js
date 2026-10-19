@@ -23,7 +23,7 @@ test('executed checked detour is published for drawing without modifying waypoin
 });
 test('transport uses the selected arm height and preserves the legacy shared fallback',()=>{
  for(const file of ['shared/robot_controls/controller.html','sandboxes/green/prototypes/auto-pickup-game/controller.html']){
-  const html=fs.readFileSync(file,'utf8'),c={selectedAutoPpxCalibration:()=> 'cal2',gameCalibration2:{shared_z:{transport_height:60}},arm:{transport_height:50}};
+  const html=fs.readFileSync(file,'utf8'),c={LTZ:false,activeOperation:null,selectedAutoPpxCalibration:()=> 'cal2',gameCalibration2:{shared_z:{transport_height:60}},arm:{transport_height:50}};
   c.gameArmCal2=()=>c.arm;vm.createContext(c);
   vm.runInContext(html.slice(html.indexOf('function autoPpxTransportZ('),html.indexOf('function autoPpxStackDropOffset(')),c);
   assert.equal(c.autoPpxTransportZ(),50);c.arm={transport_height:65};assert.equal(c.autoPpxTransportZ(),65);

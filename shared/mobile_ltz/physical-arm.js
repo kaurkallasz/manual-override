@@ -13,6 +13,10 @@ class MobilePhysicalArm {
   if(d.type==='ready'){this.post({type:'ping'});return;}
   if(d.type==='diagnostic'){this.diagnostic('bridge',d.event,d.reason,d.context);return;}
   if(!['state','reply'].includes(d.type))return;
+  if(window.mobileDelay?.active){
+   if(Number.isFinite(d.delay_sent_at))window.mobileDelay.record('browser.iframe_delivery',d.delay_sent_at,performance.now()-d.delay_sent_at);
+   const age=d.diagnostics?.feedback_age_ms;if(Number.isFinite(age))window.mobileDelay.record('browser.feedback_age',performance.now(),age);
+  }
   this.value=d;this.at=performance.now();this.error=d.error||'Calibrated arm position unavailable.';
   const progress=d.active_command,waiting=this.pending.get(progress?.id),arm=this.arm();
   // Detours can take longer than a single target. Extend only the command the
@@ -52,6 +56,9 @@ class MobilePhysicalArm {
   if(['stop','suspend','disconnect'].includes(data.action)){this.stop(data.reason);return Promise.resolve({ok:true});}
   if(!this.fresh())return Promise.reject(Error(this.error));
   const payload={...data};
+  // Clear view arrows belong to the visible player viewport. Resolve the
+  // orientation here so older callers cannot silently use Green's default.
+  if(payload.action==='cue_play')payload.view_rotation=this.viewport.rotation;
   if(payload.xyz&&this.value?.arm?.coordinate_space!=='robot-mm')payload.xyz={...payload.xyz,x:payload.xyz.x/this.viewport.w,y:payload.xyz.y/this.viewport.h};
   if(payload.action==='cue_waypoint'){const point=payload.point||payload;payload.x=point.x/this.viewport.w;payload.y=point.y/this.viewport.h;delete payload.point;}
   const id=String(++this.counter);

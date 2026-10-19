@@ -898,6 +898,15 @@ class PhotonGameExtractionTests(unittest.TestCase):
             value.pop("server_time", None)
             # Motion guides are read-only presentation metadata, not physics.
             value.pop("enemy_motion", None)
+            combat = value.pop('enemy_combat', None)
+            if combat is not None:
+                self.assertEqual(combat['breaker_mode'], 'melee')
+            self.assertEqual(value.pop('enemy_arrows', []), [])
+            self.assertEqual(value.pop('enemy_arrow_impacts', []), [])
+            for key in ('breaker_attack_mode', 'breaker_range', 'breaker_draw_s',
+                        'breaker_interval_s', 'breaker_tower_damage',
+                        'breaker_core_damage', 'breaker_arrow_speed'):
+                value['settings'].pop(key, None)
             for enemy in value["enemies"]:
                 enemy.pop("motion", None)
             # Idle mobile practice telemetry is additive; combat stays identical.
@@ -913,12 +922,24 @@ class PhotonGameExtractionTests(unittest.TestCase):
             for key in ("row_barrier_geometry", "row_barriers", "row_topology_revision", "released_orcs", "contract_control_tier", "player_progression", "virtual_test_loadout", "virtual_test_control", "movable_piece_codes"):
                 value.pop(key, None)
             value.pop("physical_input_error", None)
+            value.pop("match_score", None)
+            value.pop("spawn_intensity", None)
+            value.pop("wave_timeline", None)
+            value.pop("start_countdown", None)
+            value.pop("turret_controls", None)
+            # Overlay layer/source metadata is additive; an unarmed core stays
+            # identical to the original game's sequence and combat state.
+            for key in ('first_source', 'second_atom_tag_id', 'second_source'):
+                self.assertIsNone(value['core_sequence'].pop(key, None))
+            for key in list(value["settings"]):
+                if key.startswith(("reward_","stack_","weapon_upgrade_")) or key == 'l4_turrets_per_socket':value["settings"].pop(key)
             # Brute tuning is additive in Game; this parity fixture runs Grunts.
             for key in ("brute_first_wave", "brute_size_multiplier", "brute_health", "brute_damage_per_s", "control_orc_multiplier_joint", "control_orc_multiplier_xyz", "control_orc_multiplier_image", "control_orc_multiplier_cue", "first_wave_delay_s", "difficulty_offset", "control_pace_multiplier_joint", "control_pace_multiplier_xyz", "control_pace_multiplier_image", "control_pace_multiplier_cue", "green_piece_1", "green_piece_2", "purple_piece_1", "purple_piece_2"):
                 value["settings"].pop(key, None)
             for tower in value["towers"]:
                 # Opaque mobile edit identity does not change combat behavior.
                 tower.pop("aim_instance", None)
+                self.assertFalse(tower.pop("deactivated", False))
                 for key in ('atom_buff_state', 'occupying_atom_id', 'atom_health_multiplier',
                             'atom_damage_multiplier', 'normal_max_hp'):
                     tower.pop(key, None)
@@ -1279,7 +1300,7 @@ vm.runInContext(html.split('<script>')[1].split('</script>')[0], context);
                     and "GET" in rule.methods
                 )
                 self.assertEqual(api_gets, [
-                    "/p/photon-game/api/events", "/p/photon-game/api/state",
+                    "/p/photon-game/api/economy", "/p/photon-game/api/events", "/p/photon-game/api/player-admin", "/p/photon-game/api/state",
                 ])
                 with app.test_request_context("/p/photon-game/api/events"):
                     response = game.game_events()

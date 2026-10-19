@@ -243,6 +243,7 @@ function setTarget(mesh, area) {
   mesh.userData.edges.visible = showArea;           // box outline
   for (const m of mesh.userData.markers) m.visible = area.show_aruco !== false;
   mesh.userData.number.visible=PRESENTATION&&String(area.id).startsWith('cal2-')&&area.show_aruco!==false;
+  mesh.userData.number.material.rotation=calibrationSide==='purple'?Math.PI:0;
   mesh.userData.showLinks = area.show_links !== false;   // read by updateLinks()
   if (!mesh.userData.inited) { snapToTarget(mesh); mesh.userData.inited = true; }
 }
@@ -485,9 +486,11 @@ async function saveCamera() {
 // The server pushes the full state the instant any area or setting changes, so
 // the box follows a driven variable (e.g. the Approaching Box tween) with no
 // poll lag. The per-frame easing in interpolate() still smooths between pushes.
-let lastRev = -1, lastSrev = -1;
+let lastRev = -1, lastSrev = -1, calibrationSide = null;
 function applyState(data) {
-  if (data.rev !== lastRev) { lastRev = data.rev; syncAreas(data.areas); syncLinks(data.areas); }
+  const side=data.calibration_side??null, sideChanged=side!==calibrationSide;
+  calibrationSide=side;
+  if (data.rev !== lastRev || sideChanged) { lastRev = data.rev; syncAreas(data.areas); syncLinks(data.areas); }
   if (data.srev !== lastSrev) { lastSrev = data.srev; applySettings(data.settings); }
 }
 let es = null;

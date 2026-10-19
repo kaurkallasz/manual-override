@@ -7,6 +7,7 @@ The >=100 marker family identifies raised hardware tags, not player ownership.
 import copy
 import math
 import time
+from fixed_anchors import read_anchors
 
 STALE_S = 1.5
 MARKER_MEMORY_S = 5.0
@@ -72,6 +73,7 @@ class PhysicalPlacementTracker:
         self.movable_cache = {}
         self.covers = {}
         self.stack_generation = 0
+        self.mapping_identity = None
 
     def reset_evidence(self, *, clear_markers=False):
         self.orders.clear()
@@ -95,11 +97,23 @@ class PhysicalPlacementTracker:
             },
         }
 
-    def update(self, runtime, now):
+    def update(self, runtime, now, *, fixed_map=None):
         self.revision += 1
         source = str(runtime.get("source") or "unknown")
         if self.source != source:
             self.source = source
+            self.source_epoch = f"{time.time_ns():x}"
+            self.reset_evidence(clear_markers=True)
+        anchors, identity, target_states = None, None, []
+        if fixed_map is not None:
+            try:
+                anchors, identity, target_states, _ = read_anchors(fixed_map, now)
+            except ValueError as exc:
+                self.reset_evidence(clear_markers=True)
+                return self.unavailable(str(exc), revision=self.revision, source=source,
+                                        source_epoch=self.source_epoch, sampled_at=now)
+        if identity != self.mapping_identity:
+            self.mapping_identity = identity
             self.source_epoch = f"{time.time_ns():x}"
             self.reset_evidence(clear_markers=True)
         if runtime.get("status") != "ready" or not fresh(runtime.get("frame_at"), now):
@@ -116,21 +130,26 @@ class PhysicalPlacementTracker:
             if tag.get("id") is not None and float(tag.get("missing", 0.0)) <= 0.35
         }
         frame_at = float(runtime["frame_at"])
-        for marker, tag in current.items():
-            if marker >= 100:
-                continue
-            nx, ny = tag.get("nx"), tag.get("ny")
-            if type(nx) in (int, float) and type(ny) in (int, float):
-                self.marker_cache[marker] = {
-                    "nx": float(nx), "ny": float(ny), "seen_at": frame_at,
-                }
-        self.marker_cache = {
-            marker: value for marker, value in self.marker_cache.items()
-            if now - value["seen_at"] <= GAME_MARKER_MEMORY_S
-        }
+        if anchors is not None:
+            self.marker_cache = anchors
+        else:
+            # Preserve the original unscoped/simulator detector.
+            for marker, tag in current.items():
+                if marker >= 100:
+                    continue
+                nx, ny = tag.get("nx"), tag.get("ny")
+                if type(nx) in (int, float) and type(ny) in (int, float):
+                    self.marker_cache[marker] = {
+                        "nx": float(nx), "ny": float(ny), "seen_at": frame_at,
+                    }
+            self.marker_cache = {
+                marker: value for marker, value in self.marker_cache.items()
+                if now - value["seen_at"] <= GAME_MARKER_MEMORY_S
+            }
 
         active_keys = set()
         relations = []
+        atom_states = []
         for side in ("green", "purple"):
             arm = (runtime.get("arms") or {}).get(side) or {}
             arm_ready = (
@@ -139,6 +158,11 @@ class PhysicalPlacementTracker:
                 and str(arm.get("pump_mode") or "off") == "off"
                 and fresh(arm.get("feedback_at"), now)
             )
+            for tag in runtime.get('tags', []):
+                if int(tag['id']) >= 100:
+                    atom_states.append({'movable_id': int(tag['id']), 'arm': side,
+                                        'status': 'atom_not_detected' if int(tag['id']) not in current
+                                        else 'arm_not_ready' if not arm_ready else 'no_nearby_target'})
             if not arm_ready:
                 continue
             for movable, tag in sorted(current.items()):
@@ -170,6 +194,10 @@ class PhysicalPlacementTracker:
                     }
                 stable_at = order["since"] + PLACEMENT_DWELL_S
                 stable = now >= stable_at
+                for state in atom_states:
+                    if state['arm'] == side and state['movable_id'] == movable:
+                        state.update(status='stable' if stable else 'waiting_for_stable_placement',
+                                     marker_id=nearby[0][1])
                 for rank, (separation, marker, marker_seen_at) in enumerate(nearby):
                     relations.append({
                         "relation_id": (
@@ -198,11 +226,15 @@ class PhysicalPlacementTracker:
             "source": source, "source_epoch": self.source_epoch,
             "sampled_at": now, "coordinate_space": "corrected-camera-normalized",
             "relations": relations,
+            "target_states": target_states, "atom_states": atom_states,
+            "layout_scope": identity[0] if identity else None,
+            "mapping_epoch": identity[1] if identity else None,
             "stacking": self._stacking(runtime, now),
             "policy": {
                 "distance": GAME_PLACEMENT_DISTANCE,
                 "stable_s": PLACEMENT_DWELL_S,
-                "marker_memory_s": GAME_MARKER_MEMORY_S,
+                "marker_memory_s": None if identity else GAME_MARKER_MEMORY_S,
+                "fixed_coordinates": "confirmed_game_map" if identity else "recent_detections",
             },
         }
 

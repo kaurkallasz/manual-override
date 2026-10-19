@@ -118,7 +118,7 @@ class JourneyTests(unittest.TestCase):
         self.cal.stopped=True;self.journey.tick();self.journey.tick()
         self.assertEqual(self.journey.state['active_side'],'purple');self.assertEqual(self.journey.state['turn'],1)
         self.assertEqual(self.progress.progress_snapshot()['roster']['green']['credits'],600)
-    def test_practice_can_start_from_ready_and_returns_to_lobby(self):
+    def test_practice_can_start_from_ready_and_opens_untimed_shop(self):
         attempt=self.win();self.journey.result(attempt)
         with patch('time.time',return_value=self.journey.state['deadline']+1):self.journey.tick()
         reservation=self.journey.start(False)
@@ -127,7 +127,8 @@ class JourneyTests(unittest.TestCase):
         self.assertEqual(self.journey.state['phase'],'playing')
         result=self.progress.finalize_attempt({'run_id':a['run_id'],'sequence':1,'kills':3,'outcome':'aborted','active_seconds':1,'finished_at':time.time(),'released_orcs':3})['attempt']
         self.journey.result(result)
-        self.assertEqual(self.journey.state['phase'],'lobby')
+        self.assertEqual(self.journey.state['phase'],'upgrades')
+        self.assertIsNone(self.journey.state['deadline'])
         self.progress.player_command('green',{'action':'select','player_id':None})
 
     def test_practice_start_cannot_interrupt_calibration_or_its_failed_setup(self):
@@ -238,22 +239,50 @@ class JourneyTests(unittest.TestCase):
     def test_manual_calibration_without_profiles_still_works(self):
         self.modules.pop('photon-progress');self.journey.manual({'side':'both'})
         self.assertEqual(self.cal.order,['green']);self.assertEqual(self.journey.state['active_side'],'green')
-    def test_ready_invalidated_by_purchase_or_profile_switch(self):
+    def test_operator_start_uses_current_profiles_after_stale_ready(self):
         self.journey.ready('green');self.journey.ready('purple')
         new=self.progress.player_command('green',{'action':'create','name':'new','operation_id':uuid.uuid4().hex})['result']['player_id']
         self.progress.player_command('green',{'action':'select','player_id':new})
-        with self.assertRaisesRegex(ValueError,'current profiles'):self.journey.start()
+        reservation=self.journey.start()
+        self.assertEqual(self.progress.reserve_roster({'id':reservation})['reservation']['participants'][0]['player_id'],new)
+
+    def test_operator_can_start_with_no_ready_acknowledgements(self):
+        self.assertEqual(self.journey.state['ready'],{})
+        reservation=self.journey.start()
+        result=self.progress.begin_attempt({'run_id':'operator-start','reward_enabled':True,'metadata':{},'reservation_id':reservation})
+        self.assertTrue(result['attempt']['reward_enabled'])
+        self.assertEqual(self.journey.state['ready'],{})
+
+    def test_ready_is_advisory_during_shopping_and_operator_can_end_break_early(self):
+        attempt=self.win();self.journey.result(attempt)
+        deadline=self.journey.state['deadline'];self.assertGreater(deadline,time.time())
+        self.journey.ready('green');self.assertNotIn('purple',self.journey.state['ready'])
+        reservation=self.journey.start()
+        self.assertEqual(reservation,attempt['run_id'])
+        self.assertEqual(self.journey.state['phase'],'ready')
+        self.assertLess(time.time(),deadline)
+        self.progress.begin_attempt({'run_id':'early-start','reward_enabled':True,'metadata':{},'reservation_id':reservation})
+
+    def test_next_level_prepares_scored_roster_without_ready_or_waiting_for_deadline(self):
+        attempt=self.win();self.journey.result(attempt)
+        flow=owner_file('photon-game','test_flow.py')
+        from unittest.mock import Mock
+        engine=Mock(phase='won')
+        self.assertTrue(flow.command({'action':'next_level','run_id':attempt['run_id']},engine=engine,
+            progress=self.progress,journey=self.journey,run_id=attempt['run_id'],settings={}))
+        self.assertEqual(self.journey.state['phase'],'ready');self.assertEqual(self.journey.state['ready'],{})
+        engine.reset.assert_called_once()
     def test_expired_upgrade_locks_purchases_until_operator_cancel(self):
         a=self.win();self.journey.result(a)
         with patch('time.time',return_value=self.journey.state['deadline']+1):self.journey.tick()
         p=self.progress.progress_snapshot({'side':'green'})['player']
-        with self.assertRaisesRegex(ValueError,'ready roster'):self.progress.player_command('green',{'action':'purchase','track':'damage-mortar','level':2,'revision':p['revision'],'operation_id':uuid.uuid4().hex})
+        with self.assertRaisesRegex(ValueError,'ready roster'):self.progress.player_command('green',{'action':'purchase','catalog_revision':1,'track':'damage-mortar','level':2,'revision':p['revision'],'operation_id':uuid.uuid4().hex})
         self.journey.cancel();self.progress.player_command('green',{'action':'select','player_id':p['id']})
     def test_calibration_fixes_both_identities_but_waiting_player_can_purchase(self):
         self.gate();p=self.progress.progress_snapshot()['roster']['purple']
         with self.assertRaisesRegex(ValueError,'calibration roster'):
             self.progress.player_command('purple',{'action':'select','player_id':None})
-        self.progress.player_command('purple',{'action':'purchase','track':'damage-mortar','level':2,'revision':p['revision'],'operation_id':uuid.uuid4().hex})
+        self.progress.player_command('purple',{'action':'purchase','catalog_revision':1,'track':'damage-mortar','level':2,'revision':p['revision'],'operation_id':uuid.uuid4().hex})
         self.assertEqual(self.progress.progress_snapshot()['roster']['purple']['levels']['damage-mortar'],2)
         self.journey.finish('green',self.board('green'));self.journey.finish('purple',self.board('purple'))
         self.progress.player_command('purple',{'action':'select','player_id':None})
@@ -314,6 +343,67 @@ class CalibrationDraftTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'targets loaded'):
             self.store.capture('green',{'id':'lesson','marker':30},self.measurement(frame=activation-.1))
         self.assertEqual(self.store.snapshot()['sessions']['lesson']['captures'],{})
+
+    def test_undo_arm_point_clears_dependent_sample_and_heights_durably(self):
+        for marker in range(30,36):
+            self.store.capture('green',{'id':'lesson','marker':marker},self.measurement(marker))
+        for marker in (31,35):
+            self.store.parallax('green',{'id':'lesson','marker':marker,'action':'raised'},self.measurement(marker))
+        other=self.store.snapshot()['sessions']['lesson']['draft']['parallax_points']['35']
+        value={'id':'lesson','marker':31,'action':'undo_capture'}
+        session=self.store.undo('green',value)['sessions']['lesson']
+        self.assertEqual(session['stage'],'points')
+        self.assertEqual(len(session['captures']),5)
+        self.assertNotIn('31',session['ground'])
+        self.assertEqual(session['draft']['points']['31']['pose'],{'set':False})
+        self.assertIsNone(session['draft']['points']['31']['camera'])
+        self.assertIsNone(session['draft']['parallax_points']['31'])
+        self.assertEqual(session['draft']['parallax_points']['35'],other)
+        self.assertIsNone(session['pickup_height'])
+        self.assertIsNone(session['draft']['transport_height'])
+        revision=self.store.snapshot()['revision']
+        self.assertEqual(self.store.undo('green',value)['revision'],revision,'Undo retries cannot toggle a point back on')
+        fresh=self.module.LessonStore(self.store.path).snapshot()['sessions']['lesson']
+        self.assertEqual(fresh['draft'],session['draft'])
+        session=self.store.capture('green',{'id':'lesson','marker':31},self.measurement(31))['sessions']['lesson']
+        self.assertEqual(session['stage'],'perspective')
+        self.assertEqual((session['pickup_height'],session['transport_height']),(10,50))
+
+    def test_undo_raised_preserves_arm_position_and_can_be_saved_again(self):
+        for marker in range(30,36):
+            self.store.capture('green',{'id':'lesson','marker':marker},self.measurement(marker))
+        value={'id':'lesson','marker':31,'action':'raised'}
+        self.store.parallax('green',value,self.measurement(31))
+        before=self.store.snapshot()['sessions']['lesson']
+        session=self.store.undo('green',{**value,'action':'undo_raised'})['sessions']['lesson']
+        self.assertIsNone(session['draft']['parallax_points']['31'])
+        for key in ('captures','ground','pickup_height','transport_height','stage'):
+            self.assertEqual(session[key],before[key])
+        self.assertEqual(session['draft']['points'],before['draft']['points'])
+        self.store.parallax('green',value,self.measurement(31))
+        self.assertTrue(self.store.snapshot()['sessions']['lesson']['draft']['parallax_points']['31'])
+
+    def test_undo_requires_own_live_unfinished_turn_and_valid_marker(self):
+        value={'id':'lesson','marker':30,'action':'undo_capture'}
+        self.store.capture('green',value,self.measurement())
+        for side,sid in [('purple','lesson'),('green','other')]:
+            with self.assertRaises(PermissionError):self.store.undo(side,{**value,'id':sid})
+        for marker in (True,'30',29,36):
+            with self.assertRaises(ValueError):self.store.undo('green',{**value,'marker':marker})
+        with self.assertRaises(ValueError):self.store.undo('green',{**value,'action':'undo_raised'})
+        with patch('time.time',return_value=time.time()+31):
+            with self.assertRaises(PermissionError):self.store.undo('green',value)
+        for stage in ('tutorial','complete'):
+            self.store.state['sessions']['lesson']['stage']=stage
+            with self.assertRaises(ValueError):self.store.undo('green',value)
+
+    def test_undo_write_failure_keeps_last_saved_measurement(self):
+        value={'id':'lesson','marker':30,'action':'undo_capture'}
+        self.store.capture('green',value,self.measurement())
+        before=self.store.snapshot()
+        with patch.object(self.module,'atomic_json',side_effect=OSError('disk')):
+            with self.assertRaises(OSError):self.store.undo('green',value)
+        self.assertEqual(self.store.snapshot()['sessions'],before['sessions'])
 
     def test_write_failure_preserves_last_accepted_draft(self):
         before=self.store.snapshot()

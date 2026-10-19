@@ -1,6 +1,7 @@
 """Level-owned static content; no game state or sibling dependencies."""
 
 import hashlib
+from shared import delay_trace as trace
 import json
 import threading
 from pathlib import Path
@@ -26,6 +27,13 @@ def runtime_asset_paths():
             "game-art/z-pixel-v2/normalized/structures/runtime/activation/"
             f"{filename}-activation-v2.png"
         )
+    for weapon in ('machine-gun','flamethrower','mortar','photon-detonator'):
+        # L3 completion unlocks the second Atom at T1, before upgrade artwork.
+        path=f'game-art/z-pixel-v2/normalized/structures/{weapon}-active-l1.png'
+        assets[path]=path
+        for tier in (2,3,4):
+            path=f'shop/{weapon}-upgrade-l{tier}-v1.png';assets[path]=path
+    assets['enemy/breaker/archer-atlas'] = 'game-art/sprites/breaker-archer-v1/archer-atlas.png'
     assets['field/upgrade-atlas'] = 'upgrades/force-field-atlas.png'
     assets["tower/socket-cover"] = (
         "game-art/z-pixel-v2/normalized/structures/runtime/"
@@ -58,12 +66,13 @@ def runtime_asset_paths():
     return assets
 
 
+@trace.traced('level.asset_validation')
 def asset_snapshot(root, map_assets):
     """Publish URLs, never bytes. Hash only files whose metadata changed."""
     root = Path(root).resolve()
     paths = {**runtime_asset_paths(), **{f"map/{key}": path for key, path in map_assets.items()}}
     assets, errors = {}, []
-    with _lock:
+    with trace.locked(_lock, 'level.asset_lock'):
         for key, relative in sorted(paths.items()):
             try:
                 path = (root / relative).resolve()
@@ -80,7 +89,12 @@ def asset_snapshot(root, map_assets):
                 assets[key] = f"{quote(relative, safe='/')}?v={digest}"
             except (OSError, ValueError) as exc:
                 errors.append(f"{key}: {exc}")
-    revision = hashlib.sha256(json.dumps(assets, sort_keys=True).encode()).hexdigest()
+    enemy_variants = {'breaker-archer': {
+        'contract': 'photon.enemy-art', 'version': 1,
+        'asset_id': 'enemy/breaker/archer-atlas', 'columns': 4, 'rows': 2,
+        'facing': 'down', 'poses': ['walk-1', 'walk-2', 'walk-3', 'walk-4', 'aim', 'draw', 'release', 'recover'],
+    }}
+    revision = hashlib.sha256(json.dumps([assets, enemy_variants], sort_keys=True).encode()).hexdigest()
     return {
         "contract": "photon.level.assets", "version": 1,
         "status": "unavailable" if errors else "ready",
@@ -89,4 +103,5 @@ def asset_snapshot(root, map_assets):
         # Relative to the current sandbox mount, not a filesystem path.
         "base": "/p/photon-level/assets",
         "assets": assets,
+        "enemy_variants": enemy_variants,
     }

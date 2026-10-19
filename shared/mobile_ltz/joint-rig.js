@@ -251,7 +251,9 @@ function mount(host,options){
    host.querySelector('.rigActual').setAttribute('aria-label',`Actual J2 ${confirmed[1].toFixed(1)} degrees, J3 ${confirmed[2].toFixed(1)} degrees`);
   }else{elements.actual2.setAttribute('d','');elements.actual3.setAttribute('d','');}
  }
- function tick(time){if(destroyed)return;const dt=Math.min(.05,(time-lastTime)/1000||0);lastTime=time;latest=options.state();const valid=Array.isArray(latest?.joints)&&latest.joints.length===3&&latest.joints.every(Number.isFinite)&&Array.isArray(latest?.limits)&&latest.limits.length===3&&latest.limits.every(b=>Array.isArray(b)&&b.length===2&&b.every(Number.isFinite)&&b[0]<b[1]&&b[0]>=-360&&b[1]<=360);const enabled=options.available()&&valid;host.classList.toggle('unavailable',!enabled);
+ function tick(time){if(destroyed)return;const dt=Math.min(.05,(time-lastTime)/1000||0);lastTime=time;
+  if(root.document?.hidden||options.visible?.()===false){if(held){finish();options.cancel?.();}raf=requestAnimationFrame(tick);return;}
+  latest=options.state();const valid=Array.isArray(latest?.joints)&&latest.joints.length===3&&latest.joints.every(Number.isFinite)&&Array.isArray(latest?.limits)&&latest.limits.length===3&&latest.limits.every(b=>Array.isArray(b)&&b.length===2&&b.every(Number.isFinite)&&b[0]<b[1]&&b[0]>=-360&&b[1]<=360);const enabled=options.available()&&valid;host.classList.toggle('unavailable',!enabled);
   if(held&&!enabled){finish();options.cancel?.();}
   for(const {axis,button} of handles){button.disabled=!enabled;button.setAttribute('aria-disabled',String(!enabled));if(valid){const value=options.goal?.(axis)??latest.targets?.[axis]??latest.joints[axis];button.setAttribute('aria-valuemin',latest.limits[axis][0]);button.setAttribute('aria-valuemax',latest.limits[axis][1]);button.setAttribute('aria-valuenow',value);button.setAttribute('aria-valuetext',value.toFixed(options.precision?.()?2:1)+' degrees target');}}
   const bounds=[1,2].map(i=>valid?latest.limits[i]:limits[i-1]),rightEdge=options.rightEdge?.();const key=host.clientWidth+','+host.clientHeight+JSON.stringify(bounds)+','+rightEdge;if(key!==layoutKey){layoutKey=key;fit(bounds,rightEdge);}

@@ -72,7 +72,7 @@ class ProgressLink:
             self.sequence = self.attempt['sequence']
             self.last_checkpoint = time.monotonic()
             self._set(status='ready', error=None, result=None, run_id=value['run_id'],
-                      reward_enabled=self.attempt['reward_enabled'], practice_reason=self.attempt.get('practice_reason'), banked_kills=0,
+                      reward_enabled=self.attempt['reward_enabled'], banked_kills=0,
                       participants=self.attempt['participants'], metadata=self.attempt['metadata'])
             return self.attempt
 
@@ -101,16 +101,21 @@ class ProgressLink:
                 phase, kills = engine.phase, engine.kills
                 seconds = engine.sim_time
                 released = engine.next_enemy_id - 1
+                reward=engine.rewards.checkpoint(final=phase in ('won','overrun','operator_ended') or outcome is not None,outcome=outcome) if hasattr(engine,'rewards') else None
                 telemetry=json.loads(json.dumps(getattr(engine,'telemetry',{})))
-            final = phase in ('won', 'overrun') or outcome is not None
+                heatmap=engine.rewards.heatmap.snapshot() if hasattr(getattr(engine,'rewards',None),'heatmap') else None
+            final = phase in ('won', 'overrun', 'operator_ended') or outcome is not None
             if not self.pending:
                 if not final and time.monotonic() - self.last_checkpoint < 30:
                     return
                 self.sequence += 1
                 value = {'run_id': self.attempt['run_id'], 'kills': kills, 'sequence': self.sequence}
+                if self.attempt['metadata'].get('reward_rules') is not None:
+                    value['reward']=reward
                 if final:
-                    value.update(outcome=phase if phase in ('won', 'overrun') else outcome,
+                    value.update(outcome=phase if phase in ('won', 'overrun', 'operator_ended') else outcome,
                                  active_seconds=seconds, finished_at=time.time(), released_orcs=released,telemetry=telemetry)
+                    if heatmap is not None:value['kill_heatmap']=heatmap
                     self.pending = value
             else:
                 value = self.pending
@@ -179,3 +184,10 @@ class ProgressLink:
     def snapshot(self):
         with self.lock:
             return json.loads(json.dumps(self.state))
+
+    def clear_finished(self):
+        with self.lock:
+            if self.attempt or self.pending:
+                raise ValueError('previous result is awaiting save')
+            self._set(status='ready', error=None, result=None, run_id=None, participants=[],
+                      metadata={}, reward_enabled=False, practice_reason=None, banked_kills=0)

@@ -1,0 +1,19 @@
+{
+  "checks": [
+    {
+      "name": "phone",
+      "credits": 1750,
+      "cards": 15,
+      "overflow": false
+    },
+    {
+      "name": "tablet",
+      "credits": 1750,
+      "cards": 15,
+      "overflow": false
+    }
+  ],
+  "nextTier": 2,
+  "scoredRuns": 0,
+  "errors": []
+}

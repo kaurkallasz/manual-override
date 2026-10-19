@@ -67,6 +67,27 @@ class MobileCalibrationSafetyTests(unittest.TestCase):
         self.assertEqual(purple, {'status':'ready', 'revision':3})
         self.assertEqual(self.snapshot('green', virtual=True), {'status':'unused'})
 
+    def test_l1_l2_mismatch_uses_server_tier_and_keeps_physical_guards(self):
+        tier = {'green':1, 'purple':2}
+        self.owner._hub_ctx = FakeContext({
+            'camera-calibration':SimpleNamespace(corrected_tag_snapshot=lambda a,b:copy.deepcopy(self.lens)),
+            'dobot-mg400-relay':SimpleNamespace(arms_snapshot=lambda:{'contract':'hhh.relay.arms','version':1,'status':'ready','arms':self.devices}),
+            'photon-game':SimpleNamespace(motion_policy=lambda side:{'contract':'photon.game.motion','version':1,'status':'ready','scope':'player','blocked':False}),
+            'photon-progress':SimpleNamespace(control_policy=lambda side:{'contract':'photon.progress','version':2,'status':'ready','tier':tier[side],'stage':'playing'}),
+        })
+        before=self.owner._calibration2_public()
+        self.lens['calibration_revision']='changed-camera'
+        for side in ('green','purple'):
+            self.assertEqual(self.snapshot(side)['status'],'ready')
+            self.assertTrue(self.snapshot(side)['camera_compatibility']['manual_only'])
+            self.assertEqual(self.relay._server_cal2_guard(side), self.owner.calibration_reach_snapshot()['guard'])
+        for invalid in (3,4,True,0,None):
+            tier['green']=invalid
+            self.assertEqual(self.snapshot('green')['status'],'unavailable')
+        tier['green']=1;self.devices['green']['device']={'ip':'wrong'}
+        self.assertEqual(self.snapshot('green')['status'],'unavailable')
+        self.assertEqual(self.owner._calibration2_public(),before)
+
     def test_missing_malformed_and_failed_safety_owner_stay_unavailable(self):
         values = [None, {}, {'contract':'other','version':1,'status':'ready'},
                   {'contract':'hhh.cal2.safety','version':True,'status':'ready'},
