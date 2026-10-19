@@ -1,6 +1,6 @@
 # HHH Gamemaster development journal
 
-Last updated: 2026-10-12, including the October 10–12 gameplay, camera, relay, performance and diagnostic work, and the recorded physical win at 21:07 Tallinn time after the fixed-board correction. The latest Git checkpoint is `d7d4165`, following implementation checkpoint `19efd59`; the subsequent work remains uncommitted. Earlier entries preserve their original evidence and attribution, including test counts and deployment observations that apply only to their dated checkpoint. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
+Last updated: 2026-10-19, including event progression, linked games, level results and replay heatmaps, fixed-target retention, stacked-Atom pickup, and the GitHub publication checkpoint. Implementation commit [`c1e57c5`](https://github.com/kaurkallasz/manual-override/commit/c1e57c530dd9214a7394f8c92c6b8c749ab48d03) was pushed to `kaurkallasz/manual-override`, branch `photon-engine-phase-4`. It consolidates the code, assets, tests and documentation accumulated since `d7d4165`; local configuration, calibration state, logs and generated output captures remain outside that commit. Earlier entries preserve their original evidence and attribution, including test counts and deployment observations that apply only to their dated checkpoint. The original historical reconstruction was made on 2026-08-29 through `9d22a3a`.
 
 This journal explains how the repository reached its current design: what changed, what was learned, why the next decision followed, and whether the repository records the work as human-only or AI-assisted. The reconstruction is based on commit history and messages, the current README and specifications, implementation diffs, calibration files, and local Laser Tag X run and score logs.
 
@@ -30,7 +30,7 @@ The physical-game stack combines corrected ArUco camera observations, camera-to-
 
 The active tower-defence implementation is now the modular Photon stack: Level owns authored content, Board publishes physical observations, Game owns the simulation, Progress owns saved player progression, and Laser Tag Y presents the game. Laser Tag Z remains the rollback/reference implementation. Commit `cd00d97` records progression, row barriers, L4 companions, and artwork; `2ea92b5` checkpoints the shared mobile controls, streaming and turret aiming; `53bb9c8` checkpoints two-player progression and calibration.
 
-Green and Purple Mobile LTZ now share one frontend and the same authoritative Game through a restricted gateway. Both teams have Joint, Cartesian XYZ, Targeting and Cue progression, virtual practice, and calibrated physical controls through the existing relay. The mobile calibration lesson derives pickup/transport heights from the six ground captures, records four raised samples, supports offline completion, and lets the gamemaster explicitly associate a saved arm calibration with the current camera correction. Reconnect adopts measured robot position and requires a new gesture; stale sessions cannot replay old targets. Relay-owned floor/ceiling limits and the calibrated 220–439 mm reach envelope constrain physical motion.
+Green and Purple Mobile LTZ share one frontend and the same authoritative Game through a restricted gateway. Both teams have Joint, Cartesian XYZ, Targeting and Cue progression and calibrated physical controls through the existing relay. Virtual practice belongs to earlier checkpoints; the current event flow requires selected players and the current physical readiness gates. The mobile calibration lesson derives pickup/transport heights from the six ground captures, records four raised samples, supports offline completion, and lets the gamemaster explicitly associate a saved arm calibration with the current camera correction. Reconnect adopts measured robot position and requires a new gesture; stale sessions cannot replay old targets. Relay-owned floor/ceiling limits and the calibrated 220–439 mm reach envelope constrain physical motion.
 
 **Accepted calibration baseline, confirmed by the user on October 9:** the current calibration works. The previous calibration used by Mobile LTZ was not precise enough; returning to the standalone **Auto PP Cal 2** procedure solved the problem. Use that procedure and the working rig calibration as the baseline for future work. A mobile lesson's successful save/completion is not evidence of equivalent physical precision. The October 9 calibration-regression entry records the changes that led to this divergence and distinguishes documented defects from causes that remain unproven.
 
@@ -42,9 +42,11 @@ The October 10–11 continuation adds ranged Breaker archers, shared score/shop 
 
 On October 12, native iPhone evidence confirmed WebContent memory termination. Renderer cleanup, physical-mode renderer teardown and software-backed camera canvases reduced avoidable allocations; the user restarted the normal hub and both permanent player bundles were verified. A temporary-fix session was observed connected and stable for 383 seconds. The saved native verification still lists post-restart iPhone Connect confirmation as pending; the later Green game does not identify its device.
 
-Delay Analysis now records whole-session summaries with bounded incident detail and a 650 MiB detail cap. The first measured optimization publishes validated artwork outside gameplay reads. The fixed-board correction then separates immutable learned geometry and labels from live sightings, occupancy and motion permission through `photon.board.cue-targets` v2. In the latest recorded physical run, `06f2627b732f49d9ba0f52fddd689fc2`, Green completed eleven socket placements, the ring and the core stack, and won with no recorded mid-play mapping holds, target invalidations or disconnects. The previous run recorded 65 hold events. Recorded v2 browser evidence confirms the correction was active for this game, superseding the implementation entry's pending-deployment status for that run.
+Delay Analysis now records whole-session summaries with bounded incident detail and a 650 MiB detail cap. The first measured optimization publishes validated artwork outside gameplay reads. The fixed-board correction then separates immutable learned geometry and labels from live sightings, occupancy and motion permission through `photon.board.cue-targets` v2. In the October 12 physical run `06f2627b732f49d9ba0f52fddd689fc2`, Green completed eleven socket placements, the ring and the core stack, and won with no recorded mid-play mapping holds, target invalidations or disconnects. The preceding comparison run recorded 65 hold events. Recorded v2 browser evidence confirms the correction was active for that game; it does not establish deployment of later changes.
 
-This is a documentation reconciliation, not a new software release or fresh test run. The current checkpoint includes a successful physical game as well as isolated tests, with their limits recorded separately below. Remaining work includes moving-Atom visibility/reacquisition after placement, repeated physical play, native iPhone confirmation after restart, and dense horde qualification. Further progress-publication optimization is a recommendation, not an implemented step.
+The October 17–19 continuation makes events and linked player pairs the basis of saved progression. Both players acknowledge readiness; after an earlier level, matching Continue requests start the next attempt through calibration and the shared countdown. Game Master Reset returns both phones to name selection while preserving saved progress. Level 4 ends at Game Over, with explicit matching replay or new-game choices. Completed results retain kill attribution, comparisons and a per-run kill heatmap. The projector keeps the battlefield visible while player screens present the detailed results.
+
+Board now retains confirmed fixed targets within the active run/layout scope, including hidden targets, while preserving camera evidence and invalidation rules. Cue can pick up the upper Atom of a confirmed two-Atom stack using the saved stack offset and the existing motion gates. The October 19 publication check passed 241 focused Python tests; the JavaScript suite passed 271 of 275 checks, with four fixture failures recorded below. The push did not restart the live hub or perform physical validation. Remaining work includes resolving those fixtures, confirming deployment and supervised stacked pickup, repeated physical play, native iPhone confirmation after restart, and dense horde qualification.
 
 Across both games, the most important physical-play rule is that the **stable corrected-camera result is board truth**. A robot operation says what was intended and supplies transaction receipts; it helps attribute or diagnose the result, but it cannot replace or overrule a uniquely observed physical placement. Laser Tag Z adds a second distinction: physical observation activates gameplay state, while only the defence engine owns combat, topology, health, and objective state.
 
@@ -1192,11 +1194,11 @@ The following commits explicitly record AI co-authorship:
 
 The remaining commits through `9d22a3a` are authored by Kaspar without an AI trailer. Their correct label is **human-recorded; AI involvement not evidenced**, not “definitely human-only.” Commit `561b4e4` is a special case: it lacks an AI trailer, but the journal committed in that change explicitly records OpenAI Codex's implementation and verification role for the crane controls and arm overlays. That narrower file-level provenance should be retained without rewriting the Git trailer record.
 
-At the August 29 reconstruction, the Laser Tag Z changes after `9d22a3a` were uncommitted. Subsequent checkpoints include `d8ffbdf`, the September modular extraction commits, `279b715`, `cd00d97`, mobile checkpoint `2ea92b5`, two-player checkpoint `53bb9c8`, physical-cue checkpoint `19efd59`, and calibration-journal checkpoint `d7d4165`. Earlier statements that those continuations were uncommitted describe their original recording dates. The last three commits record Kaspar Kallas as author and committer without AI trailers; earlier entries retain their narrower recorded AI provenance.
+At the August 29 reconstruction, the Laser Tag Z changes after `9d22a3a` were uncommitted. Subsequent checkpoints include `d8ffbdf`, the September modular extraction commits, `279b715`, `cd00d97`, mobile checkpoint `2ea92b5`, two-player checkpoint `53bb9c8`, physical-cue checkpoint `19efd59`, calibration-journal checkpoint `d7d4165`, and October 19 implementation checkpoint `c1e57c5`. Earlier statements that those continuations were uncommitted describe their original recording dates. Commits `53bb9c8`, `19efd59` and `d7d4165` record Kaspar Kallas as author and committer without AI trailers; earlier entries retain their narrower recorded AI provenance.
 
 The September 22 continuation explicitly records that OpenAI Codex reviewed evidence, ran its listed checks and wrote that journal update at the user's request. That remains evidence of the documented contribution, not blanket attribution for all files in that checkpoint.
 
-The October 10–12 continuation remains uncommitted at this reconciliation. Attribute its human requests and AI implementation only where the dated entries or source reports record them. Missing attribution is not supplied from file style or from the assistant currently editing the journal. OpenAI Codex performed this October 12 documentation/source/evidence review at the user's request; reported implementation test results remain historical results, not checks rerun by this update.
+The October 10–12 continuation was uncommitted at the October 12 reconciliation and is now included in `c1e57c5`. Attribute its human requests and AI implementation only where the dated entries or source reports record them. Missing attribution is not supplied from file style or from the assistant currently editing the journal. OpenAI Codex performed the October 12 documentation/source/evidence review and the October 19 publication and journal update at the user's requests. The October 19 entry distinguishes checks rerun for publication from historical implementation and browser results; publication does not assign blanket implementation authorship.
 
 ## Evidence of physical iteration
 
@@ -1212,7 +1214,7 @@ The August 29 reconstruction recorded a focused 84-test Laser Tag Z suite; later
 - Calibration is installation-specific data. Updating it is a real system change and should be paired with the physical setup and a dated journal entry.
 - On October 9 the user confirmed that standalone Auto PP Cal 2 restored working precision after the Mobile LTZ calibration proved insufficient. Preserve this operating baseline. Future mobile capture changes must demonstrate physical equivalence before replacing it; this documentation decision does not itself change the existing lesson's commit behavior.
 - The current camera-authoritative rule depends on camera quality. It fails closed when corrected tracking or a valid spatial model is unavailable, and the gamemaster remains the recovery authority.
-- Git checkpoints now extend through `19efd59` and `d7d4165`. October 10–12 changes remain in the working tree. Neither a commit nor a successful individual game establishes acceptance of every installation feature.
+- Git implementation checkpoints now extend through `c1e57c5`, published on October 19. Local runtime files and generated output captures remain outside that checkpoint. Four JavaScript fixture checks failed during publication validation; neither publication nor a successful individual game establishes acceptance of every installation feature.
 - Laser Tag Z server simulation state is process memory. The external screen can reconnect to the current process, but a process restart does not resume an in-progress defence run.
 - Ordinary force-field links preserve activation history while the objective ring is spatial and order-independent. This is intentional, but diagnostics and the connection contract must continue to make the distinction visible.
 - The deterministic ring solver explores spatial subsets from sixteen down to eight. Current pruning and tests keep the authored sixteen-socket level tractable; a materially larger socket set would require a new performance decision.
@@ -4006,3 +4008,82 @@ Three new regression cases failed before the correction. All 12 focused JavaScri
   Restart the hub to load Board's additive evidence, then refresh both player
   pages. The saved current Green/Purple perspective samples also passed the new
   model's offline validation; physical accuracy still needs a supervised pickup.
+
+## 2026-10-19 — Campaign replay, durable heatmaps and result-save recovery
+
+Retrospective reconciliation from the Game and Progress specifications and the
+tests included in `c1e57c5`. This entry records the implemented behavior; it does
+not claim a new browser run or live installation test.
+
+- A Level 4 win remains on **You Win! Game Over**. Earlier levels retain Continue;
+  results also offer Replay last level, Replay whole game and New game. Both
+  players must select the same option for the same finished run and event.
+  Replaying a level restores the level actually played, even if its win unlocked
+  the next one. Whole-game replay starts L1 with the same pair; New game returns
+  to name selection. Replays create a fresh linked save and attempt while keeping
+  wallets, purchases and historical results. Existing arm-stop, camera,
+  calibration and countdown gates still apply.
+- Game counts lethal events into a 32 × 18 heatmap and freezes the road/marker
+  landmarks with the result. Progress validates that located and explicitly
+  unlocated kills reconcile with the saved total, including during backup import.
+  Old results show unavailable spatial evidence rather than invented locations.
+  The grid is published at result time rather than on every live gameplay update.
+- Victory, immediate statistics and the heatmap remain visible while saving is
+  unavailable; replay choices wait for durable settlement. Progress imports its
+  validator at owner load so the production hub's helper-module isolation cannot
+  break later settlement. The isolation regression covers repeated L4 replays
+  and recovery from the durable outbox without duplicate rewards.
+- A broken, occluded or unavailable ring boundary locks the center and clears a
+  pending first Atom. The incomplete notice persists until repair; activation
+  notices last eight seconds. Phones, Game Master and projector consume the same
+  numbered simulation notice without re-announcing unchanged snapshots.
+- Evidence: `test_results_replay_heatmap` was included in the 241-test publication
+  run below. `test_result_save_isolation` and the browser checks are present but
+  were not rerun for that push. Existing local screenshots in
+  `output/results-replay-2026-10-19/` document victory, pending-save, recovered L4,
+  heatmap and ring-notice views; those generated captures were not committed.
+
+## 2026-10-19 — Publish the accumulated implementation to GitHub
+
+Human request: push the updated code to GitHub, then update the development log.
+OpenAI Codex inspected the repository, selected the publication files, ran the
+checks below, created the implementation commit and pushed it to the existing
+tracked branch. This records the publication work without assigning authorship
+to every earlier implementation change.
+
+- Published [`c1e57c5`](https://github.com/kaurkallasz/manual-override/commit/c1e57c530dd9214a7394f8c92c6b8c749ab48d03),
+  **Update Photon event progression, results replay, and physical controls**, to
+  `fork/photon-engine-phase-4` (`kaurkallasz/manual-override`). Fetch confirmed
+  the branch matched `d7d4165` before committing; push succeeded and the local
+  branch and remote-tracking branch then matched. No merge or force push was needed.
+- The commit contains 331 files: game/event progression, results and replay,
+  ranged enemies and upgrades, shared player UI and artwork, camera/fixed-board
+  tracking, stacked pickup, relay workers, MCam1, delivery diagnostics, tests and
+  documentation. Publication preparation also removed whitespace errors from
+  four newly added files; it made no gameplay logic changes.
+- Preserved local-only changes to `hub-config.json`, the two live calibration
+  JSON files and the relay command log. Calibration lesson data, display-session
+  state and generated `output/` captures were excluded. Selected game assets and
+  documentation illustrations were included. This is a source checkpoint, not
+  an export of the complete installed runtime.
+- Fresh Python validation: **241 tests passed** in approximately 25 seconds,
+  using `PYTHONPATH=tests .venv/bin/python -m unittest` with `test_event_reset`,
+  `test_player_continue`, `test_start_readiness`, `test_event_game`,
+  `test_level_results`, `test_event_progression`, `test_mobile_calibration_safety`,
+  `test_mobile_client_build`, `test_results_replay_heatmap`, `test_cue_targets`,
+  `test_photon_core_stack`, `test_photon_board_tracking`, `test_fixed_activation`,
+  `test_relay_worker`, `test_relay_feedback`, `test_mcam1` and `test_mcam1_firmware`.
+  These are focused suites, not a full-repository Python result.
+- Fresh JavaScript validation: `node --test tests/*.test.js` ran **275 checks:
+  271 passed and four failed**. The hidden-view case in
+  `tests/calibration_commands.test.js` lacks the current `turretControls` mock.
+  Three Start-flow cases in `tests/laser_tag_y_commands.test.js` use setup state
+  without the event/player readiness now required by `startBlocked`, so the
+  expected requests and timeout are never created. These fixtures were not
+  changed during publication; the failures remain outstanding and are recorded
+  in the commit message. Staged `git diff --check` passed.
+- No live-hub restart, robot command, firmware flash or physical calibration
+  change was performed. Publication does not resolve the earlier deployment or
+  supervised physical-acceptance requirements. The subsequent journal update
+  corrects the stale October 12 summary and records this checkpoint; it adds no
+  new runtime verification.
