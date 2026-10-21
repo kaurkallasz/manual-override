@@ -105,7 +105,9 @@ class PhotonLevelEditorTests(unittest.TestCase):
         cases = []
         with tempfile.TemporaryDirectory() as folder:
             for size in (96, 160, 208):
-                sockets = [{"socket_id": s["socket_id"], "x": int(s["x"]) + 6,
+                # Move away from the new right-side home defenses while testing
+                # marker resize math; home collisions have their own rejection test.
+                sockets = [{"socket_id": s["socket_id"], "x": int(s["x"]) - 6,
                             "y": int(s["y"]) - 4, "size": size} for s in editor["level"]["sockets"]]
                 candidate = self.apply_layout(self.level._raw_map, sockets)
                 for reference in candidate["tilesets"]:

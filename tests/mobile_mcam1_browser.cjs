@@ -9,7 +9,8 @@ const overlaps=(a,b)=>a&&b&&a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&
  try{
   for(const side of ['green','purple']){
    const page=await browser.newPage({viewport:{width:844,height:390},isMobile:true,hasTouch:true});
-   const errors=[],hardware=[];page.on('pageerror',e=>errors.push(e.message));
+   const errors=[],hardware=[],cameraRequests=[];page.on('pageerror',e=>errors.push(e.message));
+   page.on('request',r=>{if(/\/assets\/mcam[12]\.jpg/.test(r.url()))cameraRequests.push(r.url());});
    page.on('request',r=>{if(/\/mcam1\/|\/cartesian-xyz-test\//.test(r.url())&&r.method()==='POST')hardware.push(r.url());});
    await page.request.post(root+'/__test/camera',{data:{enabled:false}});
    await page.request.post(root+'/__test/mcam1',{data:{enabled:false}});
@@ -19,6 +20,21 @@ const overlaps=(a,b)=>a&&b&&a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&
    assert.equal(await page.locator('#mcam1Video').isVisible(),false);
    assert.equal(await page.evaluate(()=>feedReady),true,'game starts without MCAM1');
    await page.request.post(root+'/__test/mcam1',{data:{enabled:true,stale:false,width:480,height:320}});
+   if(side==='purple'){
+    // Even fresh MCAM1 metadata must never start Purple's reserved MCAM2 inset.
+    const greenState=await (await page.request.get(root+'/s/gamemaster/p/mobile-ltz-api/api/state')).json();
+    assert.equal(greenState.mobile_mcam1.status,'ready');
+    await page.evaluate(value=>applyState({...state,mobile_mcam1:value}),greenState.mobile_mcam1);
+    await page.waitForTimeout(1800);
+    assert.equal(await page.locator('#mcam1Video').isVisible(),false);
+    assert.equal(await page.evaluate(()=>feedReady),true,'Purple keeps playing while MCAM2 is pending');
+    assert.equal(await page.evaluate(()=>state.mobile_mcam1.status),'unavailable');
+    // Exercise lifecycle callbacks while Purple has no camera feed instance.
+    await page.evaluate(()=>{document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('pagehide'));});
+    assert.deepEqual(cameraRequests,[],'Purple never requests either unassigned or unimplemented camera');
+    assert.deepEqual(errors,[]);assert.deepEqual(hardware,[]);
+    await page.close();continue;
+   }
    await page.waitForFunction(()=>!document.getElementById('mcam1Video').hidden);
    assert.deepEqual(await page.locator('#mcam1Video').evaluate(c=>[c.width,c.height]),[240,160]);
    assert.equal(await page.locator('#mcam1Video').evaluate(c=>c.getContext('2d').getContextAttributes().willReadFrequently),true,'Inset uses the same software-backed camera surface');
@@ -77,6 +93,6 @@ const overlaps=(a,b)=>a&&b&&a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&
    assert.deepEqual(errors,[]);assert.deepEqual(hardware,[]);
    await page.close();
   }
-  console.log('MCAM1 passed: both teams, optional startup, half-size modes, six layouts, stale/error/disabled hiding and recovery, no hardware commands.');
+  console.log('Camera assignment passed: Green MCAM1 sizing/layouts and recovery; Purple hidden with no camera requests while MCAM2 is pending; no hardware commands.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});

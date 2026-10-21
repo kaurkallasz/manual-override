@@ -58,6 +58,79 @@ in `<root>/hub-config.json`, created on first run (see `DEFAULT_SANDBOXES` in
   replaces `prototypes/`, keeps the old one as `prototypes.prev`, restarts the
   hub).
 
+### Player QR sign-in
+
+Laser Tag Y shows Green/Purple join cards backed by the hub's
+`GET /s/gamemaster/api/player-join` endpoint. Only an authenticated admin can
+read or regenerate them (`POST` with same-origin JSON). QR images are generated
+locally using the game's existing OpenCV dependency. Missing/disabled Mobile LTZ
+modules, unavailable QR support, or an unusable network address produce an
+explicit unavailable state.
+
+Each link contains a random 192-bit team invitation in `#join=…`, valid for eight
+hours and reusable for reconnection. The login page immediately removes the
+fragment, posts the token to its own `/login/join`, and receives a normal
+HttpOnly session cookie containing exactly that team. The destination is fixed
+to `/s/<team>/p/mobile-ltz/`. No password, service token, or admin cookie is
+shared. Invalid links leave the ordinary password form usable.
+
+Regenerating replaces both invitation tokens. Expired codes refresh automatically;
+a hub restart also invalidates old links and player browser sessions. Regeneration
+alone leaves signed-in sessions connected. Player sessions otherwise last up to
+14 days and can log out normally.
+
+The admin-only `/api/player-sessions` and `/api/player-sessions/events` routes
+expose `hub.player-sessions` v1: one row per browser sign-in, observed IP, selected
+team profile name, connection/control status and last seen. IPs are observed at
+the Hub, so a hosted relay may appear as the same local address for every phone.
+Multiple browsers can use the same profile and IP. This is a presence list, not
+an IP ban or a unique physical-person identity.
+
+`POST /s/gamemaster/api/player-sessions/clean-reset` requires admin authentication,
+same-origin JSON and a unique `operation_id`. Photon Game registers the
+`photon.player-management` v1 owner through `ctx.register_player_management`.
+It closes admission, invalidates invitations and every player session (including
+offline clients), drains earlier player requests, releases both relay leases and
+uses Game's existing Reset path to return the active event to player selection.
+Saved profiles/results/upgrades/settings/calibration are preserved; unfinished
+attempts receive the ordinary aborted-result settlement. No new event is made.
+Fresh QR codes become available only after reset and required physical stops
+succeed. Retry uses the same operation ID; a completed duplicate does nothing.
+
+Incomplete reset state is atomically persisted in
+`.mobile-ltz-runtime/player-access.json`; a server restart cannot reopen it.
+While pending, player sign-in and motion remain blocked, and Game Master sees
+the failure and a Retry clean reset action. Operator feedback connection and
+safe stop paths remain available for recovery. New events and ordinary QR
+regeneration do not automatically disconnect players. There is no individual
+player-kick endpoint or button.
+
+Player cookies identify a browser session. `ctx.service_token` inside a player
+request delegates that identity to backend relay workers; revoked identities
+cannot continue sending commands. Player SSE/video streams check revocation
+before each emitted chunk. The outer player page monitors a presence stream
+and redirects to sign-in when the session ends, including after returning from
+the background. Admin sessions remain connected. Browser identities are kept
+only for this Hub process; old team-only cookies must sign in again after upgrade.
+
+Links use the browser's server origin, falling back to the hub's LAN address
+when the operator uses localhost. Phones need access to that network. Optional
+`player_join_base_url` in `hub-config.json` overrides the origin; it must point
+to this hub over HTTP(S), without a path, query, credentials, or fragment. This
+is not the separately hosted mobile relay's URL. No public origin is required
+for game Wi-Fi use.
+
+Green/Purple dashboards initially show only Mobile LTZ, even with an old saved
+tab or hash. **Show other tabs** reveals the other enabled modules for that visit;
+admin users retain the full dashboard. This is a navigation filter, not module
+disabling or a change to API permissions, so Mobile LTZ dependencies keep working.
+
+Verification: `.venv/bin/python -m unittest discover -s tests -p test_player_join.py`
+and `node --test tests/hub_navigation.test.js`. For browser checks, run
+`tests/player_join_fixture.py`, then `node tests/player_join_browser.cjs` with
+Playwright available. The fixture uses the real hub and pages, temporary auth,
+and no game or robot owners.
+
 ## The machine contract
 
 A machine is any sub-folder of a sandbox's `prototypes/` with a `prototype.py`

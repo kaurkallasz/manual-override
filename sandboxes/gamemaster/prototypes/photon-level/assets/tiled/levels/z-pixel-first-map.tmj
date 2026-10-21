@@ -10952,16 +10952,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 643,
-          "y": 171,
+          "x": 643.0,
+          "y": 171.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": -160,
-              "y": 161
+              "x": -160.0,
+              "y": 161.0
             }
           ],
           "properties": [
@@ -11005,16 +11005,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 955,
-          "y": 165,
+          "x": 955.0,
+          "y": 165.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": -154,
-              "y": 151
+              "x": -154.0,
+              "y": 151.0
             }
           ],
           "properties": [
@@ -11058,16 +11058,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 1126,
-          "y": 170,
+          "x": 1126.0,
+          "y": 170.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": 158,
-              "y": 157
+              "x": 158.0,
+              "y": 157.0
             }
           ],
           "properties": [
@@ -11111,16 +11111,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 1118,
-          "y": 815,
+          "x": 1118.0,
+          "y": 815.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": 327,
-              "y": -320
+              "x": 327.0,
+              "y": -320.0
             }
           ],
           "properties": [
@@ -11164,16 +11164,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 162,
-          "y": 493,
+          "x": 162.0,
+          "y": 493.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": 318,
-              "y": 160
+              "x": 318.0,
+              "y": 160.0
             }
           ],
           "properties": [
@@ -11217,16 +11217,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 642,
-          "y": 494,
+          "x": 642.0,
+          "y": 494.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": 167,
-              "y": 173
+              "x": 167.0,
+              "y": 173.0
             }
           ],
           "properties": [
@@ -11270,16 +11270,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 964,
-          "y": 811,
+          "x": 964.0,
+          "y": 811.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": -321,
-              "y": 2
+              "x": -321.0,
+              "y": 2.0
             }
           ],
           "properties": [
@@ -11323,16 +11323,16 @@
           "type": "GateHint",
           "visible": true,
           "width": 0,
-          "x": 1059,
-          "y": 497,
+          "x": 1059.0,
+          "y": 497.0,
           "polyline": [
             {
               "x": 0,
               "y": 0
             },
             {
-              "x": 221,
-              "y": 159
+              "x": 221.0,
+              "y": 159.0
             }
           ],
           "properties": [
@@ -11616,176 +11616,164 @@
     {
       "draworder": "topdown",
       "id": 14,
-      "name": "14 Activation Unit Staging",
+      "name": "14 Atom Home Platforms (hidden)",
       "objects": [
         {
-          "height": 320,
-          "id": 188,
-          "name": "activation_staging_right_grey",
+          "id": 207,
+          "name": "green_atom_home_1",
+          "type": "AtomHome",
+          "x": 1436.0,
+          "y": 740.0,
+          "width": 56,
+          "height": 56,
           "rotation": 0,
-          "type": "ActivationStagingZone",
           "visible": true,
-          "width": 176,
-          "x": 1520,
-          "y": 320,
           "properties": [
-            {
-              "name": "allowed_atom_tags",
-              "type": "string",
-              "value": "100,101,102,103"
-            },
-            {
-              "name": "purpose",
-              "type": "string",
-              "value": "physical_and_virtual_activation_unit_start"
-            },
-            {
-              "name": "surface",
-              "type": "string",
-              "value": "right_grey_area"
-            }
-          ]
-        },
-        {
-          "height": 0,
-          "id": 189,
-          "name": "activator_100_start",
-          "rotation": 0,
-          "type": "ActivatorStart",
-          "visible": true,
-          "width": 0,
-          "x": 1560,
-          "y": 400,
-          "point": true,
-          "properties": [
-            {
-              "name": "allowed_tower_types",
-              "type": "string",
-              "value": "machine_gun,flamethrower,mortar,tesla_coil"
-            },
-            {
-              "name": "atom_tag_id",
-              "type": "int",
-              "value": 100
-            },
             {
               "name": "owner",
               "type": "string",
               "value": "green"
             },
             {
-              "name": "staging_zone",
-              "type": "string",
-              "value": "activation_staging_right_grey"
+              "name": "slot",
+              "type": "int",
+              "value": 0
+            },
+            {
+              "name": "turret_x",
+              "type": "int",
+              "value": 1396
+            },
+            {
+              "name": "turret_y",
+              "type": "int",
+              "value": 760
+            },
+            {
+              "name": "pod_size",
+              "type": "int",
+              "value": 72
             }
           ]
         },
         {
-          "height": 0,
-          "id": 190,
-          "name": "activator_101_start",
+          "id": 208,
+          "name": "green_atom_home_2",
+          "type": "AtomHome",
+          "x": 1436.0,
+          "y": 804.0,
+          "width": 56,
+          "height": 56,
           "rotation": 0,
-          "type": "ActivatorStart",
           "visible": true,
-          "width": 0,
-          "x": 1656,
-          "y": 400,
-          "point": true,
           "properties": [
-            {
-              "name": "allowed_tower_types",
-              "type": "string",
-              "value": "machine_gun,flamethrower,mortar,tesla_coil"
-            },
-            {
-              "name": "atom_tag_id",
-              "type": "int",
-              "value": 101
-            },
             {
               "name": "owner",
               "type": "string",
               "value": "green"
             },
             {
-              "name": "staging_zone",
-              "type": "string",
-              "value": "activation_staging_right_grey"
+              "name": "slot",
+              "type": "int",
+              "value": 1
+            },
+            {
+              "name": "turret_x",
+              "type": "int",
+              "value": 1396
+            },
+            {
+              "name": "turret_y",
+              "type": "int",
+              "value": 840
+            },
+            {
+              "name": "pod_size",
+              "type": "int",
+              "value": 72
             }
           ]
         },
         {
-          "height": 0,
-          "id": 191,
-          "name": "activator_102_start",
+          "id": 209,
+          "name": "purple_atom_home_1",
+          "type": "AtomHome",
+          "x": 312.0,
+          "y": 100.0,
+          "width": 56,
+          "height": 56,
           "rotation": 0,
-          "type": "ActivatorStart",
           "visible": true,
-          "width": 0,
-          "x": 1560,
-          "y": 560,
-          "point": true,
           "properties": [
-            {
-              "name": "allowed_tower_types",
-              "type": "string",
-              "value": "machine_gun,flamethrower,mortar,tesla_coil"
-            },
-            {
-              "name": "atom_tag_id",
-              "type": "int",
-              "value": 102
-            },
             {
               "name": "owner",
               "type": "string",
               "value": "purple"
             },
             {
-              "name": "staging_zone",
-              "type": "string",
-              "value": "activation_staging_right_grey"
+              "name": "slot",
+              "type": "int",
+              "value": 0
+            },
+            {
+              "name": "turret_x",
+              "type": "int",
+              "value": 272
+            },
+            {
+              "name": "turret_y",
+              "type": "int",
+              "value": 120
+            },
+            {
+              "name": "pod_size",
+              "type": "int",
+              "value": 72
             }
           ]
         },
         {
-          "height": 0,
-          "id": 192,
-          "name": "activator_103_start",
+          "id": 210,
+          "name": "purple_atom_home_2",
+          "type": "AtomHome",
+          "x": 312.0,
+          "y": 164.0,
+          "width": 56,
+          "height": 56,
           "rotation": 0,
-          "type": "ActivatorStart",
           "visible": true,
-          "width": 0,
-          "x": 1656,
-          "y": 560,
-          "point": true,
           "properties": [
-            {
-              "name": "allowed_tower_types",
-              "type": "string",
-              "value": "machine_gun,flamethrower,mortar,tesla_coil"
-            },
-            {
-              "name": "atom_tag_id",
-              "type": "int",
-              "value": 103
-            },
             {
               "name": "owner",
               "type": "string",
               "value": "purple"
             },
             {
-              "name": "staging_zone",
-              "type": "string",
-              "value": "activation_staging_right_grey"
+              "name": "slot",
+              "type": "int",
+              "value": 1
+            },
+            {
+              "name": "turret_x",
+              "type": "int",
+              "value": 272
+            },
+            {
+              "name": "turret_y",
+              "type": "int",
+              "value": 200
+            },
+            {
+              "name": "pod_size",
+              "type": "int",
+              "value": 72
             }
           ]
         }
       ],
       "opacity": 1,
       "type": "objectgroup",
-      "visible": true,
+      "visible": false,
       "x": 0,
       "y": 0,
       "color": "#ff9f43"
@@ -11976,7 +11964,7 @@
     }
   ],
   "nextlayerid": 16,
-  "nextobjectid": 207,
+  "nextobjectid": 211,
   "orientation": "orthogonal",
   "properties": [
     {
@@ -12092,7 +12080,7 @@
     {
       "name": "layout_revision",
       "type": "int",
-      "value": 19
+      "value": 21
     },
     {
       "name": "left_crossover_x",

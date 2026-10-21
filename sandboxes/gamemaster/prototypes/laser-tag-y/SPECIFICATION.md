@@ -1,5 +1,39 @@
 # Laser Tag Y
 
+## Player join cards
+
+The bottom of the Game Master page displays Green and Purple QR cards opening
+each team's Mobile LTZ page with automatic authentication. The cards are side by
+side on desktop and stacked on narrow screens, with locally generated QR images,
+copy-link actions, game Wi-Fi instructions, server address, expiry, and a button
+to regenerate both codes. HTTP browsers without clipboard access receive a
+selectable link. The external screen does not display invitation codes.
+
+`player-join.js` reads the admin-only hub `hub.player-join` v1 endpoint and
+displays explicit errors. Authentication, random invitation state, the eight-hour
+lifetime, rotation, and fixed team destinations belong to the hub; Y never reads
+password/config files or another sandbox's module. Panel reload preserves valid
+codes; expiry refreshes them, and returning to the page rechecks current codes.
+Replaced/restarted/expired invitations cannot create a session. Existing player
+sessions retain their usual lifetime when codes are regenerated. No game start, readiness, or robot command
+is issued by joining.
+
+Above the QR cards, a read-only player connection table displays team, selected
+profile, observed IP, status and last seen using Hub's `hub.player-sessions` v1
+SSE endpoint. The **Clean reset** button is the only player disconnect action.
+It sends a unique operation ID to Hub's admin-only clean-reset endpoint, hides
+old codes during reset, and displays fresh codes on completion. All players,
+including offline sessions, must sign in again. Failures stay visibly blocked
+and offer **Retry clean reset** with the same operation ID across page reloads.
+The button describes preserved data and the reset effect before it is pressed.
+Ordinary **Regenerate codes** remains separate and does not disconnect players.
+
+Player sandbox dashboards default to Mobile LTZ only. Other modules remain
+enabled for its existing dependencies and can be revealed with **Show other
+tabs**. Game master navigation is unchanged. See `hub/README.md` for endpoint
+and network-address details, and `tests/player_join_browser.cjs` for the isolated
+browser check.
+
 
 ## Turret controls on the detected camera overlay
 
@@ -273,14 +307,32 @@ Muzzle, Tesla and mortar launch visuals follow the raised head; socket size,
 placement, targeting and simulation geometry are unchanged. Base-level art
 keeps its existing composition.
 
-The Event dropdown creates/selects an event. Starting Atom selectors provide
-camera fallback before the first match and stay fixed for the saved pair through
-L3. Game Master End match preserves the score and buys one next turret tier per
+The Event dropdown creates/selects an event. Starting Atom selectors default to
+the displayed home IDs and can select an alternate or explicit camera detection
+before the first match. A selection updates the projected home and starter, and
+stays fixed for the saved pair through L3. Game Master End match preserves the score and buys one next turret tier per
 player, including negative credit. Unlock next control level advances both controls
 and force fields once. Continue opens required calibration or next-match readiness.
 The old practice/test-unlock and player-credit panels are removed. Manual Atom/core
 shortcuts stay available, obeying Atom availability and the combat/ring objectives.
 All effects are validated by Game and Progress; the browser owns no progression.
+
+## Atom homes and starter weapons
+
+The live renderer draws `home_platforms` as glowing numbered team-colored pads:
+Green below the former yellow staging area and Purple diagonally opposite in the
+upper-left, with Purple's numbers rotated toward its player. The old rectangle
+and four static number dots are removed from the current scene. Pads draw after
+barriers so their numbers remain readable. Game hides each team's second pad
+until L4; the browser does not infer or unlock it itself.
+
+The separate `starter_turrets` array uses the normal upgraded weapon artwork,
+combat effects, destruction state, health display, operator selection and mobile
+aim controls. Pod geometry comes from Game. Setup previews are visible but cannot
+be aimed. Starters have no construction/rebuild buttons and no companion. The
+public screen and Game Master use the same drawing path. Browser regression:
+`tests/starter_defenses_fixture.py` + `tests/starter_defenses_browser.cjs`, using
+fake hardware and temporary player data.
 
 ## Physical ArUco management
 

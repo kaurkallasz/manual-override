@@ -117,6 +117,7 @@
     <a href="#" id="importLink" class="hdrlink">⤒ import</a>
     <input type="file" id="importFile" accept=".zip,application/zip" style="display:none" />
     <a href="#" id="toggleDisabled" class="hdrlink" style="display:none"></a>
+    <a href="#" id="togglePlayerTabs" class="hdrlink" style="display:none">show other tabs</a>
     <a href="logout" id="logoutLink" class="hdrlink dim">logout</a>
   </span>
 </header>
@@ -188,6 +189,20 @@ let meta = { sandbox: '', label: 'Manual Override', accent: '' };
 // switches, disabled tabs); OFF is the clean operating mode — plain tabs only,
 // so switching between machines never fights the management controls.
 let showOrder = false;
+// Navigation only: LTX and other dependencies stay enabled and reachable.
+// Start every player dashboard in Mobile LTZ, ignoring old remembered tabs.
+let showOtherPlayerTabs = false;
+function isPlayerDashboard() { return !meta.admin && ['green', 'purple'].includes(meta.sandbox); }
+function mobileOnly() { return isPlayerDashboard() && !showOtherPlayerTabs; }
+function visibleProtos() { return mobileOnly() ? protos.filter(p => p.slug === 'mobile-ltz') : protos; }
+function initialProto() {
+  const choices = visibleProtos();
+  const requested = choices.find(p => p.slug === location.hash.slice(1));
+  const remembered = requested || choices.find(p => p.slug === localStorage.getItem(K('lastProto')));
+  let want = remembered || choices.find(p => p.enabled) || choices[0];
+  if (!showOrder && want && !want.enabled) want = choices.find(p => p.enabled) || want;
+  return want;
+}
 let dragSlug = null;
 
 // localStorage keys are namespaced per sandbox — all three dashboards share
@@ -280,7 +295,33 @@ importFile.onchange = async () => {
 // ---- tab order mode (reorder + enable/disable GUI) — persisted --------------
 function updateToggleLink() {
   toggleDisabled.textContent = showOrder ? 'hide tab order' : 'show tab order';
-  toggleDisabled.style.display = '';
+  toggleDisabled.style.display = mobileOnly() ? 'none' : '';
+  const toggle = document.getElementById('togglePlayerTabs');
+  toggle.style.display = isPlayerDashboard() ? '' : 'none';
+  toggle.textContent = showOtherPlayerTabs ? 'hide other tabs' : 'show other tabs';
+  for (const id of ['exportLink', 'importLink']) document.getElementById(id).style.display = mobileOnly() ? 'none' : '';
+  const count = visibleProtos().length;
+  countEl.textContent = count ? `${count} module${count > 1 ? 's' : ''}` : '';
+}
+document.getElementById('togglePlayerTabs').onclick = event => {
+  event.preventDefault();
+  showOtherPlayerTabs = !showOtherPlayerTabs;
+  if (mobileOnly()) showOrder = false;
+  renderTabs();
+  const want = mobileOnly() || !active ? initialProto() : active;
+  if (want) {
+    document.getElementById('empty').style.display = 'none';
+    toolbar.style.display = '';
+    if (want !== active) selectProto(want);
+  } else showNoPlayerModule();
+};
+function showNoPlayerModule() {
+  active = null;
+  toolbar.style.display = 'none';
+  replaceFrame(null, true);
+  const empty = document.getElementById('empty');
+  empty.textContent = 'Mobile LTZ is unavailable. Ask the game master to enable it.';
+  empty.style.display = 'flex';
 }
 toggleDisabled.onclick = e => {
   e.preventDefault();
@@ -289,7 +330,7 @@ toggleDisabled.onclick = e => {
   // leaving order mode hides disabled tabs — if the active prototype just got
   // hidden, jump to the first visible one
   if (!showOrder && active && !active.enabled) {
-    const firstVisible = protos.find(p => p.enabled);
+    const firstVisible = visibleProtos().find(p => p.enabled);
     if (firstVisible) { localStorage.setItem(K('lastProto'), firstVisible.slug); selectProto(firstVisible); }
   }
   renderTabs();
@@ -322,10 +363,10 @@ function freshUrl(url) {
 function renderTabs() {
   tabsEl.innerHTML = '';
   let previousGroup = null;
-  for (const p of protos) {
-    if (!showOrder && !p.enabled) continue;
+  for (const p of visibleProtos()) {
+    if (!showOrder && !p.enabled && !mobileOnly()) continue;
     const group = p.group || '';
-    if (group !== previousGroup) {
+    if (group !== previousGroup && !mobileOnly()) {
       const label = document.createElement('span');
       label.className = 'group-label';
       label.textContent = group || 'Other';
@@ -413,6 +454,7 @@ function selectProto(p) {
     // don't load the GUI — stop its polling — and offer to re-enable
     replaceFrame(null, true);
     disabledMsg.style.display = 'flex';
+    enableHere.style.display = mobileOnly() ? 'none' : '';
     pageLinksEl.innerHTML = '';
     reloadBtn.style.display = 'none';
     openTab.style.display = 'none';
@@ -462,14 +504,17 @@ async function load() {
     document.documentElement.style.setProperty('--hot', meta.accent);
     document.documentElement.style.setProperty('--accent', meta.accent);
   }
-  showOrder = localStorage.getItem(K('showOrder')) === '1';
+  showOrder = !mobileOnly() && localStorage.getItem(K('showOrder')) === '1';
 
   try {
     protos = await (await fetch('api/prototypes')).json();
   } catch (_) { protos = []; }
   applySavedOrder();
-  countEl.textContent =
-    protos.length ? `${protos.length} module${protos.length > 1 ? 's' : ''}` : '';
+  updateToggleLink();
+  if (mobileOnly() && !visibleProtos().length) {
+    showNoPlayerModule();
+    return;
+  }
   if (!protos.length) {
     toolbar.style.display = 'none';
     frame.style.display = 'none';
@@ -477,12 +522,7 @@ async function load() {
     return;
   }
   renderTabs();
-  // restore last-viewed tab across reloads; prefer an enabled one
-  const requested = protos.find(p => p.slug === location.hash.slice(1));
-  const remembered = requested || protos.find(p => p.slug === localStorage.getItem(K('lastProto')));
-  let want = remembered || protos.find(p => p.enabled) || protos[0];
-  if (!showOrder && want && !want.enabled) want = protos.find(p => p.enabled) || want;
-  selectProto(want);
+  selectProto(initialProto());
 }
 
 load();

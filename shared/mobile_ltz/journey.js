@@ -12,7 +12,7 @@ document.body.append(panel);
 const content=panel.querySelector('#journeyContent'),message=panel.querySelector('#journeyMessage');
 const intro=panel.querySelector('#calibrationIntro'),quickPoints=panel.querySelector('#calibrationQuickPoints'),outerMarkers=[31,35,33,34];
 let browsing=false,showDetails=false,lessonCollapsed=false,editingArmPoints=false,lessonKey=null,lastResultSeen=null,revealingUpgrade=null,dismissedPanel=null;
-let chosenGame='',gameOperation=null;
+let chosenGame='',gameOperation=null,emailDraftProfile=null;
 function savedGameView(){
  const games=state.mobile_progress?.saved_games;if(!games)return '';
  const blocked=!state.mobile_progress?.events?.active_id||busy||state.phase==='running'||state.journey?.phase==='calibration'||state.result_save?.status==='saving';
@@ -83,15 +83,21 @@ function calibrationSide(value){const j=value?.journey;return j?.phase==='calibr
 function panelKey(){const p=state?.mobile_progress?.player;return JSON.stringify([state?.journey?.phase,state?.journey?.id,p?.id,p?.selected_control,p?.levels,state?.mobile_progress?.saved_games?.active_id,['green','purple'].map(side=>state?.mobile_progress?.roster?.[side]?.id)]);}
 function closePanel(){dismissedPanel=panelKey();browsing=false;signature='';render();}
 panel.querySelector('#journeyClose').onclick=closePanel;
-async function confirmReady(choice="continue"){
- if(typeof choice!=="string")choice="continue";
- if(busy)return;busy=true;
- try{await send('journey',{action:'ready',choice,run_id:state.run_id||state.journey?.run_id||null});if(state.journey?.phase!=='results')closePanel();}
- catch(error){message.textContent=error.message;}
+async function confirmReady(choice,runId){
+ // Bind the command to the result that rendered the button. SSE may already
+ // have advanced to a new game when an older click reaches this handler.
+ if(busy||state.journey?.phase==='playing'||(state.journey?.run_id||null)!==runId)return;
+ busy=true;message.textContent='';signature='';render();
+ try{
+  const result=await send('journey',{action:'ready',choice,run_id:runId});
+  if(result?.journey&&result.journey.revision>=(state.journey?.revision??-1))state={...state,journey:result.journey};
+  if(state.journey?.phase!=='results')closePanel();
+ }
+ catch(error){if((state.journey?.run_id||null)===runId&&state.journey?.phase!=='playing')message.textContent=error.message;}
  finally{busy=false;signature='';render();}
 }
 panel.querySelector('#journeyToggle').onclick=()=>{if(calibrationSide(state)===side){lessonCollapsed=!lessonCollapsed;}else if(['lobby','ready'].includes(state?.journey?.phase)){showDetails=!showDetails;}else browsing=!browsing;signature='';render();};
-async function action(path,value){if(busy)return;busy=true;try{const result=await send(path,value);if(value.action==='purchase'&&result?.result){revealingUpgrade=value.track+':'+value.level;message.textContent=`Paid ${result.result.price} · ${result.result.balance} credits left · L${result.result.level} installed`;}else if(['undo_capture','undo_raised'].includes(value.action))message.textContent=`Removed ${value.action==='undo_capture'?'arm position':'raised sample'} ${value.marker}. Tap the number again to save a new measurement.`;else message.textContent='Saved';}catch(error){message.textContent=error.message;}finally{busy=false;signature='';render();}}
+async function action(path,value){if(busy)return;busy=true;try{const result=await send(path,value);if(value.action==='purchase'&&result?.result){revealingUpgrade=value.track+':'+value.level;message.textContent=`Paid ${result.result.price} · ${result.result.balance} credits left · L${result.result.level} installed`;}else if(value.action==='scoreboard_email'){const field=content.querySelector('#journeyScoreEmail');if(field)field.value='';message.textContent='Email addresses saved. Each person will receive a private sign-in link after upload.';}else if(['undo_capture','undo_raised'].includes(value.action))message.textContent=`Removed ${value.action==='undo_capture'?'arm position':'raised sample'} ${value.marker}. Tap the number again to save a new measurement.`;else message.textContent='Saved';}catch(error){message.textContent=error.message;}finally{busy=false;signature='';render();}}
 async function loadHistory(){if(historyBusy){historyPending=true;return;}historyBusy=true;const scope=JSON.stringify([state?.mobile_progress?.player?.id,filters]);try{
  const query=new URLSearchParams();for(const [key,value]of Object.entries(filters)){if(!value)continue;query.set(key,key==='from'||key==='to'?String(Date.parse(value+(key==='to'?'T23:59:59Z':'T00:00:00Z'))/1000):value);}
  let cursor=null,rows=[];
@@ -126,7 +132,7 @@ function speedGraph(){
 function runDetails(){
  const r=history.find(row=>row.run_id===selectedRun);if(!r)return '<p id="journeyRunDetails" aria-live="polite">Select a graph point or table game to inspect its saved details.</p>';
  const t=r.telemetry,participants=r.participants.map(p=>`${p.name} (${p.side}, ${names[p.control_tier-1]}) · ${Object.entries(p.levels).map(([k,v])=>`${k} L${v}`).join(', ')}`).join('\n');
- return `<div id="journeyRunDetails" aria-live="polite"><h4>${esc(r.run_id)}</h4><p>${esc(new Date(r.finished_at*1000).toISOString())} · ${esc(r.outcome)} · ${r.score} score · ${r.active_seconds??'Unavailable'} active seconds · ${r.released_orcs??'Unavailable'} released orcs</p><p>Result saved. Completion award: ${r.completion_awarded?'Yes':'No'}. Calibration milestone: ${Object.keys(r.calibration_milestones||{}).length?'Reached':'None'}.</p><pre>${esc(participants)}</pre><p>${t?`First placement: Green ${t.first_placement_s.green??'Unavailable'}s · Purple ${t.first_placement_s.purple??'Unavailable'}s · Pauses ${t.pause_count} · ${esc(t.outcome_reason||'Outcome reason unavailable')}`:'Placement telemetry unavailable for this older game.'}</p>${LTZShop.heatmap(r.kill_heatmap)}<details><summary>Frozen map, preset and game settings</summary><pre>${esc(JSON.stringify(r.metadata,null,2))}</pre></details></div>`;
+ return `<div id="journeyRunDetails" aria-live="polite"><h4>${esc(r.run_id)}</h4><p>${esc(new Date(r.finished_at*1000).toISOString())} · ${esc(r.outcome)} · ${r.score} score · ${r.active_seconds??'Unavailable'} active seconds · ${r.released_orcs??'Unavailable'} released orcs</p><p>Result saved. Completion award: ${r.completion_awarded?'Yes':'No'}. Calibration milestone: ${Object.keys(r.calibration_milestones||{}).length?'Reached':'None'}.</p><pre>${esc(participants)}</pre><p>${t?`First placement: Green ${t.first_placement_s.green??'Unavailable'}s · Purple ${t.first_placement_s.purple??'Unavailable'}s · Pauses ${t.pause_count} · ${esc(t.outcome_reason||'Outcome reason unavailable')}`:'Placement telemetry unavailable for this older game.'}</p>${LTZShop.movement(r.robot_movement,r.run_id,r.kill_heatmap,r.active_seconds)}<details><summary>Frozen map, preset and game settings</summary><pre>${esc(JSON.stringify(r.metadata,null,2))}</pre></details></div>`;
 }
 function render(){
  if(!state)return;
@@ -158,7 +164,7 @@ function render(){
  const visibleCal=cal?{id:cal.id,stage:cal.stage,captures:cal.captures,located:Object.keys(located),markersReady,draft:cal.draft,pickup_height:cal.pickup_height,transport_height:cal.transport_height,arrivals:cal.arrivals,pickup_evidence:cal.pickup_evidence,paused:cal.paused}:null;
  const upgradeTier=Math.max(1,...Object.values(state.mobile_progress?.roster||{}).map(p=>p.selected_control||1));
  const upgradeTuning=state.next_match?.tiers?.find(t=>t.tier===upgradeTier)?.weapon_upgrades;
- const nextSignature=JSON.stringify([j.phase,j.revision,j.readiness,selected,ready,error,lessonCollapsed,perspectivePoint,state.mobile_camera?.status,savedSelection,savedError,savedCalibrations.map(r=>r.id),countdown,p?.id,p?.revision,visibleCal,history.map(r=>r.run_id),state.mobile_progress?.latest_result?.run_id,[state.mobile_progress?.shop?.catalog_revision,state.mobile_progress?.shop?.status,state.mobile_progress?.shop?.deadline],state.result_save,browsing,showDetails,selectedRun,filters,upgradeTuning,state.mobile_progress?.saved_games,chosenGame,busy,state.phase]);if(signature===nextSignature)return;signature=nextSignature;
+ const nextSignature=JSON.stringify([j.phase,j.revision,j.readiness,selected,ready,error,lessonCollapsed,perspectivePoint,state.mobile_camera?.status,savedSelection,savedError,savedCalibrations.map(r=>r.id),countdown,p?.id,p?.revision,state.mobile_progress?.scoreboard?.email_added,state.mobile_progress?.scoreboard?.email_count,state.mobile_progress?.scoreboard?.upload_state,visibleCal,history.map(r=>r.run_id),state.mobile_progress?.latest_result?.run_id,[state.mobile_progress?.shop?.catalog_revision,state.mobile_progress?.shop?.status,state.mobile_progress?.shop?.deadline],state.result_save,browsing,showDetails,selectedRun,filters,upgradeTuning,state.mobile_progress?.saved_games,chosenGame,busy,state.phase]);if(signature===nextSignature)return;signature=nextSignature;
  const compact=['lobby','ready'].includes(j.phase)&&!showDetails;
  panel.classList.toggle('playerPrompt',compact);
  panel.querySelector('#journeyClose').hidden=briefing||active||waiting||saving||(!dismissible&&mandatory);
@@ -171,6 +177,7 @@ function render(){
  const remaining=j.deadline==null?null:Math.max(0,Math.ceil(j.deadline-j.server_time));
  if(saving){
   content.innerHTML=LTZShop.pendingResult(state)+`<p class="ltzSaving" role="status">Saving result… ${esc(state.result_save.error||'Your results will appear here once the save is confirmed.')}</p>`;
+  LTZShop.mount(content);
   return;
  }
  if(active){
@@ -209,15 +216,17 @@ function render(){
   if(!compact&&!j.game_complete)body+=`<p class="ltzNextMatch">${esc(LTZShop.next(state.next_match,p?.current_control_tier||1))}</p>`;
   if(waiting)body+=`<p class="journeyWaiting" role="status">${selected?`Waiting for ${esc(selected[0].toUpperCase()+selected.slice(1))} to finish calibration.`:'Preparing the next calibration turn.'} You can browse upgrades while you wait.</p>${state.mobile_calibration_connect?'<button id="calibrationReconnect">Connect to confirm previous stop</button>':''}`;
   if(waiting&&!p)body+=`<div class="journeyUpgrades">${tracks.map(track=>`<button disabled>${esc(track.replace('damage-',''))}</button>`).join('')}</div><p>No player selected. Choose a player before calibration to view saved equipment.</p>`;
+  if(p)body+=`<p><a href="https://mecharena.eu/score" target="_blank" rel="noopener">Your online scoreboard ↗</a> · ${esc(state.mobile_progress?.scoreboard?.message||'Add email addresses to receive your statistics.')}</p><details><summary>${state.mobile_progress?.scoreboard?.email_added?'Add teammate emails':'Share scoreboard by email'}</summary><label>Email addresses for statistics <input id="journeyScoreEmail" type="email" multiple maxlength="2600" autocomplete="email" placeholder="you@example.com, teammate@example.com"></label><p>${state.mobile_progress?.scoreboard?.email_added?'Include all previously registered addresses plus the new ones, separated by commas. Existing addresses keep access.':'Enter up to 10 addresses separated by commas. Everyone listed can view this profile’s results.'}</p><button id="journeyAddEmail">Share scoreboard by email</button></details>`;
   if(p&&j.phase!=='results')body+=`<p class="journeyPlayerSummary">${esc(p.name)} · L${p.current_control_tier} ${esc(names[p.current_control_tier-1])} · ${p.credits} credits</p>${compact?'':`<p>Event kills ${p.lifetime_kills} · Score ${p.lifetime_kill_credits} · Bonus ${p.lifetime_bonus_credits} · Wins ${p.wins}/${p.attempts}</p>`}`;
-  if(['lobby','ready'].includes(j.phase))body+=`<label>Saved player <select id="journeyPlayer"><option value="">Choose a name</option>${(state.mobile_progress?.players||[]).map(x=>`<option value="${esc(x.id)}" ${p?.id===x.id?'selected':''}>${esc(x.name)} · ${esc(x.id.slice(0,6))}</option>`).join('')}</select></label><label for="journeyNewName">Or enter a new name</label><div class="journeyNameRow"><input id="journeyNewName" maxlength="32" autocomplete="nickname" placeholder="Your name"><button id="journeyCreate">Add</button></div><button id="journeyReady" ${p?'':'disabled'}>${esc(readyLabel)}</button>`;
-  if(briefing)body=`<p class="eyebrow">${esc(state.mobile_progress?.events?.active?.name)} · ${esc(p.name)} · Mission briefing</p><p class="journeyPlayerSummary">L${p.current_control_tier} ${esc(names[p.current_control_tier-1])} controls · ${p.credits} credits</p><h2>Hold the line.</h2><ol class="missionObjectives"><li>Your mission is to hold off the orcs</li><li>Do this by activating the turrets using the robot arm to place the ATOM tags on top of the aruco codes on the playfield.</li><li>Complete a ring of 8–16 turrets. Then stack one Green and one Purple Atom on the core to unlock the next level.</li></ol><p class="missionReminder">Don't forget to aim your turrets!</p><button id="journeyReady" ${busy?'disabled':''}>${esc(readyLabel)}</button>`;
+  if(['lobby','ready'].includes(j.phase))body+=`<label>Saved player <select id="journeyPlayer"><option value="">Choose a name</option>${(state.mobile_progress?.players||[]).map(x=>`<option value="${esc(x.id)}" ${p?.id===x.id?'selected':''}>${esc(x.name)} · ${esc(x.id.slice(0,6))}</option>`).join('')}</select></label><label for="journeyNewName">Or enter a new name</label><div class="journeyNameRow"><input id="journeyNewName" maxlength="32" autocomplete="nickname" placeholder="Your name"><button id="journeyCreate">Create profile</button></div><label for="journeyNewEmail">Email addresses (optional)</label><input id="journeyNewEmail" type="email" multiple maxlength="2600" autocomplete="email" placeholder="you@example.com, teammate@example.com"><p>Separate up to 10 addresses with commas to share game statistics with your team. Each person receives a private sign-in link and access to this profile’s results. Leave blank to play without online statistics.</p><button id="journeyReady" class="ltzReady" aria-pressed="${!!playerReady}" ${p?'':'disabled'}>${esc(readyLabel)}</button>`;
+  if(briefing)body=`<p class="eyebrow">${esc(state.mobile_progress?.events?.active?.name)} · ${esc(p.name)} · Mission briefing</p><p class="journeyPlayerSummary">L${p.current_control_tier} ${esc(names[p.current_control_tier-1])} controls · ${p.credits} credits</p><h2>Hold the line.</h2><ol class="missionObjectives"><li>Your mission is to hold off the orcs</li><li>Do this by activating the turrets using the robot arm to place the ATOM tags on top of the aruco codes on the playfield.</li><li>Complete a ring of 8–16 turrets. Then stack one Green and one Purple Atom on the core to unlock the next level.</li></ol><p class="missionReminder">Don't forget to aim your turrets!</p><button id="journeyReady" class="ltzReady" aria-pressed="${!!playerReady}" ${busy?'disabled':''}>${esc(readyLabel)}</button>`;
   if(j.phase!=='results')body+=savedGameView();
   if(p&&!compact&&j.phase!=='results')body+=LTZShop.html({profile:p,shop:state.mobile_progress?.shop,side,busy,revealing:revealingUpgrade,upgrades:upgradeTuning})+`${j.phase==='lobby'?'<button id="journeyReplay">Replay calibration and click-to-move lesson</button>':''}<h3>Score history</h3>${statsFilters()}${graph()}<h3>Completion time by control</h3>${speedGraph()}${runDetails()}`;
   if(j.error)body+=`<p role="alert">${esc(j.error)}</p>`;
   if(j.auto_start?.error)body+=`<p role="alert">${esc(j.auto_start.error)}</p>`;
   // Do not overwrite a name while it is being entered.
-  const draft=content.querySelector('#journeyNewName')?.value||'',focused=document.activeElement?.id,selection=focused==='journeyNewName'?[document.activeElement.selectionStart,document.activeElement.selectionEnd]:null;
+  const draft=content.querySelector('#journeyNewName')?.value||'',emailDraft=content.querySelector('#journeyNewEmail')?.value||'',scoreDraft=emailDraftProfile===p?.id?content.querySelector('#journeyScoreEmail')?.value||'':'',shareOpen=content.querySelector('#journeyScoreEmail')?.closest('details')?.open,focused=document.activeElement?.id,selection=focused==='journeyNewName'?[document.activeElement.selectionStart,document.activeElement.selectionEnd]:null;
+  emailDraftProfile=p?.id;
   content.innerHTML=body;
   LTZShop.mount(content);
   content.querySelector('#journeySavedGame')?.addEventListener('change',e=>{chosenGame=e.target.value;signature='';render();});
@@ -225,11 +234,13 @@ function render(){
   if(!state.mobile_progress?.events?.active_id||state.mobile_progress?.saved_games?.pair_locked||state.phase==='running')for(const id of ['journeyPlayer','journeyNewName','journeyCreate']){const node=content.querySelector('#'+id);if(node)node.disabled=true;}
   content.querySelector('#calibrationReconnect')?.addEventListener('click',()=>document.getElementById('connect').click());
   const input=content.querySelector('#journeyNewName');if(input){input.value=draft;if(selection){input.focus();input.setSelectionRange(...selection);}}
+  for(const[id,value]of [['journeyNewEmail',emailDraft],['journeyScoreEmail',scoreDraft]]){const field=content.querySelector('#'+id);if(field){field.value=value;if(id==='journeyScoreEmail'&&shareOpen)field.closest('details').open=true;if(focused===id)field.focus();}}
+  content.querySelector('#journeyAddEmail')?.addEventListener('click',()=>{const field=content.querySelector('#journeyScoreEmail');if(field.reportValidity())action('player',{action:'scoreboard_email',email:field.value});});
   content.querySelector('#journeyPlayer')?.addEventListener('change',e=>action('player',{action:'select',player_id:e.target.value||null}));
-  content.querySelector('#journeyCreate')?.addEventListener('click',async()=>{if(busy)return;busy=true;try{await send('player',{action:'create',select:true,name:input.value,operation_id:LtzOperationId()});const field=content.querySelector('#journeyNewName');if(field)field.value='';showDetails=false;browsing=false;signature='';render();message.textContent='Player created and selected';}catch(error){message.textContent=error.message;}finally{busy=false;signature='';render();}});
+  content.querySelector('#journeyCreate')?.addEventListener('click',async()=>{if(busy||!content.querySelector('#journeyNewEmail')?.reportValidity())return;busy=true;try{await send('player',{action:'create',select:true,name:input.value,email:content.querySelector('#journeyNewEmail')?.value||'',operation_id:LtzOperationId()});for(const id of ['journeyNewName','journeyNewEmail']){const field=content.querySelector('#'+id);if(field)field.value='';}showDetails=false;browsing=false;signature='';render();message.textContent='Player created and selected';}catch(error){message.textContent=error.message;}finally{busy=false;signature='';render();}});
   input?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();content.querySelector('#journeyCreate')?.click();}});
-  content.querySelector('#journeyReady')?.addEventListener('click',confirmReady);
-  content.querySelectorAll('[data-result-choice]').forEach(button=>button.onclick=()=>confirmReady(button.dataset.resultChoice));
+  content.querySelector('#journeyReady')?.addEventListener('click',()=>confirmReady('continue',j.run_id||null));
+  content.querySelectorAll('[data-result-choice]').forEach(button=>button.onclick=()=>confirmReady(button.dataset.resultChoice,button.dataset.resultRun));
   content.querySelector('#journeyReplay')?.addEventListener('click',()=>action('journey',{action:'replay'}));
   content.querySelectorAll('[data-filter]').forEach(input=>input.addEventListener('change',()=>{filters[input.dataset.filter]=input.value;loadHistory();}));
   content.querySelector('#journeyHistoryRefresh')?.addEventListener('click',loadHistory);
@@ -238,6 +249,9 @@ function render(){
  window.dispatchEvent(new Event('calibrationtargetchange'));
 }
 window.MobileJourney={calibrationSide,previewPerspective,perspectiveTarget,wantsPerspective,open(){browsing=true;lessonCollapsed=false;showDetails=!['lobby','ready'].includes(state?.journey?.phase);signature='';render();},update(value,request,movement){
+ // A response can arrive before an older in-flight SSE snapshot.
+ if(value.journey&&state?.journey&&value.journey.revision<state.journey.revision)value={...value,journey:state.journey};
+ if(value.journey?.run_id!==state?.journey?.run_id||value.journey?.phase==='playing')message.textContent='';
  const resetToNames=value.journey?.phase==='lobby'&&!value.mobile_progress?.player&&(state?.mobile_progress?.player||value.journey.reset_operation!==state?.journey?.reset_operation);
  if(resetToNames){
   browsing=false;showDetails=false;dismissedPanel=null;chosenGame='';lastResultSeen=null;selectedRun=null;signature='';message.textContent='';

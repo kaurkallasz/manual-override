@@ -49,6 +49,9 @@ class MobileArm:
         direction = 1 if side == 'green' else -1
         self.tags = {codes[0]: {'x': tip['x'], 'y': tip['y']},
                      codes[1]: {'x': tip['x'] - direction*80, 'y': tip['y'] - direction*65}}
+        for h in getattr(level, 'atom_homes', []):
+            if h['owner'] == side:
+                self.tags[codes[h['slot']]] = {k: h[k] for k in ('x', 'y')}
         self.message = 'Connect to control the simulated '+self.label+' arm.'
 
     def orient(self, point):

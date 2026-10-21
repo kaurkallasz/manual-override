@@ -77,7 +77,7 @@ class LinkedGames:
                           "ORDER BY json_extract(data,'$.started_at') DESC,id DESC LIMIT 1",
                           ((game or {}).get('id'),)).fetchone()
         if (not game or source['game_id']!=game['id'] or source['event_id']!=value.get('event_id')
-                or source['outcome'] not in ('won','overrun','operator_ended')
+                or source['outcome'] not in ('won','overrun','operator_ended','interrupted','aborted')
                 or pair!={p['side']:p['player_id'] for p in source['participants']}
                 or not latest or latest[0]!=source['run_id']):
             raise ValueError('Level result changed; refresh before replaying')

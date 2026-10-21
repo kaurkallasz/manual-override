@@ -8,6 +8,7 @@ import time
 from flask import Blueprint, jsonify, request, send_from_directory
 import live
 from store import ProgressStore
+from score_upload import UploadClient
 
 HERE = Path(__file__).resolve().parent
 DATA_DIR = HERE / 'data'
@@ -18,6 +19,7 @@ MANIFEST = {'name': 'Photon Progress', 'group': 'Photon Engine',
             'default_page': '', 'pages': [{'path': '', 'label': 'Player progress'}]}
 bp = Blueprint('photon_progress', __name__)
 _live = live.LiveState()
+_uploader = None
 _store = None
 _error = 'not initialized'
 _lock = threading.RLock()
@@ -35,9 +37,35 @@ def _output(value=None):
 
 def progress_snapshot(query=None):
     try:
-        return _output(_ready().snapshot((query or {}).get('side')))
+        state = _ready().snapshot((query or {}).get('side'))
+        score = state['scoreboard']
+        if score['email_added'] and score['upload_state'] != 'submitted' and not (_uploader and _uploader.paired):
+            score.update(upload_state='setup_required', message='Your email addresses are saved on this game, but online statistics are not connected yet. Ask the operator to finish setup; sign-in emails will send automatically afterward.')
+        return _output(state)
     except Exception as exc:
         return {'contract': CONTRACT, 'version': VERSION, 'status': 'unavailable', 'ok': False, 'error': str(exc)}
+
+
+def scoreboard_link_snapshot():
+    """photon.scoreboard-link v1: non-blocking, credential-free operator notice.
+
+    Configuration is atomically replaced by the uploader. Reading it directly
+    through its validator avoids waiting on the network worker's upload lock.
+    """
+    result = {'contract': 'photon.scoreboard-link', 'version': 1, 'status': 'unavailable'}
+    try:
+        if _uploader is None:
+            return result
+        cfg = _uploader.read_config()
+        pending = cfg.get('pairing_request', {})
+        state = 'linked' if cfg.get('installation_id') else pending.get('status', 'unlinked')
+        if state not in ('linked', 'unlinked', 'submitting', 'pending', 'cancelling',
+                         'cancelled', 'rejected', 'expired', 'revoked'):
+            return result
+        return dict(result, status='ready', state=state,
+                    upload_delayed=state == 'linked' and bool(_uploader.error))
+    except Exception:
+        return result
 
 
 def begin_attempt(value):
@@ -89,7 +117,10 @@ def player_command(side, value):
     if action == 'create':
         if type(value.get('select', False)) is not bool:
             raise ValueError('select must be true or false')
-        result = _ready().create_player(value.get('name'), value.get('operation_id'), side=side if value.get('select') else None,event_id=value['event_id'])
+        result = _ready().create_player(value.get('name'), value.get('operation_id'), side=side if value.get('select') else None,event_id=value['event_id'],email=value.get('email'))
+    elif action == 'scoreboard_email':
+        _ready().score_set_contact(side,value.get('email'),value['event_id'])
+        result = {}
     elif action == 'select':
         _ready().select_player(side, value.get('player_id'),value['event_id'])
         result = {}
@@ -185,19 +216,28 @@ def prepare_game():
 
 
 def hub_init(ctx):
-    global _store, _error
+    global _store, _error, _uploader
+    if _uploader: _uploader.stop()
     with _lock:
         try:
             candidate = ProgressStore(DATA_DIR / 'progress.sqlite3')
             candidate.initialize()
             _store, _error = candidate, None
+            _uploader = UploadClient(candidate, DATA_DIR / 'scoreboard', _live.bump)
+            try:
+                config = _uploader.read_config()
+                if config.get('installation_id') or config.get('pairing_request'): _uploader.start()
+            except Exception:
+                _uploader.error = 'Installation configuration unavailable; saved game progress remains available'
         except Exception as exc:
             _store, _error = None, str(exc)
     _live.bump()
 
 
 def hub_stop():
-    global _store, _error
+    global _store, _error, _uploader
+    if _uploader: _uploader.stop()
+    _uploader = None
     with _lock:
         _store, _error = None, 'stopped'
     _live.bump()
@@ -315,3 +355,47 @@ def import_api():
     if not preview:
         _live.bump()
     return jsonify(_output({'preview': preview, **result}))
+
+
+def _scoreboard_admin():
+    _admin()
+    if request.method == 'POST':
+        origin = request.headers.get('Origin')
+        if origin and origin.rstrip('/') != request.host_url.rstrip('/'):
+            raise PermissionError('Same-origin request required')
+        if not request.is_json:
+            raise ValueError('JSON request required')
+    if _uploader is None:
+        raise ValueError('Scoreboard uploader unavailable')
+
+
+@bp.route('/api/scoreboard', methods=['GET','POST'])
+def scoreboard_api():
+    _scoreboard_admin()
+    if request.method == 'POST':
+        data=request.get_json()
+        if data.get('action') == 'request_pairing':
+            return jsonify(_output({'scoreboard':_uploader.request_pairing(data.get('name'),data.get('contact_email'))}))
+        if data.get('action') == 'cancel_request':
+            return jsonify(_output({'scoreboard':_uploader.cancel_request()}))
+        if data.get('action') == 'pair':
+            result=_uploader.pair(data.get('code'),data.get('name'))
+            _uploader.start()
+            return jsonify(_output({'scoreboard':result}))
+        if data.get('action') == 'disconnect':
+            _uploader.disconnect()
+        elif data.get('action') == 'retry':
+            with _ready().transaction(write=True) as db:
+                db.execute('UPDATE score_outbox SET next_at=0')
+            _uploader.pair_next = 0
+            _uploader.start()
+            _uploader.wake.set()
+        else:
+            raise ValueError('Unknown scoreboard action')
+    return jsonify(_output({'scoreboard':_uploader.status()}))
+
+
+@bp.route('/scoreboard-admin.js')
+def scoreboard_admin_script():
+    _admin()
+    return send_from_directory(HERE, 'scoreboard-admin.js')

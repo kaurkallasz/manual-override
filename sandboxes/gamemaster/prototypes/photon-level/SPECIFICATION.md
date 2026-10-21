@@ -1,5 +1,27 @@
 # Photon Level
 
+## Atom home geometry
+
+Layout revision 21 retains the replacement of the old yellow activation area and four static Atom
+dots with four hidden, editable `AtomHome` objects in Tiled. Level publishes their
+geometry as optional `atom_homes` in the existing runtime and level contracts.
+These are separate from the sixteen construction sockets. Green's 56 px homes
+are centered at (1464,768) and (1464,832), across the road at the outer edge of
+the lower inner area, with 72 px starter pods at (1396,760) and (1396,840).
+Purple's homes are at (340,128) and (340,192), on the inner/right edge of its
+upper-left area, with pods at (272,120) and (272,200). Both pairs are arranged
+vertically to bring the physical tags inward for camera detection; the latest
+requested placement is deliberately no longer an exact 180-degree mirror.
+The slot index is 0 or 1; Game owns visibility, configured Atom IDs and weapons.
+
+The parser validates all four footprints, team/slot identity, finite dimensions,
+bounds and clearance from homes, starter pods, normal turrets, markers and eligible
+L4 companions. Socket editor saves run the same validation. The placement overlay
+shows both reserved homes and starter anchors at every level as authoring guides;
+only Game's live projection hides the second home before L4. Maps without homes
+retain their previous behavior. Roads, terrain and all other Tiled layers are
+unchanged. See `tests/test_starter_defenses.py` for geometry regression coverage.
+
 ## L4 companion anchors
 
 Layout revision 19 retains all sixteen authored sockets and their marker/primary
@@ -26,7 +48,7 @@ sibling's files. Its own authoring preview is part of level editing.
 
 The Level tab draws the existing `photon.visual-scene` v1 in authored layer
 order using its shared local images: terrain, roads, static decorations,
-core artwork, and activation staging. It never displays the hidden concept
+core artwork, and reserved Atom home outlines. It never displays the hidden concept
 reference. Placement art is replaced by editable owner-colored square outlines,
 center crosses, and labels. Optional overlays show ArUco codes (38 and 40–55)
 and enemy routes. These are authoring aids, not live gameplay.

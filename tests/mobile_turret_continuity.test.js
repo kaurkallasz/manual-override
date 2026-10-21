@@ -69,3 +69,13 @@ test('small registration jitter does not change the active pointer mapping; a re
  const drag=overlay.drag;assert.equal(!!overlay.currentGesture(drag),false);
  assert.equal(overlay.drag,null);assert.equal(overlay.draft,null);
 });
+test('home defenses use the same ownership and destruction checks; previews cannot be selected',t=>{
+ const {overlay,state,tower}=fixture(t);
+ const starter={...tower,socket_id:'starter_green_1',is_starter:true};
+ state.starter_turrets=[starter];overlay.selected=starter.socket_id;
+ assert.equal(overlay.tower(),starter);
+ starter.preview=true;assert.equal(overlay.tower(),undefined);
+ starter.preview=false;starter.owner='purple';assert.equal(overlay.tower(),undefined);
+ starter.owner='green';starter.destroyed=true;assert.equal(overlay.tower(),undefined);
+ assert.equal(state.towers.length,1);
+});

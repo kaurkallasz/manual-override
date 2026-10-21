@@ -12,12 +12,14 @@ import threading
 import time
 import uuid
 
+from score_upload import ScoreContacts, initialize as initialize_score, normalize_emails
 from ltz_economy import EconomyStore, initialize as initialize_economy, quote
 from ltz_rewards import migrate_player, banks_kill_credits, validate as validate_reward, rule as validate_reward_rule
 from ltz_records import encoded, integer, identifier, finite, fingerprint, normalize_legacy_tracks
 from ltz_backup import BackupStore
 from event_store import EventStore
 from linked_games import LinkedGames
+from movement_results import validate_movement
 from level_results import LevelResults, attempts as event_attempts, statistics_at_finish, result_view, validate_heatmap
 
 TRACKS = ('damage-machine-gun', 'damage-flamethrower', 'damage-mortar', 'damage-tesla-coil', 'forcefield')
@@ -27,7 +29,7 @@ LESSON_VERSION = 1
 LEGACY_TEST_IDS = {'ltz-test-green', 'ltz-test-purple'}
 
 
-class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupStore):
+class ProgressStore(ScoreContacts, LevelResults, LinkedGames, EventStore, EconomyStore, BackupStore):
     def __init__(self, path):
         self.path = Path(path)
         self.lock = threading.RLock()
@@ -81,9 +83,11 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
             db.execute('INSERT OR IGNORE INTO game_selection VALUES(1,NULL)')
             db.execute("INSERT OR IGNORE INTO meta VALUES('revision',1)")
             initialize_economy(db)
+            initialize_score(db)
             db.execute(f'PRAGMA user_version={SCHEMA}')
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise ValueError('progress database integrity check failed')
+        self.path.chmod(0o600)
 
     @staticmethod
     def _touch(db):
@@ -143,10 +147,12 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
     def _remember(db, operation_id, intent, result):
         db.execute('INSERT INTO operations VALUES(?,?)', (operation_id, encoded({'intent': intent, 'result': result})))
 
-    def create_player(self, name, operation_id, *, side=None, event_id=None):
+    def create_player(self, name, operation_id, *, side=None, event_id=None, email=None):
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 32 or any(ord(c) < 32 for c in name):
             raise ValueError('player name must contain 1–32 printable characters')
+        email = ','.join(normalize_emails(email))
         intent = {'action': 'create', 'name': name.strip(), 'event_id':event_id}
+        if email: intent['email_digest'] = hashlib.sha256(email.encode()).hexdigest()
         if side is not None:
             if side not in ('green', 'purple'):
                 raise ValueError('invalid side')
@@ -159,6 +165,7 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
             player = self._new_player(uuid.uuid4().hex, name.strip())
             player['event_id']=event['id']
             db.execute('INSERT INTO players VALUES(?,?)', (player['id'], encoded(player)))
+            self.score_add_contact(db, player, email)
             if side is not None:
                 self._select_player(db, side, player['id'])
             result = {'player_id': player['id']}
@@ -207,6 +214,7 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
                     'players': [{'id': p['id'], 'name': p['name'], 'is_test': p['is_test']} for p in sorted(players, key=lambda p: (not p['is_test'], p['name'].casefold(), p['id']))],
                     'roster': {team: by_id[pid] for team, pid in roster.items()},
                     'player': by_id.get(roster.get(side)),
+                    'scoreboard': self.score_contact_status(db, roster.get(side)),
                     'shop':quote(db,by_id.get(roster.get(side))),
                     'latest_result':self.latest_result(db,roster.get(side)),
                     'active_attempts': [{'run_id': a['run_id'], 'reward_enabled': a['reward_enabled'], 'participants': a['participants'], 'banked_kills': a['kills']} for a in active]}
@@ -383,7 +391,8 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
             finite(data.get('active_seconds'))
             finite(data.get('finished_at'))
             integer(data.get('released_orcs', 0))
-            validate_heatmap(data.get('kill_heatmap'),kills)
+            validate_heatmap(data.get('kill_heatmap'),kills,data['active_seconds'])
+            validate_movement(data.get('robot_movement'))
             if data.get('telemetry') is not None and (not isinstance(data['telemetry'],dict) or len(encoded(data['telemetry']))>20000):
                 raise ValueError('invalid result telemetry')
         with self.transaction(write=True) as db:
@@ -457,6 +466,7 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
                 if outcome in ('won','overrun','operator_ended'):
                     a['statistics']=statistics_at_finish(a,event_attempts(db,a['event_id']))
             db.execute('UPDATE attempts SET data=? WHERE id=?', (encoded(a), run_id))
+            if final: self.score_queue_result(db, a)
             self._touch(db)
             return a
 
@@ -508,7 +518,7 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
                    'partner': ' + '.join(other['name'] for other in a['participants'] if other['player_id'] != player_id) or 'Solo',
                    'completion_awarded': a['reward_enabled'] and a['outcome'] == 'won',
                    'unlocked_control': a.get('unlocks', {}).get(player_id),
-                   'released_orcs': result.get('released_orcs'),'kill_heatmap':result.get('kill_heatmap'),'telemetry':result.get('telemetry'), 'metadata': meta, 'cohort': cohort,
+                   'released_orcs': result.get('released_orcs'),'kill_heatmap':result.get('kill_heatmap'),'robot_movement':result.get('robot_movement'),'telemetry':result.get('telemetry'), 'metadata': meta, 'cohort': cohort,
                    'calibration_milestones':a.get('calibration_milestones',{})}
             row['participants'] = [{k: participant[k] for k in ('player_id', 'name', 'side', 'control_tier', 'levels')} for participant in a['participants']]
             if query.get('side_at_run') and p['side']!=query['side_at_run']:
@@ -556,11 +566,16 @@ class ProgressStore(LevelResults, LinkedGames, EventStore, EconomyStore, BackupS
         partner=next((pid for pid in roster if pid!=player_id),None) if player_id in roster and len(roster)==2 else None
         row=db.execute("SELECT a.data FROM attempts a JOIN participants p ON p.run_id=a.id WHERE p.player_id=? AND json_extract(a.data,'$.outcome')!='running' AND (? IS NULL OR EXISTS(SELECT 1 FROM participants other WHERE other.run_id=a.id AND other.player_id=?)) ORDER BY json_extract(a.data,'$.finished_at') DESC,a.id DESC LIMIT 1",(player_id,partner,partner)).fetchone()
         if not row:return None
-        a=json.loads(row[0]);r=a.get('reward') or {};result=a.get('result') or {}
+        return ProgressStore.receipt_for_attempt(db,json.loads(row[0]),player_id)
+
+    @staticmethod
+    def receipt_for_attempt(db,a,player_id):
+        r=a.get('reward') or {};result=a.get('result') or {}
         participant=next(p for p in a['participants'] if p['player_id']==player_id)
         eligible=a['reward_enabled'];credits=a.get('kill_credits',a['kills']) if banks_kill_credits(a) else 0;bonus=a.get('bonus_credits',0) if eligible else 0
         return {'run_id':a['run_id'],'outcome':a['outcome'],'saved':True,'event_id':a['event_id'],'purchases':a.get('purchases',{}).get(player_id,[]),'balance':a.get('wallet_after_save',{}).get(player_id),'manual_advance':a.get('manual_advance'),
                 'kills':a['kills'],'kill_credits':credits,'stack_bonus':bonus,'total_earned':credits+bonus,
+                'kill_heatmap':result.get('kill_heatmap'),'robot_movement':result.get('robot_movement'),
                 'active_seconds':result.get('active_seconds'),'control_tier':participant['control_tier'],
                 'victory_method':r.get('victory_method'),'core_health_at_stack':r.get('core_health_at_stack'),
                 'counts':r.get('counts'),'values':a['metadata'].get('reward_rules',{}).get('values'),

@@ -4087,3 +4087,106 @@ to every earlier implementation change.
   supervised physical-acceptance requirements. The subsequent journal update
   corrects the stale October 12 summary and records this checkpoint; it adds no
   new runtime verification.
+
+## 2026-10-19 — Atom homes and one-use starter turrets
+
+Human request: replace the yellow staging box and static tag dots with glowing
+team homes, mirror Purple diagonally into the upper-left, and deploy destructible
+upgraded starter weapons. The human approved the plan and clarified that L4's
+second home also adds the other weapon type. OpenAI Codex implemented the change.
+
+- Tiled revision 20 adds four editable hidden home objects. The other fourteen
+  layers, roads and sixteen construction sockets are unchanged. Level validates
+  reserved home/pod footprints against markers, turrets and L4 companions.
+- Game deploys one starter per team at L1–L3 and two at L4, with each weapon's
+  earned upgrades. Starters take ordinary combat damage and cannot be rebuilt
+  during the match. They do not join rings, row barriers, links or companions.
+- Y draws glowing numbered pads and upgraded turret previews/live units; Purple
+  is rotated toward its player. Game Master and mobile aiming use server-validated
+  ownership and destruction state. Home selections also work through phone Start.
+- Validation: 113 focused Python tests and seven mobile JavaScript checks passed.
+  Chrome verified L1/L3/L4, aim, destruction/reload and full L4 composition at two
+  screen sizes with no page errors. Native Tiled round-trip/raster passed. Three
+  existing operator-test failures were reproduced against HEAD. The old skill
+  audit's four-spawn/eight-structure expectations remain incompatible with this
+  existing two-spawn/sixteen-socket map; production parser checks passed.
+- Loaded the update by restarting the idle hub after verifying setup/lobby and
+  disconnected robot connections. Live state is ready with two home previews.
+  No game or robot motion was started. Preserved local settings and calibration.
+  No commit or push was requested or performed.
+- Details and commands: `docs/ATOM_HOME_STARTERS_2026-10-19.md`. Screenshots and
+  test evidence: `output/atom-homes-2026-10-19/`.
+
+## 2026-10-19 — Move Atom homes inward for camera coverage
+
+Human request: bring the homes inward because tags at the outside edge are hard
+to detect; move Purple to the inner edge of its current area and Green across
+the road to the outer edge of the inner area. OpenAI Codex updated Tiled revision
+21, arranging each pair vertically with its starter turret beside it.
+
+- Green homes: (1464,768) and (1464,832); Purple: (340,128) and (340,192).
+  Their 56 px pads and 72 px pods retain the existing L4 visibility and one-use
+  combat behavior. Only home geometry and the layout revision changed in Tiled.
+- Validated the revised footprints against every ordinary marker, turret and L4
+  companion. Inspected the full L4 board in Chrome and verified a native Tiled
+  round-trip/raster. Updated the old exact-mirror test to require the requested
+  inward area edges instead.
+- Screenshot: `output/atom-homes-2026-10-19/inward-full-l4.jpg`. Physical detection
+  accuracy still depends on camera/Atom placement and was not measured by this
+  software check.
+- All 22 focused starter, editor and module-isolation tests passed. Published
+  revision 21 through Level's layout API with all existing socket coordinates
+  unchanged. The live hub adopted it in setup without restarting; the user's
+  current projector tab showed the inward homes and turrets. Live screenshot:
+  `output/atom-homes-2026-10-19/live-inward.jpg`.
+
+
+## 2026-10-21 — Player connections and Clean reset
+
+Human approved the player-session plan, then narrowed disconnect actions to
+Clean reset only. Codex added a read-only browser connection list above the
+Green/Purple QR cards and a single Clean reset button; no individual player
+kick route or button was added. Ordinary QR regeneration and event creation
+leave existing sessions connected.
+
+- Hub assigns browser identities, tracks observed IP and last seen, rejects
+  revoked cookies/delegated worker credentials, and closes player streams.
+- Game coordinates admission blocking, invitation/session revocation, request
+  draining, relay lease release and its existing event Reset path. Saved
+  profiles, results, upgrades, settings and calibration are preserved.
+- Incomplete resets remain blocked on disk and across restart. Retry uses the
+  original operation ID, including after a page reload or lost HTTP response.
+  Fresh codes are shown only after required stops and reset complete.
+- Focused Hub/Game/Progress/relay/gateway/isolation tests and dashboard
+  navigation tests passed. The real-browser fixture verified three sessions,
+  same-team devices, failed-stop blocking, reload/retry, fresh-code rejoining,
+  lost-response recovery and desktop/narrow layouts using simulated hardware.
+  Run tests/clean_reset_fixture.py with tests/clean_reset_browser.cjs; backend
+  smoke is PYTHONPATH=tests .venv/bin/python -m unittest test_clean_reset.
+- Activated the final code only after confirming the live game was in the
+  lobby and both robots were disconnected. Read-only live checks verified
+  the panel, both QR destinations and Mobile LTZ-only navigation. No Clean
+  reset or robot commands were sent to the live event. Evidence is under
+  output/player-join-2026-10-21/.
+
+
+## 2026-10-21 — Fix Clean reset waiting for inactive Green
+
+User reported Clean reset blocked on Green and authorized restarting the hub.
+The empty stop scope was being interpreted as unknown by a truthiness fallback,
+creating Green/Purple stop obligations even though neither robot was connected.
+
+- Reproduced the exact 409 error before the fix with disconnected-arm tests.
+  Preserve an explicit empty scope; only a missing/None scope falls back to
+  both arms. Journey now clears a stop error when its known pending list is empty.
+- 31 focused Clean reset, event reset and module-isolation tests passed, including
+  empty/unknown/one-arm scopes, persistence, offline reset and QR-failure retry.
+  The separately attempted old test_control_journey suite remains incompatible
+  with current event APIs (missing event_id fixtures and removed practice commands).
+- Confirmed the live hub had never connected either robot, had no leases,
+  movement commands, calibration stops or display reservation. Stopped the hub,
+  backed up the exact pending reset records privately under .mobile-ltz-runtime,
+  and used Journey.reset_stop to repair only the false stop obligation. Kept
+  admission blocked until restarting and retrying the same reset through the
+  normal authenticated endpoint. The reset completed, the lobby remained in
+  setup, admission reopened, and both fresh QR codes became available.

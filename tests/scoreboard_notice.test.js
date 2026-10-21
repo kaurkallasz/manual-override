@@ -1,0 +1,21 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+let now=0,watchdog,cleared=false;
+const context={window:{},performance:{now:()=>now},setInterval(fn){watchdog=fn;return 7},clearInterval(id){assert.equal(id,7);cleared=true}};
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../sandboxes/gamemaster/prototypes/laser-tag-y/scoreboard-notice.js'),'utf8'),context);
+const nodes=()=>({container:{dataset:{}},title:{},message:{},link:{},root:'/s/gamemaster'});
+const n=nodes(),notice=context.window.LTZScoreboardNotice.create(n),value=state=>({contract:'photon.scoreboard-link',version:1,status:'ready',state,upload_delayed:false});
+assert.equal(n.link.href,'/s/gamemaster/p/photon-progress/#online-scoreboard');
+notice.update(value('unlinked'));assert.equal(n.container.dataset.state,'unlinked');assert.match(n.title.textContent,/not linked/);assert.match(n.link.textContent,/Open linking page/);
+notice.update(value('pending'));assert.match(n.title.textContent,/awaiting approval/);
+notice.disconnect();assert.equal(n.container.dataset.state,'unavailable');
+notice.update(value('linked'));assert.equal(n.title.textContent,'Scoreboard linking complete');assert.match(n.message.textContent,/Automatic uploads/);
+notice.update(value('linked'));assert.equal(n.title.textContent,'Scoreboard linking complete');
+for(const state of ['cancelled','rejected','expired','revoked']){notice.update(value(state));assert.match(n.title.textContent,/not linked/);assert.match(n.message.textContent,/Open the linking page/);}
+notice.update({...value('linked'),upload_delayed:true});assert.equal(n.container.dataset.state,'attention');assert.match(n.title.textContent,/uploads need attention/);
+notice.update({...value('linked'),version:true});assert.equal(n.container.dataset.state,'unavailable');
+notice.update(value('linked'));now=26000;watchdog();assert.equal(n.container.dataset.state,'unavailable');
+notice.update(value('linked'));assert.equal(n.container.dataset.state,'linked');
+const fresh=nodes();context.window.LTZScoreboardNotice.create(fresh).update(value('linked'));assert.equal(fresh.title.textContent,'Online scoreboard linked');
+notice.destroy();assert.equal(cleared,true);
+console.log('Scoreboard notice transitions, setup link, freshness and recovery passed.');

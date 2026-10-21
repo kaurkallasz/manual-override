@@ -3,6 +3,11 @@ Purple Mobile LTZ shares all frontend features with Green through
 local Purple LTX controller. See the common behavior specification at
 `sandboxes/green/prototypes/mobile-ltz/SPECIFICATION.md`.
 
+Camera assignment: Green receives MCAM1 footage; Purple is reserved for MCAM2.
+Until MCAM2 is implemented, Purple's optional camera inset stays hidden. Follow
+the MCAM2 integration instructions in `shared/mobile_ltz/README.md`; do not use
+MCAM1 as a fallback for Purple.
+
 Purple starts with the 180° view enabled. Toggle the header button to return to
 the camera orientation. The video, reach boundaries and targeting rotate
 together; all commands retain the original calibrated coordinates and Purple's

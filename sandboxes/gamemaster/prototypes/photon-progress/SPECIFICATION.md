@@ -152,8 +152,9 @@ paths and cached modules after loading, so settlement must not defer that import
 Older records explicitly show unavailable location data, and real zero-kill runs
 show an empty map. Both phone and LTZ Score result views render the same heatmap.
 
-Saved-game actions `replay_level` and `replay_game` require the latest completed
-run for the active event and linked pair. They create a new saved campaign,
+Saved-game actions `replay_level` and `replay_game` require the latest saved
+terminal run for the active event and linked pair, including `interrupted` or
+`aborted` runs. A running attempt is not eligible. They create a new saved campaign,
 retaining the original campaign, earnings and purchase ledger. Their operation
 receipts are idempotent. Replay-level restores controls/force field to the level
 played; replay-game resets campaign controls to L1. Game owns player agreement,

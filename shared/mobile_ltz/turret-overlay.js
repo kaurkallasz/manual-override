@@ -29,7 +29,8 @@ class TurretOverlay{
   document.addEventListener('visibilitychange',()=>{if(document.hidden){this.cancel();this.registration=null;this.stopVideo();}});
  }
  key(t){return t.aim_instance||`${t.atom_tag_id}:${t.activation_started_at}`;}
- tower(){return this.o.state()?.towers?.find(t=>t.socket_id===this.selected&&t.owner===this.team&&!t.destroyed);}
+ units(){const s=this.o.state();return [...(s?.towers||[]),...(s?.starter_turrets||[])].filter(t=>!t.preview);}
+ tower(){return this.units().find(t=>t.socket_id===this.selected&&t.owner===this.team&&!t.destroyed);}
  cameraReady(){const c=this.o.state()?.mobile_camera;return c?.status==='ready'&&this.imageAt>0&&!this.image.hidden&&this.image.width>0&&this.image.height>0&&Date.now()/1000-c.frame_at<2&&performance.now()-this.imageAt<2000;}
  ready(){const s=this.o.state();return this.o.fresh()&&s&&s.journey?.phase!=='calibration'&&!s.paused&&['setup','running'].includes(s.phase)&&(s.virtual_play||this.cameraReady());}
  projection(){
@@ -68,8 +69,8 @@ class TurretOverlay{
   if(s.journey?.phase==='calibration'){this.close();this.refreshVideo();return;}
   const run=JSON.stringify([s.run_id,s.level_revision]);
   if(run!==this.run){this.close();this.known.clear();this.confirmed.clear();this.run=run;}
-  for(const [i,t] of (s.towers||[]).entries()){const ack=this.confirmed.get(t.socket_id);if(ack&&this.key(ack)===this.key(t)&&ack.aim_revision>t.aim_revision)s.towers[i]=ack;}
-  const friendly=(s.towers||[]).filter(t=>t.owner===this.team&&!t.destroyed);
+  for(const units of [s.towers||[],s.starter_turrets||[]])for(const [i,t] of units.entries()){const ack=this.confirmed.get(t.socket_id);if(ack&&this.key(ack)===this.key(t)&&ack.aim_revision>t.aim_revision)units[i]=ack;}
+  const friendly=this.units().filter(t=>t.owner===this.team&&!t.destroyed);
   const added=friendly.filter(t=>this.known.get(t.socket_id)!==this.key(t));
   this.known=new Map(friendly.map(t=>[t.socket_id,this.key(t)]));
   if(added.length&&!this.drag&&!this.saving)this.select(added[added.length-1]);
@@ -101,7 +102,7 @@ class TurretOverlay{
   if(!handle){
    const s=this.o.state();
    if(s.virtual_play){const w=this.world(p);hit=this.o.hit?.(w.x,w.y);if(hit?.owner!==this.team||hit.destroyed)hit=null;}
-   if(!hit)hit=(s.towers||[]).filter(t=>t.owner===this.team&&!t.destroyed).map(t=>({t,p:this.point(t)})).filter(a=>a.p&&Math.hypot(a.p.x-p.x,a.p.y-p.y)<=24).sort((a,b)=>Math.hypot(a.p.x-p.x,a.p.y-p.y)-Math.hypot(b.p.x-p.x,b.p.y-p.y))[0]?.t;
+   if(!hit)hit=this.units().filter(t=>t.owner===this.team&&!t.destroyed).map(t=>({t,p:this.point(t)})).filter(a=>a.p&&Math.hypot(a.p.x-p.x,a.p.y-p.y)<=24).sort((a,b)=>Math.hypot(a.p.x-p.x,a.p.y-p.y)-Math.hypot(b.p.x-p.x,b.p.y-p.y))[0]?.t;
   }
   if(!(handle&&t)&&!hit)return;
   e.preventDefault();e.stopImmediatePropagation();

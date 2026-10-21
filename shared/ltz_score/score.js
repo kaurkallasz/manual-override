@@ -32,40 +32,45 @@
     if(data.contract!=='photon.progress'||data.version!==2)throw Error('Progress contract mismatch');
     if(state&&data.revision<state.revision)return;
     const changed=data.revision!==state?.revision,old=state?.player;
+    if(old?.id!==data.player?.id)$('existingScoreEmail').value='';
     state=data;
     if(old&&old.id===data.player?.id&&data.player.unlocked_control>old.unlocked_control){revealing=`control:${data.player.unlocked_control}`;toast(`${modes[data.player.unlocked_control-1]} unlocked`);setTimeout(()=>{revealing=null;render();},1100);}
     render();status('Saved on the game server');
     if(changed){if(selectedId!==state.player?.id){selectedId=state.player?.id;$('cohort').value='';}loadHistory();}
   }
   function render(){
+    $('scoreEmailPanel').hidden=!state?.player;
+    $('scoreEmailHelp').textContent=state?.scoreboard?.email_added?'To add teammates, include all previously registered addresses plus the new ones, separated by commas. Existing addresses keep access.':'Separate up to 10 addresses with commas. Everyone listed can view this profile’s scoreboard.';
+    $('scoreEmailStatus').textContent=state?.player?(state?.scoreboard?.message||''):'';
     const p=state?.player,locked=busy||active()||!state?.events?.active_id;
     $('scoreValue').textContent=p?number(p.credits):'—';
     $('playerSelect').innerHTML='<option value="">Select an event player</option>'+(state?.players||[]).map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
     $('playerSelect').value=p?.id||'';
     $('controlSelect').innerHTML=modes.slice(0,p?.unlocked_control||1).map((name,i)=>`<option value="${i+1}">${name}</option>`).join('');
     $('controlSelect').value=p?.current_control_tier||1;$('controlSelect').disabled=true;
-    for(const id of ['playerSelect','playerName','loadPlayer','releasePlayer','createPlayer'])$(id).disabled=locked||state?.saved_games?.pair_locked===true;
+    for(const id of ['playerSelect','playerName','playerEmail','loadPlayer','releasePlayer','createPlayer'])$(id).disabled=locked||state?.saved_games?.pair_locked===true;
     const event=state?.events?.active;
     $('runStatus').textContent=event?`Event: ${event.name} · ${state.saved_games?.pair_locked?'Player pair locked.':'Choose both players before Start.'}`:'Waiting for Game Master to create or select an event.';
     const tier=p?.current_control_tier||1;
     const saving=terminalResult?.result_save?.status==='saving'&&state?.latest_result?.run_id!==terminalResult.run_id;
     $('tracks').innerHTML=(saving?LTZShop.pendingResult(terminalResult):LTZShop.receipt(state?.latest_result,p)+LTZShop.resultActions(state?.latest_result,journey,side,locked))+LTZShop.html({profile:p,shop:state?.shop,side,upgrades:previews.find(t=>t.tier===tier)?.weapon_upgrades});
     LTZShop.mount($('tracks'));
-    $('tracks').querySelectorAll('[data-result-choice]').forEach(button=>button.onclick=()=>chooseResult(button.dataset.resultChoice));
+    $('tracks').querySelectorAll('[data-result-choice]').forEach(button=>button.onclick=()=>chooseResult(button.dataset.resultChoice,button.dataset.resultRun));
     $('statsPlayer').textContent=p?`${p.name} · ${event.name} statistics`:'Choose an event player.';
     $('statsTiles').innerHTML=[['Event kills',number(p?.lifetime_kills)],['Weighted kill score',number(p?.lifetime_kill_credits)],['Bonus credits',number(p?.lifetime_bonus_credits)],['Credit balance',number(p?.credits)],['Matches',number(p?.attempts)],['Wins',number(p?.wins)],['Control level','L'+tier]].map(x=>tile(...x)).join('');
     $('mastery').textContent=p?`L${tier} controls and force field. Complete the ring and stack opposing team Atoms on the center to advance.`:'';
   }
-  async function chooseResult(choice){
-    if(busy)return;busy=true;render();
-    try{const result=await json(`/s/gamemaster/p/mobile-ltz-api/api/journey?side=${side}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'ready',choice,run_id:state.latest_result.run_id,event_id:state.events.active_id})});journey=result.journey;status('Choice saved. Both players choose the same option.');}
-    catch(e){status(e.message,true);}finally{busy=false;render();}
+  async function chooseResult(choice,runId){
+    if(busy||journey?.phase!=='results'||journey.run_id!==runId)return;busy=true;status('Saving your choice…');render();
+    try{const result=await json(`/s/gamemaster/p/mobile-ltz-api/api/journey?side=${side}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'ready',choice,run_id:runId,event_id:state.events.active_id})});if(result.journey.revision>=(journey?.revision??-1))journey=result.journey;status(journey.phase==='results'?'Choice saved. Both players choose the same option.':'Choices matched. Continuing…');}
+    catch(e){if(journey?.run_id===runId&&journey.phase==='results')status(e.message,true);}finally{busy=false;render();}
   }
-  function showDetails(row){$('pointDetails').innerHTML=`<p>${esc(details(row))}</p>${LTZShop.heatmap(row.kill_heatmap)}`;}
+  function showDetails(row){$('pointDetails').innerHTML=`<p>${esc(details(row))}</p>${LTZShop.movement(row.robot_movement,row.run_id,row.kill_heatmap,row.active_seconds)}`;LTZShop.mount($('pointDetails'));}
   async function post(data){return json(`${API}/player?side=${side}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,side,event_id:state?.events?.active_id})});}
+  $('addScoreEmail').onclick=async()=>{if(!$('existingScoreEmail').reportValidity())return;try{apply(await post({action:'scoreboard_email',email:$('existingScoreEmail').value}));$('existingScoreEmail').value='';status(state?.scoreboard?.message||'Email saved on this game. Waiting for upload confirmation.');}catch(e){status(e.message,true);}};
   $('loadPlayer').onclick=async()=>{try{apply(await post({action:'select',player_id:$('playerSelect').value||null}));}catch(e){status(e.message,true);}};
   $('releasePlayer').onclick=async()=>{try{apply(await post({action:'select',player_id:null}));}catch(e){status(e.message,true);}};
-  $('createPlayer').onclick=async()=>{if(busy)return;busy=true;render();try{const data=await post({action:'create',select:true,name:$('playerName').value,operation_id:operation()});apply(data);$('playerName').value='';}catch(e){status(e.message,true);}finally{busy=false;render();}};
+  $('createPlayer').onclick=async()=>{if(busy||!$('playerEmail').reportValidity())return;busy=true;render();try{const data=await post({action:'create',select:true,name:$('playerName').value,email:$('playerEmail').value,operation_id:operation()});apply(data);$('playerName').value='';$('playerEmail').value='';}catch(e){status(e.message,true);}finally{busy=false;render();}};
   function filters(){const q=new URLSearchParams({side});for(const [id,key]of[['tierFilter','tier'],['cohort','cohort']])if($(id).value)q.set(key,$(id).value);if($('fromDate').value)q.set('from',new Date($('fromDate').value+'T00:00:00').getTime()/1000);if($('toDate').value)q.set('to',new Date($('toDate').value+'T23:59:59').getTime()/1000);return q;}
   async function loadHistory(append=false){const generation=++historyGeneration;if(!state?.player){history=[];historyData=null;nextCursor=null;drawHistory();return;}if(!append){history=[];$('historyStatus').textContent='Loading performance history…';}try{const q=filters();if(append&&nextCursor!=null)q.set('cursor',nextCursor);const data=(await json(`${API}/history?${q}`)).history;if(generation!==historyGeneration)return;history=append?history.concat(data.rows):data.rows;historyData=data;nextCursor=data.next_cursor;const selected=$('cohort').value;$('cohort').innerHTML='<option value="">All configurations</option>'+data.cohorts.map((c,i)=>`<option value="${c.id}">${esc(modes[c.tier-1])} · ${c.metadata.orc_schedule?.total??'?'} orcs · ${c.count} games · ${c.id.slice(0,5)}</option>`).join('');$('cohort').value=selected;drawHistory();}catch(e){if(generation===historyGeneration){$('historyStatus').textContent=`Could not load history: ${e.message}`;$('historyChart').replaceChildren();$('historyRows').replaceChildren();}}}
   function details(row){return `${when(row.finished_at)} · ${modes[row.control_tier-1]} · ${row.outcome} · ${row.kills} kills · ${row.kill_credits??row.score} kill credits · +${row.bonus_credits||0} bonus · ${row.total_earned??row.score} earned · ${clock(row.active_seconds)} · ${row.partner} · ${row.released_orcs??'?'} / ${row.metadata.orc_schedule?.total??'?'} orcs released/scheduled · settings revision ${row.metadata.settings_revision??'?'} · companion rules ${row.metadata.companion_policy?.version??'legacy'} · ${row.unlocked_control?'Unlocked '+modes[row.unlocked_control-1]:row.completion_awarded?'counts toward progression':'no completion'} · upgrades ${Object.entries(row.levels).map(([k,v])=>k.replace('damage-','')+' L'+v).join(', ')}`;}
@@ -97,7 +102,7 @@
   $('loadMore').onclick=()=>loadHistory(true);
   render();drawHistory();json(`${API}/state?side=${side}`).then(apply).catch(e=>status(e.message,true));
   const events=new EventSource(`${API}/events?side=${side}`);events.onmessage=e=>{try{apply(JSON.parse(e.data));}catch(error){status(error.message,true);}};events.onerror=()=>status('Connection lost. Reconnecting to saved progress…',true);
-  const gameEvents=new EventSource(`${GAME}/events?view=configuration`);gameEvents.onmessage=e=>{try{const data=JSON.parse(e.data);if(data.contract!=='photon.game.preview'||data.version!==1)throw Error('Game preview contract mismatch');previews=data.previews||[];journey=data.journey||null;terminalResult=data.terminal_result||null;render();}catch(_){}};
+  const gameEvents=new EventSource(`${GAME}/events?view=configuration`);gameEvents.onmessage=e=>{try{const data=JSON.parse(e.data);if(data.contract!=='photon.game.preview'||data.version!==1)throw Error('Game preview contract mismatch');previews=data.previews||[];if(!journey||data.journey?.revision>=journey.revision)journey=data.journey||null;terminalResult=data.terminal_result||null;render();}catch(_){}};
   gameEvents.onerror=()=>{render();};
   window.addEventListener('pagehide',()=>{events.close();gameEvents.close();});
 })();

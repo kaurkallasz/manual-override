@@ -61,6 +61,8 @@ from urllib.parse import quote
 from flask import Flask, has_request_context, jsonify, redirect, request, send_file, send_from_directory
 from itsdangerous import BadSignature, URLSafeSerializer
 from werkzeug.serving import make_server
+from .player_join import PlayerJoinLinks, TEAMS, destination, network_origin
+from .player_sessions import PlayerSessions, operation_id
 
 # Directory of this engine package. Holds dashboard.html, login.html,
 # landing.html, theme.css, live.py.
@@ -181,7 +183,34 @@ class HubContext:
     def service_token(self):
         """Send as the X-HHH-Auth header to authenticate server-side HTTP calls
         to another sandbox's shared API as THIS sandbox's role."""
-        return self._sandbox.hub.service_tokens[self._sandbox.name]
+        hub = self._sandbox.hub
+        sid = request.environ.get('hhh.player_session') if has_request_context() else None
+        if sid and self.sandbox in TEAMS:
+            return hub._delegate_signer.dumps({'team': self.sandbox, 'sid': sid})
+        return hub.service_tokens[self.sandbox]
+
+    @property
+    def player_sessions(self):
+        """Hub-owned browser identities, admission and revocation."""
+        return self._sandbox.hub.player_sessions
+
+    def invalidate_player_links(self):
+        self._sandbox.hub.player_join.invalidate()
+
+    def refresh_player_links(self):
+        hub = self._sandbox.hub
+        if not all(hub.mobile_player_available(team) for team in TEAMS):
+            raise ValueError('Both Mobile LTZ modules must be available before reopening joins.')
+        origin = network_origin(request.host_url if has_request_context() else hub.local_base,
+                                hub.local_base, hub.config.get('player_join_base_url'))
+        hub.player_join.snapshot(origin, regenerate=True)
+
+    def register_player_management(self, owner):
+        if self.sandbox != 'gamemaster' or self.slug != 'photon-game':
+            raise ValueError('Player management must be owned by Photon Game')
+        if owner.get('contract') != 'photon.player-management' or type(owner.get('version')) is not int or owner['version'] != 1:
+            raise ValueError('Invalid player management contract')
+        self._sandbox.hub.player_management = owner
 
     @property
     def local_base(self):
@@ -349,10 +378,18 @@ class Sandbox:
         """before_request: allow this sandbox's role, admin roles, and (for the
         machines listed in shared_api) the listed roles' /api/ calls."""
         path = request.path
-        if path == "/login":
+        if path in ("/login", "/login/join"):
             return None
         roles = self.hub.roles_for_request(request)
         request.environ["hhh.roles"] = roles
+        sid = request.environ.get('hhh.player_session')
+        if sid and request.method not in ('GET', 'HEAD', 'OPTIONS') and not request.environ.get('hhh.delegated'):
+            lock = self.hub.player_sessions.request_lock(sid)
+            lock.acquire()
+            request.environ['hhh.player_request_lock'] = lock
+            if not self.hub.player_sessions.active(sid):
+                roles = set()
+                request.environ['hhh.roles'] = roles
         if path == "/logout":
             return None
         machine_api = re.match(r"^/p/([^/]+)/api(?:/|$)", path)
@@ -362,7 +399,7 @@ class Sandbox:
             allowed = bool(roles & set(shared.get(machine_api.group(1), ())))
         if not allowed:
             if "/api/" in path or path.startswith("/api"):
-                return jsonify({"ok": False, "error": "auth required"}), 401
+                return jsonify({"ok": False, "code": "session_ended", "error": "Session ended. Scan a current QR code or sign in again."}), 401
             nxt = quote(request.script_root + path)
             return redirect(f"{request.script_root}/login?next={nxt}")
 
@@ -388,12 +425,41 @@ class Sandbox:
 
         app.before_request(self._gate)
 
+        @app.teardown_request
+        def _release_player_request(error):
+            lock = request.environ.pop('hhh.player_request_lock', None)
+            if lock is not None: lock.release()
+
         @app.after_request
         def _no_html_cache(resp):
             """Never cache machine pages (their app code is inline), so editing a
             controller/screen and reloading always picks up the new version."""
             if resp.mimetype == "text/html":
                 resp.headers["Cache-Control"] = "no-store, max-age=0"
+            if request.path.startswith(('/login', '/api/player-session')) or request.path == '/api/player-join':
+                resp.headers['Cache-Control'] = 'no-store'
+                resp.headers['Referrer-Policy'] = 'no-referrer'
+            sid = request.environ.get('hhh.player_session')
+            if sid and resp.status_code == 200:
+                if resp.is_streamed and resp.mimetype in ('text/event-stream', 'multipart/x-mixed-replace'):
+                    original = iter(resp.response)
+                    delegated = bool(request.environ.get('hhh.delegated'))
+                    def guarded():
+                        try:
+                            while self.hub.player_sessions.active(sid):
+                                try: chunk = next(original)
+                                except StopIteration: break
+                                if not self.hub.player_sessions.active(sid): break
+                                if not delegated: self.hub.player_sessions.touch(sid)
+                                yield chunk
+                        finally:
+                            if hasattr(original, 'close'): original.close()
+                    resp.response = guarded()
+                elif resp.mimetype == 'text/html' and not request.environ.get('hhh.delegated'):
+                    resp.direct_passthrough = False
+                    text = resp.get_data(as_text=True)
+                    team = self.hub.player_sessions.rows[sid]['team']
+                    resp.set_data(text.replace('</body>', f'<script src="/player-session.js" data-team="{team}"></script></body>'))
             return resp
 
         @app.route("/")
@@ -409,20 +475,114 @@ class Sandbox:
                 if role:
                     roles = hub.roles_for_request(request) | {role}
                     resp = redirect(self._safe_next())
-                    hub.set_auth_cookie(resp, roles)
-                    return resp
-                time.sleep(0.4)   # soft brake on guessing
-                error = "Wrong password."
+                    try:
+                        hub.set_auth_cookie(resp, roles, new_session=role in TEAMS)
+                        return resp
+                    except ValueError as exc:
+                        error = str(exc)
+                else:
+                    time.sleep(0.4)
+                    error = "Wrong password."
+            elif request.args.get('ended'):
+                error = 'Disconnected by the Game Master. Scan the new QR code or sign in again.'
             page = hub.asset("login.html")
             page = (page.replace("__LABEL__", self.cfg.get("label", self.name))
                         .replace("__ACCENT__", self.cfg.get("accent", "#b6ff3a"))
                         .replace("__ERROR__", error))
             return page
 
+        @app.route("/login/join", methods=["POST"])
+        def player_join_login():
+            # Only this dedicated, public endpoint may redeem an invitation.
+            # JSON plus same-origin validation prevents a cross-site form from
+            # silently replacing a player's team session.
+            if not hub.same_origin_json(request):
+                return jsonify(ok=False, error="Join requests must come from this login page."), 403
+            if request.content_length is None or request.content_length > 1024:
+                return jsonify(ok=False, error="Invalid join request."), 400
+            data = request.get_json(silent=True)
+            token = data.get('token') if isinstance(data, dict) else None
+            # Validation and minting share the admission lock: a request that
+            # began before reset cannot redeem an obsolete link after it ends.
+            with hub.player_sessions.lock:
+                if hub.player_sessions.blocked:
+                    return jsonify(ok=False, error='Clean reset in progress. Wait for the new QR codes.'), 503
+                if not hub.player_join.accepts(self.name, token):
+                    return jsonify(ok=False, error="This join link has expired or was replaced. Scan the current QR code or enter your team password."), 401
+                if not hub.mobile_player_available(self.name):
+                    return jsonify(ok=False, error="Mobile LTZ is unavailable. Ask the game master to enable it."), 503
+                response = jsonify(ok=True, next=destination(self.name))
+                hub.set_auth_cookie(response, {self.name}, new_session=True)
+            response.headers['Cache-Control'] = 'no-store'
+            return response
+
+        @app.route("/api/player-join", methods=["GET", "POST"])
+        def player_join_links():
+            if not hub.is_admin(request.environ.get('hhh.roles') or set()):
+                return jsonify(ok=False, error="Game master access required."), 403
+            if request.method == 'POST' and not hub.same_origin_json(request):
+                return jsonify(ok=False, error="Regenerate codes from the game master page."), 403
+            response = None
+            try:
+                with hub.player_sessions.lock:
+                    if hub.player_sessions.blocked:
+                        raise ValueError('Clean reset pending. Finish or retry it before sharing new codes.')
+                    for team in TEAMS:
+                        if not hub.mobile_player_available(team):
+                            raise ValueError(f'{team.title()} Mobile LTZ is unavailable. Enable it before sharing join codes.')
+                    origin = network_origin(request.host_url, hub.local_base,
+                                            hub.config.get('player_join_base_url'))
+                    response = jsonify(hub.player_join.snapshot(origin, regenerate=request.method == 'POST'))
+            except Exception as exc:
+                app.logger.exception('Player join codes unavailable')
+                response = jsonify(status='unavailable', error=str(exc))
+                response.status_code = 503
+            response.headers['Cache-Control'] = 'no-store'
+            return response
+
+        @app.route('/api/player-session/events')
+        def player_session_events():
+            sid = request.environ.get('hhh.player_session')
+            if not sid: return jsonify(error='Player session required'), 401
+            return hub.player_sessions.live.stream(lambda: {'active': hub.player_sessions.active(sid)}, interval=2)
+
+        @app.route('/api/player-sessions')
+        @app.route('/api/player-sessions/events')
+        def player_sessions():
+            if not hub.is_admin(request.environ.get('hhh.roles') or set()):
+                return jsonify(error='Game master access required'), 403
+            def snapshot():
+                owner = hub.player_management
+                if owner is None or 'photon-game' in hub.sandboxes['gamemaster']._disabled:
+                    return {**hub.player_sessions.snapshot(), 'unavailable': True, 'error': 'Photon Game player management unavailable.'}
+                return owner['snapshot']()
+            if request.path.endswith('/events'):
+                return hub.player_sessions.live.stream(snapshot, interval=2)
+            return jsonify(snapshot())
+
+        @app.route('/api/player-sessions/clean-reset', methods=['POST'])
+        def manage_player_sessions():
+            if not hub.is_admin(request.environ.get('hhh.roles') or set()) or not hub.same_origin_json(request):
+                return jsonify(error='Use the Game Master player panel.'), 403
+            if not request.content_length or request.content_length > 2048:
+                return jsonify(error='Invalid management request'), 400
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict): return jsonify(error='Invalid management request'), 400
+            try:
+                operation_id(data.get('operation_id'))
+                if hub.player_management is None or 'photon-game' in hub.sandboxes['gamemaster']._disabled:
+                    raise ValueError('Photon Game player management unavailable.')
+                return jsonify(hub.player_management['clean_reset'](data))
+            except Exception as exc:
+                app.logger.exception('Player management failed')
+                return jsonify(ok=False, error=str(exc)), 409
+
         @app.route("/logout")
         def logout():
             """Drop every role this browser holds that unlocks THIS sandbox."""
             roles = hub.roles_for_request(request)
+            sid = request.environ.get('hhh.player_session')
+            if sid: hub.player_sessions.revoke(sid)
             keep = {r for r in roles if r != self.name and not hub.is_admin({r})}
             resp = redirect(f"{request.script_root}/login")
             hub.set_auth_cookie(resp, keep)
@@ -607,6 +767,10 @@ class Hub:
         self._server = None
 
         self._signer = URLSafeSerializer(self.config["secret"], salt="hhh-auth")
+        self._delegate_signer = URLSafeSerializer(self.config['secret'], salt='hhh-player-delegation')
+        self.player_join = PlayerJoinLinks()
+        self.player_sessions = PlayerSessions(os.path.join(self.root_dir, '.mobile-ltz-runtime', 'player-access.json'))
+        self.player_management = None
         # Per-sandbox service tokens for cross-sandbox machine calls. Minted
         # fresh per process: machines receive them via hub_init on every start.
         self.service_tokens = {name: secrets.token_hex(16)
@@ -621,6 +785,17 @@ class Hub:
         )
 
     # ---- auth helpers --------------------------------------------------------
+    @staticmethod
+    def same_origin_json(req):
+        origin = req.headers.get('Origin')
+        return req.is_json and (origin is None or origin == req.host_url.rstrip('/'))
+
+    def mobile_player_available(self, team):
+        sandbox = self.sandboxes.get(team)
+        return bool(team in TEAMS and sandbox and not sandbox.cfg.get('admin')
+                    and 'mobile-ltz' in sandbox._modules
+                    and 'mobile-ltz' not in sandbox._disabled)
+
     def roles_for_request(self, req):
         """Every role this request proves: service token first, then cookie."""
         roles = set()
@@ -632,12 +807,28 @@ class Hub:
         role = self._token_roles.get(token)
         if role:
             roles.add(role)
+        elif token:
+            try:
+                delegated = self._delegate_signer.loads(token)
+                side, sid = delegated.get('team'), delegated.get('sid')
+                if side in TEAMS and self.player_sessions.active(sid, side):
+                    roles.add(side)
+                    req.environ['hhh.player_session'] = sid
+                    req.environ['hhh.delegated'] = True
+            except (BadSignature, AttributeError, TypeError):
+                pass
         raw = req.cookies.get(COOKIE_NAME)
         if raw:
             try:
                 data = self._signer.loads(raw)
-                roles.update(r for r in data.get("roles", [])
-                             if r in self.config["sandboxes"])
+                for role in data.get('roles', []):
+                    if role not in self.config['sandboxes']: continue
+                    if role not in TEAMS or self.config['sandboxes'][role].get('admin'):
+                        roles.add(role)
+                    elif self.player_sessions.active(data.get('sid'), role):
+                        roles.add(role)
+                        req.environ['hhh.player_session'] = data['sid']
+                        self.player_sessions.touch(data['sid'], req.remote_addr)
             except (BadSignature, AttributeError, TypeError):
                 pass
         return roles
@@ -658,9 +849,17 @@ class Hub:
                 return name
         return None
 
-    def set_auth_cookie(self, resp, roles):
+    def set_auth_cookie(self, resp, roles, new_session=False):
         if roles:
-            resp.set_cookie(COOKIE_NAME, self._signer.dumps({"roles": sorted(roles)}),
+            data = {'roles': sorted(roles)}
+            teams = set(roles) & set(TEAMS)
+            if teams and not self.is_admin(roles):
+                team = sorted(teams)[0]
+                sid = request.environ.get('hhh.player_session')
+                if new_session or not self.player_sessions.active(sid, team):
+                    sid = self.player_sessions.create(team, request.remote_addr)
+                data = {'roles': [team], 'sid': sid}
+            resp.set_cookie(COOKIE_NAME, self._signer.dumps(data),
                             path="/", httponly=True, samesite="Lax",
                             max_age=14 * 24 * 3600)
         else:
@@ -685,6 +884,10 @@ class Hub:
         def theme_css():
             """Shared visual theme, linked by every machine page (public)."""
             return send_from_directory(HUB_DIR, "theme.css")
+
+        @app.route('/player-session.js')
+        def player_session_script():
+            return send_from_directory(HUB_DIR, 'player-session.js', max_age=0)
 
         @app.route("/Video1.mp4")
         def mission_video():

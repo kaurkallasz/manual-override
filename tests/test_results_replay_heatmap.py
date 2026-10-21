@@ -15,9 +15,41 @@ class ResultChoiceTests(unittest.TestCase):
     start=continuation.PlayerContinueTests.start
     finish=continuation.PlayerContinueTests.finish
     ready=continuation.PlayerContinueTests.ready
+    restart_after_interruption=continuation.PlayerContinueTests.restart_after_interruption
 
     def choose(self,side,run,choice):
         return self.g.mobile_journey_command(side,dict(action='ready',run_id=run,event_id=self.event,choice=choice))
+
+    def recovered_replay(self, outcome, choice):
+        run, before = self.restart_after_interruption(outcome)
+        self.choose('green', run, 'continue')
+        self.choose('purple', run, choice)
+        self.assertEqual(self.g._engine.phase, 'setup')
+        self.assertIsNone(self.g._journey.snapshot()['auto_start'])
+        self.choose('green', run, choice)
+        self.assertEqual(self.g._engine.phase, 'running')
+        self.assertEqual(self.g.game_snapshot()['contract_control_tier'], 1)
+        after = self.g._progress.roster()
+        self.assertNotEqual(after['saved_games']['active_id'], before['saved_games']['active_id'])
+        for side in ('green', 'purple'):
+            for key in ('id', 'credits', 'wins', 'levels'):
+                self.assertEqual(after['roster'][side][key], before['roster'][side][key])
+        replay = self.g._run_id
+        self.choose('purple', run, choice)
+        self.assertEqual(self.g._run_id, replay)
+        self.assertEqual(len(self.g._progress.roster()['active_attempts']), 1)
+
+    def test_interrupted_disagreement_can_match_replay_level(self):
+        self.recovered_replay('interrupted', 'replay_level')
+
+    def test_interrupted_disagreement_can_match_replay_game(self):
+        self.recovered_replay('interrupted', 'replay_game')
+
+    def test_aborted_disagreement_can_match_replay_level(self):
+        self.recovered_replay('aborted', 'replay_level')
+
+    def test_aborted_disagreement_can_match_replay_game(self):
+        self.recovered_replay('aborted', 'replay_game')
 
     def l4_result(self):
         self.start()
@@ -76,6 +108,7 @@ class ResultChoiceTests(unittest.TestCase):
     def test_saved_heatmap_and_replay_survive_backup_without_repaying_rewards(self):
         run=self.start();e=self.g._engine
         with e.lock:
+            e.sim_time=12.25
             e.rewards.killed({'enemy_type':'grunt','x':400,'y':250,'kill_owner':'green'})
             e.kills=1;e.next_enemy_id=2
         self.finish()
@@ -83,6 +116,8 @@ class ResultChoiceTests(unittest.TestCase):
         receipt=owner.public_snapshot('green')['latest_result']
         h=receipt['statistics']['kill_heatmap'];self.assertEqual(sum(h['counts']),1)
         self.assertTrue(h['roads']);self.assertTrue(h['markers'])
+        self.assertEqual(h['timeline']['events'][0][0],12.25)
+        self.assertTrue(h['floor']['layers']);self.assertTrue(h['floor']['assets'])
         self.choose('green',run,'replay_level');self.choose('purple',run,'replay_level');self.finish()
         restored=owner.ProgressStore(Path(self.folder.name)/'restored.db');restored.initialize()
         backup=store.export();restored.import_backup(backup)
@@ -92,6 +127,22 @@ class ResultChoiceTests(unittest.TestCase):
         invalid=copy.deepcopy(h);invalid['counts'][0]+=1
         with self.assertRaisesRegex(ValueError,'reconcile'):
             store.record({**store.attempt(run)['result'],'kill_heatmap':invalid},final=True)
+
+    def test_timeline_validation_rejects_invalid_evidence_and_accepts_legacy(self):
+        self.start();e=self.g._engine
+        for at,enemy in [(1.25,{'enemy_type':'grunt','x':400,'y':250}), (2.5,{'enemy_type':'grunt'})]:
+            e.sim_time=at;e.rewards.killed(enemy);e.kills+=1
+        h=e.rewards.heatmap.snapshot()
+        validate_heatmap=self.g._module('photon-progress').ProgressStore.record.__globals__['validate_heatmap']
+        validate_heatmap(h,2,3)
+        old=copy.deepcopy(h);del old['timeline'];validate_heatmap(old,2,3)
+        for event in [[4,0,1],[float('nan'),0,1],[1,-2,1],[1,576,1],[1,0,0],[1,0,True],[1,0,3]]:
+            bad=copy.deepcopy(h);bad['timeline']['events'][0]=event
+            with self.subTest(event=event),self.assertRaises(ValueError):validate_heatmap(bad,2,3)
+        bad=copy.deepcopy(h);bad['timeline']['events'].reverse()
+        with self.assertRaisesRegex(ValueError,'time'):validate_heatmap(bad,2,3)
+        bad=copy.deepcopy(h);bad['timeline']['events']*=8192
+        with self.assertRaisesRegex(ValueError,'size'):validate_heatmap(bad,2,3)
 
     def test_replay_stop_failure_and_start_failure_can_retry_without_duplicate_save(self):
         run=self.start();self.finish();self.choose('green',run,'replay_level')
@@ -121,7 +172,29 @@ class HeatmapRingTests(unittest.TestCase):
         h=e.rewards.heatmap.snapshot()
         self.assertEqual(sum(h['counts']),1);self.assertEqual(h['unlocated'],0)
         self.assertEqual(h['counts'][int(450/h['height']*18)*32+int(800/h['width']*32)],1)
+        self.assertEqual(h['timeline']['events'][0][0],.1)
         e.reset();self.assertEqual(sum(e.rewards.heatmap.snapshot()['counts']),0)
+        self.assertEqual(e.rewards.heatmap.snapshot()['timeline']['events'],[])
+
+    def test_heatmap_timeline_compacts_without_losing_kills_or_showing_them_early(self):
+        e=self.engine();h=e.rewards.heatmap
+        for i in range(10000):
+            cell=i%576
+            enemy={'x':(cell%32+.5)*e.level.width/32,'y':(cell//32+.5)*e.level.height/18}
+            if i%101==0:enemy={}
+            h.killed(enemy,i+.25)
+        value=h.snapshot();events=value['timeline']['events']
+        self.assertLessEqual(len(events),8192);self.assertGreater(value['timeline']['bin_seconds'],1)
+        self.assertEqual(sum(row[2] for row in events),10000)
+        rebuilt=[0]*576;unlocated=0
+        for at,cell,count in events:
+            if cell<0:unlocated+=count
+            else:rebuilt[cell]+=count
+        self.assertEqual(rebuilt,value['counts']);self.assertEqual(unlocated,value['unlocated'])
+        for time in (0,4000,9999.25):
+            self.assertLessEqual(sum(n for at,cell,n in events if at<=time),max(0,int(time-.25)+1))
+        self.assertEqual(events[-1][0],9999.25)
+        events.clear();self.assertTrue(h.snapshot()['timeline']['events'])
 
     def test_ring_break_locks_center_clears_first_atom_and_repair_announces(self):
         e=self.engine();e.start({'first_wave_delay_s':300})

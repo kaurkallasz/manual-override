@@ -9,11 +9,12 @@ import math
 import statistics
 
 from ltz_records import fingerprint, identifier, finite, integer
+from floor_results import validate_floor
 
 FINISHED = ('won', 'overrun', 'operator_ended')
 
 
-def validate_heatmap(value, kills):
+def validate_heatmap(value, kills, duration=None):
     if value is None:return  # Older results have no location evidence.
     if not isinstance(value,dict) or type(value.get('version')) is not int or value['version']!=1:
         raise ValueError('Invalid kill heatmap')
@@ -24,6 +25,24 @@ def validate_heatmap(value, kills):
     if not isinstance(counts,list) or len(counts)!=cols*rows:raise ValueError('Invalid heatmap cells')
     total=sum(integer(n) for n in counts)+integer(value.get('unlocated'))
     if total!=kills:raise ValueError('Heatmap kills do not reconcile')
+    validate_floor(value.get('floor'))
+    timeline=value.get('timeline')
+    if timeline is not None:
+        if not isinstance(timeline,dict) or type(timeline.get('version')) is not int or timeline['version']!=1:
+            raise ValueError('Invalid heatmap timeline')
+        if finite(timeline.get('bin_seconds'))<1:raise ValueError('Invalid heatmap time bin')
+        events=timeline.get('events')
+        if not isinstance(events,list) or len(events)>8192:raise ValueError('Invalid heatmap timeline size')
+        recorded=[0]*(cols*rows);unlocated=0;previous=-1
+        for event in events:
+            if not isinstance(event,list) or len(event)!=3:raise ValueError('Invalid heatmap event')
+            at=finite(event[0]);cell=integer(event[1],-1,cols*rows-1);count=integer(event[2],1)
+            if at<previous or (duration is not None and at>duration):raise ValueError('Invalid heatmap event time')
+            previous=at
+            if cell==-1:unlocated+=count
+            else:recorded[cell]+=count
+        if recorded!=counts or unlocated!=value['unlocated']:
+            raise ValueError('Heatmap timeline does not reconcile')
     roads=value.get('roads',[]);markers=value.get('markers',[])
     if not isinstance(roads,list) or len(roads)>256 or not isinstance(markers,list) or len(markers)>128:
         raise ValueError('Invalid heatmap landmarks')
@@ -124,6 +143,7 @@ def result_view(db, a):
     own = [summary(r) for r in rows if team_id(r) == current['team_id']
            and (r['finished_at'], r['run_id']) <= (a['finished_at'], a['run_id'])]
     return {**stats, **current, 'kill_heatmap':copy.deepcopy((a.get('result') or {}).get('kill_heatmap')),
+            'robot_movement':copy.deepcopy((a.get('result') or {}).get('robot_movement')),
             'game_complete':a['outcome']=='won' and current['level']==4,
             'history': own[-60:], 'history_total': len(own)}
 

@@ -30,6 +30,7 @@ def asset(filename):
 def art(filename):
     return send_from_directory(GAME_ART_DIR, filename)
 
+@bp.route('/movement.js')
 @bp.route('/shop.js')
 @bp.route('/shop.css')
 def shared_shop():

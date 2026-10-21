@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>MCAM1 Depth · Gamemaster</title>
+<link rel="icon" href="data:,"><link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<main>
+<header><div><p class="eyebrow">GAMEMASTER · ARM VISION</p><h1>MCAM1 Depth</h1><p>Automatic colored depth from MCAM1 video. No camera setup required.</p></div><a href="../mcam1/" target="_blank" rel="noopener">Open MCAM1 ↗</a></header>
+<div class="toolbar"><label>Camera mounted on <select id="side"><option value="green">Green arm</option><option value="purple">Purple arm</option></select></label><button id="run" type="button">Start analysis</button><span id="runState">Analysis paused</span><span class="badge">Experimental estimates</span></div>
+<p id="status" role="status" aria-live="polite">Connecting to the hub…</p>
+<div class="metrics">
+<section><span>Clearance if Atom is held upright</span><strong id="clearance">—</strong><small id="planeAge">No measured surface</small></section>
+<section><span>Atom attachment evidence</span><strong id="attachment">Unknown</strong><small id="attachmentDetail">Select the visible Atom body</small></section>
+<section><span>Measured head movement</span><strong id="speed">—</strong><small id="motionDetail">Waiting for feedback</small></section>
+</div>
+<div class="workspace">
+<section class="viewer" aria-label="Camera and depth view">
+<div class="viewbar"><label>View <select id="view"><option value="depth">Depth bricks</option><option value="overlay">Bricks over camera</option><option value="motion">Motion measurements</option><option value="live">Live camera</option></select></label><label>Brick size <select id="brickSize"><option value="8">Fine</option><option value="12" selected>Medium</option><option value="20">Large</option></select></label><span id="frameInfo">No video</span></div>
+<div class="canvas-wrap"><canvas id="video" width="480" height="320" aria-label="Depth estimates as colored bricks. Warm is nearer; blue is farther. Empty cells are unknown."></canvas><p id="noVideo">Start preview in MCAM1 to see the camera here.</p><div id="depthNotice" hidden><strong id="depthNoticeTitle">Preparing video depth</strong><p id="depthReason">Waiting for the MCAM1 video feed.</p></div></div>
+<div id="depthLegend"><div class="depthRange"><label><span id="nearTitle">Nearer</span><input id="near" type="number" min="20" max="2999" value="30" step="10" hidden></label><i class="depthScale" aria-hidden="true"></i><label><span id="farTitle">Farther</span><input id="far" type="number" min="21" max="3000" value="300" step="10" hidden></label><button id="fitRange" type="button" hidden>Fit colors to scene</button></div><p><span id="depthAxis">Relative depth · AI estimate, no millimetre scale</span> · warm = near · blue = far · empty = unknown</p><p id="coverage">Waiting for video depth</p><p id="brickReadout">Point at a brick to inspect its depth.</p></div>
+<p id="videoDepthStatus" role="status">Video depth loads automatically. First use downloads the model; frames stay in this browser.</p><button id="retryDepth" type="button" hidden>Retry video depth</button><p id="refinementStatus" class="hint">Arm movement can refine the distance estimate.</p>
+<div class="fusionSummary"><strong id="fusionState">Waiting for measurements</strong><span id="fusionDetail">Waiting for camera and measured arm feedback.</span></div>
+<p id="motionProgress" class="hint"></p>
+<div id="reference" hidden><canvas id="referenceVideo" width="480" height="320" aria-label="Camera frame used for this depth map"></canvas><span id="referenceLabel">Camera reference · same frame as the map</span></div>
+<div class="viewbar"><button type="button" id="surfaceSelect">Select screen region</button><button type="button" id="atomSelect">Select Atom region</button><button type="button" id="clearRegions">Clear regions</button></div>
+<p id="selectionHint">Screen: stationary surface markings. Atom: visible body only, excluding the suction head. Save setup after selecting.</p>
+<div class="legend"><span class="screenLegend">Screen region</span><span class="atomLegend">Atom region · excluded from motion depth</span></div>
+<p id="depthDetail">Bricks represent measured scene samples. Empty cells are unknown; the head and attached Atom move with the camera and cannot be reconstructed from that motion.</p>
+</section>
+<aside>
+<section class="box"><h2>Atom geometry</h2><div class="atomDimensions"><strong>31.5 mm</strong><span>height</span><strong>20 × 20 mm</strong><span>base</span></div><p>Clearance uses the lowest base corner of an upright Atom centred beneath the suction contact. Attachment is visual evidence, not a verified vacuum seal.</p></section>
+<section class="box"><h2>Measurement quality</h2><dl><dt>Lens</dt><dd id="lensQuality">Nominal 85° field of view</dd><dt>Mount</dt><dd id="mountQuality">Needs measurement</dd><dt>Frame timing</dt><dd id="timingQuality">Needs measurement</dd><dt>Scene samples</dt><dd id="pointCount">—</dd><dt>Plane fit</dt><dd id="fitError">—</dd></dl><p>Screen graphics below glass can give the wrong contact plane. Select physical surface references; avoid animation and reflections.</p></section>
+</aside>
+</div>
+<form id="setup">
+<div class="sectionHead"><div><h2>Optional precision setup</h2><p id="dirty">Video depth works without these settings. Configure them for screen clearance and higher accuracy.</p></div><button id="save" type="submit">Save setup</button></div>
+<details><summary>Mount and suction contact · optional for calibrated clearance</summary>
+<p>Offsets are measured from the robot TCP in millimetres. At tool R = 0°, use the robot’s X, Y and Z directions. Camera coordinates are X right, Y down, Z forward.</p>
+<div class="fields"><fieldset><legend>TCP → camera lens centre (mm)</legend><div class="triple"><label>X<input id="cameraX" type="number" min="-300" max="300" step="0.1" required></label><label>Y<input id="cameraY" type="number" min="-300" max="300" step="0.1" required></label><label>Z<input id="cameraZ" type="number" min="-300" max="300" step="0.1" required></label></div></fieldset>
+<fieldset><legend>TCP → suction contact (mm)</legend><div class="triple"><label>X<input id="contactX" type="number" min="-300" max="300" step="0.1" required></label><label>Y<input id="contactY" type="number" min="-300" max="300" step="0.1" required></label><label>Z<input id="contactZ" type="number" min="-300" max="300" step="0.1" required></label></div></fieldset>
+<fieldset><legend>Camera orientation at tool R = 0°</legend><div class="triple"><label>Roll °<input id="roll" type="number" min="-360" max="360" step="0.1" required></label><label>Pitch °<input id="pitch" type="number" min="-360" max="360" step="0.1" required></label><label>Yaw °<input id="yaw" type="number" min="-360" max="360" step="0.1" required></label></div></fieldset></div>
+<p class="hint">Roll 180°, pitch 0°, yaw 0° describes a downward camera with image-right along robot +X. The rotation is Rz(yaw) · Ry(pitch) · Rx(roll). The initial 80 mm lens offset is a placeholder.</p>
+<label class="check"><input id="followsRotation" type="checkbox"> Camera turns with tool R (uncheck for a fixed-orientation wrist mount)</label>
+<label class="check"><input id="mountConfirmed" type="checkbox"> I measured the mounting offsets and orientation and selected the correct arm.</label>
+</details>
+<details><summary>Timing and motion</summary><div class="fields"><label>Frame delivery delay (ms)<input id="delay" type="number" min="0" max="1000" step="1" required></label><label>Timing uncertainty (ms)<input id="uncertainty" type="number" min="1" max="250" step="1" required></label><label>Minimum translation (mm)<input id="baseline" type="number" min="5" max="30" step="1" required></label></div><p>Frame time is MCAM1’s host receipt time minus this delay. Use measured feedback throughout acceleration and arrival; target speed is never treated as measured travel. Excess timing uncertainty suppresses a depth estimate.</p><label class="check"><input id="timingConfirmed" type="checkbox"> I measured the delivery delay and its uncertainty.</label></details>
+<details><summary>Lens calibration</summary><label class="fov">Nominal horizontal field of view (°)<input id="fov" type="number" min="30" max="130" step="0.1" required></label><p>Without a lens calibration, depth uses this approximate field of view. Keep the focus and capture mode unchanged after calibrating.</p>
+<p><a href="checkerboard.svg" target="_blank" rel="noopener">Open 9 × 6 inner-corner checkerboard ↗</a> · Print at 100%; verify each square is 10 mm.</p>
+<div class="fields"><label>Inner columns<input id="columns" type="number" min="4" max="12" step="1" value="9"></label><label>Inner rows<input id="rows" type="number" min="4" max="10" step="1" value="6"></label><label>Square size (mm)<input id="square" type="number" min="1" max="100" step="0.1" value="10"></label></div>
+<p>Collect at least 10 sharp views at varied distances, positions and tilts. Use the entire image area. Hold still for each sample.</p><div class="buttons"><button type="button" data-lens="capture">Capture board view</button><button type="button" data-lens="solve">Solve lens calibration</button><button type="button" data-lens="clear_samples">Clear samples</button><button type="button" data-lens="clear_intrinsics">Use nominal lens</button><span id="samples">0 views collected</span></div>
+</details>
+<details><summary>Precise region selection</summary><p>Normalized coordinates run from 0 to 1. These fields provide a keyboard alternative to dragging on the preview.</p><div class="fields"><fieldset><legend>Screen region · X, Y, width, height</legend><input id="surfaceValues" type="text" placeholder="0.1, 0.1, 0.4, 0.5" aria-label="Screen region X Y width height"></fieldset><fieldset><legend>Atom region · X, Y, width, height</legend><input id="atomValues" type="text" placeholder="0.4, 0.4, 0.2, 0.3" aria-label="Atom region X Y width height"></fieldset></div></details>
+</form>
+<p id="actionStatus" role="status" aria-live="polite"></p>
+<footer>Observation only · No arm movement, pump commands or camera setting changes · Surface estimates expire after 3 seconds without a valid update</footer>
+</main>
+</body></html>

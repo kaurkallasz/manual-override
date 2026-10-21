@@ -998,6 +998,43 @@ def tracking_projection(tags, arms):
         return _tracking_projection_cache[1].project(tags, arms)
 
 
+def movement_calibration_snapshot():
+    """hhh.cal2.movement v1: six ground TCP samples, never motion permission.
+
+    Samples are in unrotated corrected-camera coordinates and robot millimetres.
+    Consumers must check each saved rig identity against measured relay feedback.
+    A changed camera binding is unavailable, even when manual control is allowed.
+    """
+    cal = _calibration2_public()
+    result = {'contract':'hhh.cal2.movement','version':1,'status':'ready','arms':{}}
+    try:
+        current = _current_camera_revision()
+    except Exception as exc:
+        return {**result, 'status':'unavailable','error':str(exc)}
+    for side in TEAMS:
+        try:
+            arm = cal['arms'][side]
+            if _bound_camera_revision(arm, cal.get('camera_revision')) != current:
+                raise ValueError('Saved arm calibration does not match the current camera')
+            samples = []
+            for point in arm['points'].values():
+                pose, camera = point['pose'], point['camera']
+                values = [camera['u'],camera['v'],pose['x'],pose['y'],pose['z']]
+                if not pose.get('set') or any(type(v) not in (int,float) or not math.isfinite(v) for v in values):
+                    raise ValueError('Six measured ground positions are required')
+                samples.append(values)
+            if len(samples) != 6 or not arm.get('rig_identity'):
+                raise ValueError('Six measured positions and a saved arm identity are required')
+            evidence = {'samples':samples,'device':arm['rig_identity'],'camera_revision':current}
+            # Include only geometry and binding: unrelated lesson edits do not split a path.
+            import hashlib
+            revision = hashlib.sha256(json.dumps(evidence,sort_keys=True,allow_nan=False).encode()).hexdigest()
+            result['arms'][side] = {'status':'ready','revision':revision,**evidence}
+        except (KeyError, TypeError, ValueError) as exc:
+            result['arms'][side] = {'status':'unavailable','error':str(exc)}
+    return result
+
+
 def tracking_intent_snapshot():
     """hhh.controller.intent v1: last player report, NOT observed board truth."""
     return _tracking_intents.snapshot()

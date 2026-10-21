@@ -54,3 +54,34 @@ test('fullscreen messages apply only to the current player frame after replaceme
   frame.listeners.load();
   assert.equal(frame.style.cssText,'');
 });
+
+test('both players default to Mobile LTZ despite old tab links and preferences',()=>{
+  for(const team of ['green','purple']){
+    const f=fixture();
+    f.run(`meta={sandbox:'${team}',admin:false}; location.hash='#ltx'; localStorage.getItem=()=> 'ltx';
+      protos=${JSON.stringify([prototype('ltx'),prototype('mobile-ltz'),prototype('ltz-score')])};`);
+    assert.equal(f.run('initialProto().slug'),'mobile-ltz');
+    assert.equal(f.run('visibleProtos().map(p=>p.slug).join(",")'),'mobile-ltz');
+    assert.equal(f.run('protos.every(p=>p.enabled)'),true,'filter never disables dependencies');
+    f.run('showOtherPlayerTabs=true');
+    assert.equal(f.run('visibleProtos().length'),3);
+    assert.equal(f.run('initialProto().slug'),'ltx');
+  }
+});
+
+test('game master keeps full navigation, including when viewing a team dashboard',()=>{
+  const f=fixture();
+  f.run(`meta={sandbox:'green',admin:true}; location.hash='#ltx';
+    protos=${JSON.stringify([prototype('ltx'),prototype('mobile-ltz')])};`);
+  assert.equal(f.run('visibleProtos().length'),2);
+  assert.equal(f.run('initialProto().slug'),'ltx');
+});
+
+test('missing or disabled Mobile LTZ cannot select another player module by default',()=>{
+  const f=fixture();
+  f.run(`meta={sandbox:'green',admin:false}; location.hash=''; protos=${JSON.stringify([prototype('ltx')])};`);
+  assert.equal(f.run('initialProto()'),undefined);
+  f.run(`protos.push(${JSON.stringify(prototype('mobile-ltz',false))})`);
+  assert.equal(f.run('initialProto().slug'),'mobile-ltz');
+  assert.equal(f.run('initialProto().enabled'),false);
+});

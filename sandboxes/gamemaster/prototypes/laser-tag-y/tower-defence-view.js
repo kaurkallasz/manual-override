@@ -1793,11 +1793,11 @@
     }
 
     function towerUnitScale(tower) {
-      return tower.is_companion ? Number(tower.pod_size || 96) / LIVE_POD_SIZE : 1;
+      return tower.pod_size ? Number(tower.pod_size) / LIVE_POD_SIZE : 1;
     }
 
     function towerVisualRecord(tower, socketsById) {
-      if (tower.is_companion) return {...tower, x: Number(tower.visual_x), y: Number(tower.visual_y),
+      if (tower.is_companion || tower.is_starter) return {...tower, x: Number(tower.visual_x), y: Number(tower.visual_y),
         visual_offset_x: Number(tower.visual_x) - Number(tower.x),
         visual_offset_y: Number(tower.visual_y) - Number(tower.y)};
       const socket = socketsById.get(String(tower.socket_id));
@@ -1812,7 +1812,7 @@
     }
 
     function towerVisualState(nextState, socketsById) {
-      const towers = [...(nextState.towers || []), ...(nextState.companions || [])].map((tower) => (
+      const towers = [...(nextState.towers || []), ...(nextState.starter_turrets || []), ...(nextState.companions || [])].map((tower) => (
         towerVisualRecord(tower, socketsById)
       ));
       const towersByPlacementId = new Map(towers.map((tower) => [
@@ -2689,6 +2689,38 @@
       }
     }
 
+    function drawAtomHomes(context, gameState, visualTime) {
+      for (const home of gameState.home_platforms || []) {
+        const size = Number(home.size), half = size / 2;
+        const purple = home.owner === "purple";
+        const color = purple ? "#c283ff" : "#50f49a";
+        context.save();
+        context.translate(Number(home.x), Number(home.y));
+        if (purple) context.rotate(Math.PI);
+        // Pixel-stepped steel pad with a colored luminous inset. Keep the ID
+        // in the pad, away from the adjacent weapon and its damage effects.
+        context.shadowColor = color;
+        context.shadowBlur = 12 + 3 * Math.sin(visualTime * 2);
+        context.fillStyle = purple ? "#251b35" : "#122c24";
+        context.fillRect(-half, -half, size, size);
+        context.shadowBlur = 0;
+        context.fillStyle = "#091411";
+        context.fillRect(-half + 5, -half + 5, size - 10, size - 10);
+        context.strokeStyle = color;
+        context.lineWidth = 2;
+        context.strokeRect(-half + 7, -half + 7, size - 14, size - 14);
+        context.fillStyle = color;
+        for (const x of [-half, half - 12]) for (const y of [-half, half - 4]) context.fillRect(x, y, 12, 4);
+        context.font = "900 22px ui-monospace, monospace";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.shadowColor = color;
+        context.shadowBlur = 6;
+        context.fillText(String(home.atom_tag_id), 0, 1);
+        context.restore();
+      }
+    }
+
     function renderGame(now = performance.now()) {
       if (destroyed) return false;
       const profile = Boolean(options.onPerformance);
@@ -2721,6 +2753,7 @@
       drawCoreSequence(context, state, visualTime, false);
       drawRowBarriers(context, state, runtimeVisualTime);
       drawForceFields(context, state, visualTime, effectQuality);
+      drawAtomHomes(context, state, runtimeVisualTime);
       markPass("fieldMs");
       for (const tower of visualState.towers || []) {
         context.save();
@@ -2962,13 +2995,13 @@
         bruteScale = state?.settings?.brute_size_multiplier;
         enemySpriteCache.clear(); enemyGlowCache.clear();
       }
-      const placements = new Set([...(state?.towers || []), ...(state?.companions || [])].map(towerPlacementId));
+      const placements = new Set([...(state?.towers || []), ...(state?.starter_turrets || []), ...(state?.companions || [])].map(towerPlacementId));
       for (const id of towerRenderAngles.keys()) if (!placements.has(id)) towerRenderAngles.delete(id);
       for (const id of towerAimPreview.keys()) if (!placements.has(id)) towerAimPreview.delete(id);
       for (const id of towerDeploymentFlashes.keys()) if (!placements.has(id)) towerDeploymentFlashes.delete(id);
       for (const id of towerAtomGlows.keys()) if (!placements.has(id)) towerAtomGlows.delete(id);
       const receivedAt = performance.now();
-      for (const tower of [...(state?.towers || []), ...(state?.companions || [])]) {
+      for (const tower of [...(state?.towers || []), ...(state?.starter_turrets || []), ...(state?.companions || [])]) {
         const id = towerPlacementId(tower);
         const identity = `${tower.aim_instance || ""}:${tower.activation_started_at}`;
         const previous = towerAtomGlows.get(id);
@@ -3103,12 +3136,13 @@
     }
 
     function towerAtPoint(x, y) {
-      const units = [...(state?.towers || []), ...(state?.companions || [])]
+      const units = [...(state?.towers || []), ...(state?.starter_turrets || []), ...(state?.companions || [])]
+        .filter(unit => !unit.preview)
         .map(unit => towerVisualRecord(unit, socketRecordMap()))
         .filter(unit => Math.abs(unit.x - x) <= LIVE_POD_SIZE * towerUnitScale(unit) / 2
           && Math.abs(unit.y - y) <= LIVE_POD_SIZE * towerUnitScale(unit) / 2);
       const hit = units.sort((a,b) => Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))[0];
-      return hit ? (state.towers || []).find(unit => towerPlacementId(unit) === String(hit.parent_placement_id || towerPlacementId(hit))) : null;
+      return hit ? [...(state.towers || []), ...(state.starter_turrets || [])].find(unit => towerPlacementId(unit) === String(hit.parent_placement_id || towerPlacementId(hit))) : null;
     }
 
     function markerAtPoint(x, y) {
@@ -3147,7 +3181,7 @@
 
     function selectedAimTower(placementId = selectedTowerId) {
       if (placementId == null) return null;
-      const tower = (state?.towers || []).find((candidate) => (
+      const tower = [...(state?.towers || []), ...(state?.starter_turrets || [])].find((candidate) => (
         towerPlacementId(candidate) === String(placementId)
       )) || null;
       return tower ? towerVisualRecord(tower, socketRecordMap()) : null;

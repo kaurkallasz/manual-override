@@ -78,7 +78,7 @@ Checks: `node tests/safari_memory_renderer.cjs` and
 replacement/teardown and both player pages' restoration. It issues no gameplay
 or robot commands. `MOBILE_MEMORY_TEST_URL` overrides the fixture origin.
 
-Both players show an optional MCAM1 inset at the upper right, immediately left
+Green shows an optional MCAM1 inset at the upper right, immediately left
 of the right-side control/Cue panel. Its canvas is half the camera's native
 width and height (480×320 becomes 240×160), shrinking further only to fit narrow
 screens without covering controls. Availability and freshness arrive in the
@@ -90,9 +90,18 @@ The Game Master's MCAM1 preview must already be running. The existing hosted
 asset proxy and frozen client bundle include this feature. Load changes at the
 next hub restart and player-page refresh.
 
+Camera assignment is **Green → MCAM1; Purple → MCAM2**. MCAM2 is not implemented
+yet, so Purple keeps the inset hidden and makes no MCAM1 frame requests. Its
+`mobile_mcam1` projection is unavailable and its MCAM1 JPEG route returns 503.
+When MCAM2 is implemented, expose its own validated still contract through the
+mobile API, add Purple's metadata projection and authenticated JPEG route, then
+connect Purple's inset to that feed with the same freshness and lifecycle checks.
+Never fall back to Green's MCAM1 footage. Update the browser/API coverage to verify
+that each player receives only its assigned camera.
+
 Verify with `python -m unittest discover -s tests -p 'test_mobile_mcam1.py'` and
 `node tests/mobile_mcam1_browser.cjs` against
-`python tests/mobile_ltz_fixture.py --port 8146` (isolated, no hardware).
+`python tests/mobile_ltz_fixture.py --port 8146 --virtual-controls` (isolated, no hardware).
 
 Turret aiming keeps persistent SVG geometry and a persistent touch handle.
 Camera timestamps/diagnostics no longer replace the cone's DOM. A valid

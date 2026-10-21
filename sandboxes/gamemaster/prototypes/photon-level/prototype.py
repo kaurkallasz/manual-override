@@ -15,7 +15,7 @@ from flask import Blueprint, jsonify, request, send_from_directory, url_for
 import live
 from level_contract import _tileset_catalog, parse_tiled_level, properties, simple_level
 from level_layout import SocketLayoutError, update_socket_layout_file
-from level_assets import asset_snapshot
+from level_assets import asset_snapshot, replay_floor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET_ROOT = os.path.join(HERE, "assets")
@@ -183,15 +183,19 @@ def runtime_bundle():
     """Public rich output consumed by a game runtime, never a source-file path."""
     with _lock:
         ready = _load_error is None
+        presentation = presentation_assets()
+        runtime = copy.deepcopy(_runtime) if ready else None
+        if runtime is not None:
+            runtime['replay_floor'] = replay_floor(runtime, presentation)
         return {
             "contract": RUNTIME_CONTRACT,
             "version": RUNTIME_VERSION,
             "revision": _runtime.get("layout_revision", 0),
             "status": "ready" if ready else "unavailable",
             "error": _load_error,
-            "runtime": copy.deepcopy(_runtime) if ready else None,
+            "runtime": runtime,
             "waves": copy.deepcopy(_waves.get("waves")) if ready else None,
-            "presentation": presentation_assets(),
+            "presentation": presentation,
         }
 
 

@@ -3,8 +3,13 @@ import math
 import time
 
 
-def snapshot(module):
+def snapshot(module, side):
     base = dict(contract='mobile.mcam1', version=1, status='unavailable')
+    # Camera assignment: Green receives MCAM1; Purple is reserved for MCAM2.
+    # TODO(MCAM2): add Purple's own still contract/projection and asset route.
+    # Until then, never discover or substitute MCAM1 for Purple.
+    if side != 'green':
+        return ({**base, 'error':'MCAM1 is assigned to Green; Purple is waiting for MCAM2.'}, None)
     try:
         camera = module('mcam1')
         if camera is None or not callable(getattr(camera, 'still_snapshot', None)):

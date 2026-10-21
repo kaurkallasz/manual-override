@@ -391,3 +391,17 @@ can close its own response without racing HTTP chunk parsing.
 .venv/bin/python -B -m unittest discover -s tests -p 'test_relay_feedback.py'
 .venv/bin/python -B tests/relay_feedback_transport_smoke.py
 ```
+# Player sessions and Clean reset
+
+`player_control_sessions()` returns `hhh.relay.player-sessions` v1 with
+`status`, a side-to-browser-session `sessions` map, and `leased_sides`.
+It never exposes lease tokens. `revoke_player_controls()` uses the same contract
+and returns `released: true` after serializing with both arm command locks and
+invalidating both leases. It does not certify a physical stop: Photon Game keeps
+durable stop obligations and checks the existing `hhh.relay.stop` v1 output.
+
+Player acquisitions remember the authenticated Hub browser session. Delegated
+worker requests and existing leases fail when that session is revoked. Motion
+and pump submissions recheck access after taking the arm lock, so a queued
+request cannot run after a Clean reset. Pending reset blocks new motion grants;
+operator feedback connection and safe stop paths remain usable for recovery.

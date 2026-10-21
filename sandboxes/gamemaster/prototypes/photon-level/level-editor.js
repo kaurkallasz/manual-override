@@ -116,6 +116,19 @@ if (typeof document !== "undefined") {
       ctx.restore();
     }
     if (placements.checked) {
+      for (const home of level.atom_homes || []) {
+        ctx.save();
+        ctx.strokeStyle = home.owner === "green" ? "#50f49a" : "#c283ff";
+        ctx.fillStyle = home.owner === "green" ? "#123626cc" : "#302040cc";
+        ctx.lineWidth = 2;
+        for (const [x, y, size] of [[home.x, home.y, home.size], [home.turret_x, home.turret_y, home.pod_size]]) {
+          ctx.fillRect(x-size/2, y-size/2, size, size);
+          ctx.strokeRect(x-size/2, y-size/2, size, size);
+        }
+        label(`Home ${home.slot+1}`, home.x, home.y);
+        label("Starter", home.turret_x, home.turret_y);
+        ctx.restore();
+      }
       for (const socket of level.sockets) {
         const color = socket.owner === "purple" ? "#cf99ff"
           : socket.owner === "green" ? "#59f6a5" : "#ffe59b";

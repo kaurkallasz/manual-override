@@ -25,7 +25,7 @@ from event_flow import starting_atoms
 from photon_game_runtime import rewards
 from photon_game_runtime import ContractLevelModel, DefenseEngine, SettingsStore
 from photon_game_runtime.engine import orc_schedule
-from photon_game_runtime import wave_timeline
+from photon_game_runtime import wave_timeline, starter_defenses
 from photon_game_runtime.atom_buff import validated as _validated_occupancy, unavailable as _unavailable_occupancy
 from photon_game_runtime.settings import validate_settings, PRESETS
 from progress_link import ProgressLink
@@ -122,8 +122,10 @@ def _result_committed(attempt):
 def _journey_tick():
     # Progress invokes this outside its lock. Never wait behind an operator
     # command that may itself be waiting for a result to finish saving.
+    if _clean_reset_pending(): return
     if _journey and _command_lock.acquire(blocking=False):
         try:
+            if _clean_reset_pending(): return
             if _journey.snapshot().get('reset_stop_error'):
                 if not _settle_reset_stops():return
             _journey.tick()
@@ -153,6 +155,8 @@ def journey_snapshot():
         value.update(motion_blocked=True,motion_error=value['reset_stop_error'])
     if _saved_game_switch_error:
         value.update(motion_blocked=True, motion_error=_saved_game_switch_error)
+    if _clean_reset_pending():
+        value.update(motion_blocked=True, motion_error='Clean reset pending. Game Master must finish or retry it.')
     return value
 
 
@@ -191,6 +195,7 @@ def motion_policy(side):
 
 def mobile_journey_command(side,value):
     with _command_lock:
+        _require_player_access()
         result=_mobile_journey_command(side,value)
         if value.get('action') in ('ready','complete','finish'):
             _auto_start_next()
@@ -242,8 +247,11 @@ def _continue_players(side,value,roster):
     if pending and {k:v for k,v in pending.items() if k!='error'}==context:
         _journey.queue_start(context)
         return _journey.snapshot()
-    if (attempt['outcome'] not in ('won','overrun','operator_ended')
-            or attempt['event_id']!=context['event_id'] or attempt['game_id']!=context['game_id']):
+    if attempt['event_id']!=context['event_id'] or attempt['game_id']!=context['game_id']:
+        raise ValueError('This result belongs to another saved pair or event; refresh before continuing')
+    # Restart recovery saves interrupted/aborted attempts without advancing the
+    # level. They are settled results too, so both players can retry that level.
+    if attempt['outcome'] not in ('won','overrun','operator_ended','interrupted','aborted'):
         raise ValueError('Wait for this pair’s level result to finish saving')
     if choice=='continue' and attempt['outcome']=='won' and attempt['metadata'].get('contract_control_tier')==4:
         raise ValueError('You Win! Game Over. Choose New game, Replay last level or Replay whole game.')
@@ -409,6 +417,7 @@ def _simple_level(runtime):
         "path": first_path,
         "paths": paths,
         "sockets": sockets,
+        "atom_homes": _copy(runtime.get("atom_homes", [])),
         "core": _copy(raw_core),
         # Additive Level v1 fields stay optional so an older compatible Level
         # can still drive the game while a presentation uses its fallback map.
@@ -490,6 +499,7 @@ def _install_level(bundle):
             engine = DefenseEngine(bundle["runtime"], bundle["waves"])
             engine.set_wake(_engine_changed)
             engine.set_physical_source(_physical_observation)
+            engine.set_movement_source(_movement_observation)
             with trace.locked(_lock, 'game.state_lock'):
                 _engine = engine
                 _history_sequence = 0
@@ -896,6 +906,9 @@ def _public_snapshot(*, compact_enemies=False):
     journey['readiness'] = (Journey.readiness(journey,next_loadouts['teams']) if next_loadouts.get('status')=='ready'
                             else {'status':'unavailable','error':next_loadouts.get('error','Player status unavailable')})
     if simulation['phase'] == 'setup':
+        with trace.locked(engine.lock, 'game.engine_lock'):
+            saved = (next_loadouts.get('saved_games') or {}).get('active')
+            simulation.update(starter_defenses.preview(engine, saved, next_loadouts.get('teams')))
         tier = simulation['virtual_test_control'] or max((p['tier'] for p in (next_loadouts or {}).get('teams',{}).values()), default=1)
         selected = next((p for p in next_match.get('tiers',[]) if p['tier'] == tier), None)
         if selected:
@@ -966,7 +979,7 @@ def mobile_turret_aim(data):
             if data.get('run_id') != _run_id:
                 raise ValueError('Game changed. Select the turret again.')
             sid = data.get('socket_id')
-            tower = engine.placements.get(sid) if isinstance(sid, str) else None
+            tower = engine.combat_tower(sid) if isinstance(sid, str) else None
             if not tower or tower.get('owner') != side:
                 raise ValueError('Select a placed '+side.title()+' turret.')
             if (not isinstance(data.get('aim_instance'), str) or data['aim_instance'] != tower['aim_instance']
@@ -1012,7 +1025,91 @@ def _require_engine():
 
 def apply_command(data):
     with _command_lock:
+        _require_player_access()
         return _apply_command(data)
+
+
+def _clean_reset_pending():
+    access = getattr(_hub_ctx, 'player_sessions', None)
+    return bool(access and access.blocked)
+
+
+def _require_player_access():
+    if _clean_reset_pending():
+        raise GameError('Clean reset pending. Finish or retry it from the player panel.')
+
+
+def player_connections():
+    """Hub player-management v1 projection; identities belong to the Hub."""
+    access = _hub_ctx.player_sessions
+    names, controlling, error = {}, [], None
+    try:
+        roster = _progress.roster()['roster']
+        names = {side: player.get('name') for side, player in roster.items()}
+        owner = _module('dobot-mg400-relay')
+        state = owner.player_control_sessions()
+        if (state.get('contract') != 'hhh.relay.player-sessions'
+                or type(state.get('version')) is not int or state['version'] != 1
+                or state.get('status') != 'ready'):
+            raise ValueError('Player control ownership unavailable')
+        controlling = list(state['sessions'].values())
+    except Exception as exc:
+        error = str(exc)
+    return {**access.snapshot(names, controlling), 'error': error}
+
+
+def clean_reset_players(data):
+    """Revoke access before resetting Game; failed resets remain closed on disk.
+
+    The operation ID belongs to the Hub recovery record. Repeating a completed
+    operation cannot reset a later game or disconnect players who joined later.
+    """
+    access = _hub_ctx.player_sessions
+    operation = data['operation_id']
+    with access.transition:
+        if not access.begin_reset(operation, None):
+            return {'ok': True, 'operation_id': operation, 'already_completed': True}
+        _hub_ctx.invalidate_player_links()
+        try:
+            # Never hold the Game command lock while waiting for a player HTTP
+            # request that may itself be waiting to enter the Game owner.
+            access.drain()
+            with _command_lock, _journey.operation_lock:
+                _require_engine()
+                relay = _module('dobot-mg400-relay')
+                ownership = relay.player_control_sessions()
+                if (ownership.get('contract') != 'hhh.relay.player-sessions'
+                        or type(ownership.get('version')) is not int or ownership['version'] != 1
+                        or ownership.get('status') != 'ready'
+                        or not isinstance(ownership.get('leased_sides'), list)
+                        or any(side not in ('green', 'purple') for side in ownership['leased_sides'])):
+                    raise GameError('Player control ownership unavailable')
+                scope = sorted(set(_reset_stop_scope()) | set(ownership['leased_sides']))
+                _journey.reset_stop('Clean reset requested; waiting for arm stop confirmation', sides=scope)
+                result = relay.revoke_player_controls()
+                if (result.get('contract') != 'hhh.relay.player-sessions'
+                        or type(result.get('version')) is not int or result['version'] != 1
+                        or result.get('status') != 'ready' or result.get('released') is not True):
+                    raise GameError('Could not release player controls')
+                roster = _progress.roster()
+                _reset_event_game({'event_id': roster['events']['active_id'],
+                    'game_id': roster['saved_games']['active_id'], 'run_id': _run_id,
+                    'reset_generation': _journey.snapshot().get('reset_operation'),
+                    'operation_id': operation}, allow_no_event=True)
+                if _journey.snapshot().get('reset_stop_error') and not _settle_reset_stops():
+                    raise GameError(_journey.snapshot()['reset_stop_error'])
+                # QR encoding/availability is part of completion; a failed code
+                # render must not reopen admission with missing or stale links.
+                with access.lock:
+                    _hub_ctx.refresh_player_links()
+                    access.finish_reset(operation)
+                _live.bump()
+            return {'ok': True, 'operation_id': operation}
+        except Exception as exc:
+            _hub_ctx.invalidate_player_links()
+            access.reset_failed(str(exc))
+            _live.bump()
+            raise
 
 
 _saved_game_switch_error = None
@@ -1050,7 +1147,10 @@ def _stop_for_saved_game(sides=None):
 def _reset_stop_scope():
     """Track actual motion obligations, not every disconnected controller."""
     previous=_journey.snapshot()
-    sides=set(previous.get('reset_stop_sides') or ('green','purple')) if previous.get('reset_stop_error') else set()
+    recorded=previous.get('reset_stop_sides')
+    # [] is an explicit absence of stop obligations. Only old records with no
+    # scope (None) require the conservative both-arms fallback.
+    sides=set(recorded if recorded is not None else ('green','purple')) if previous.get('reset_stop_error') else set()
     if _engine.phase=='running':sides.update(('green','purple'))
     try:
         _,arms=_arms_before_game_switch()
@@ -1089,6 +1189,7 @@ def saved_game_command(side, value):
         raise ValueError('valid side and saved game command required')
     if not value.get('event_id'):raise ValueError('Event identity required; refresh this client')
     with _command_lock, _journey.operation_lock:
+        _require_player_access()
         engine, _ = _require_engine()
         if engine.phase == 'running':
             raise ValueError('finish the current match before saving or loading a game')
@@ -1132,6 +1233,7 @@ def saved_game_command(side, value):
 def event_command(value):
     global _run_id,_saved_game_switch_error
     with _command_lock,_journey.operation_lock:
+        _require_player_access()
         engine,_=_require_engine()
         if engine.phase=='running' or _journey.snapshot()['phase']=='calibration':raise ValueError('Finish the match and calibration before changing events')
         _progress.flush()
@@ -1150,12 +1252,12 @@ def event_command(value):
         return result
 
 
-def _reset_event_game(data):
+def _reset_event_game(data, *, allow_no_event=False):
     """Return the current event to player selection, preserving its stored progress."""
     global _run_id, _history_sequence, _revision, _saved_game_switch_error
     roster=_progress.roster()
     event_id=roster['events']['active_id']
-    if not event_id or data.get('event_id')!=event_id:
+    if (not event_id and not allow_no_event) or data.get('event_id')!=event_id:
         raise GameError('Select the active event and refresh before Reset')
     operation=data.get('operation_id')
     if not isinstance(operation,str) or not 1<=len(operation)<=160 or not all(c.isalnum() or c in '-_:.' for c in operation):
@@ -1184,7 +1286,8 @@ def _reset_event_game(data):
         _journey.cancel(defer_stop=True)
         # Reselecting the same event atomically clears both selected players and
         # its active pair, through Progress's existing public owner contract.
-        _progress._check(owner.event_command({'action':'select','event_id':event_id,'operation_id':operation}))
+        if event_id:
+            _progress._check(owner.event_command({'action':'select','event_id':event_id,'operation_id':operation}))
         _engine.reset()
         _engine.set_virtual_test_loadout(None,None)
         _engine.configure_piece_codes(_settings.snapshot())
@@ -1203,7 +1306,10 @@ def _reset_event_game(data):
 
 def _bind_starting_atoms(engine,roster,observation,requested):
     saved=roster['saved_games']['active']
-    atoms=starting_atoms(engine,saved,observation,requested)
+    if not isinstance(requested,dict):
+        raise ValueError('Invalid starting Atom selection')
+    defaults={h['owner']:h['atom_tag_id'] for h in starter_defenses.platforms(engine,saved) if h['slot']==0}
+    atoms=starting_atoms(engine,saved,observation,{**defaults,**engine.setup_starting_atoms,**requested})
     result=_progress._check(_module('photon-progress').bind_game_atoms({
         'event_id':roster['events']['active_id'],'game_id':saved['id'],'atoms':atoms}))
     return result['game']
@@ -1222,7 +1328,18 @@ def _apply_command(data):
     try:
         if action in ('place', 'activate_core', 'loadout', 'aim', 'virtual_test_loadout','calibration_test') and engine is not None and engine.phase == 'running' and trace.call('game.progress', _progress.snapshot).get('reward_enabled'):
             raise GameError('end the scored attempt before operator placement or loadout intervention')
-        if action == "start":
+        if action == "starting_atom":
+            if engine.phase != 'setup':
+                raise GameError('Starting Atoms can only be selected before a match')
+            side, tag = data.get('side'), data.get('atom_tag_id')
+            if side not in ('green', 'purple') or tag is not None and (type(tag) is not int or engine.atom_owners.get(tag) != side):
+                raise GameError('Choose a configured Atom for this team')
+            saved = (_progress.roster().get('saved_games') or {}).get('active')
+            if (saved or {}).get('atoms'):
+                raise GameError('Starting Atoms are fixed in this save')
+            with trace.locked(engine.lock, 'game.engine_lock'):
+                engine.setup_starting_atoms[side] = tag
+        elif action == "start":
             if engine.phase != 'setup':
                 raise GameError('reset the finished game before starting another attempt')
             if not level_ready:
@@ -1288,6 +1405,7 @@ def _apply_command(data):
                             'reward_rules': rewards.rules(settings,engine.wave_source,previews[tier-1]),
                             'companion_policy': {**engine.snapshot()['companion_policy'], 'l4_turrets_per_socket': settings['l4_turrets_per_socket']}}
                 metadata['level_preset']=preset
+                metadata['starter_defense_policy']={'version':1,'per_player':2 if tier==4 else 1,'rebuildable':False,'topology':False}
                 metadata['core_rule_version']=2  # Ring plus opposing-team stack; no kill gate.
                 metadata['event_id']=roster['events']['active_id']
                 try:
@@ -1443,6 +1561,22 @@ def _apply_command(data):
     return game_snapshot()
 
 
+def _movement_observation():
+    """Read-only inputs for the simulation-owned movement recorder."""
+    outputs = {}
+    for key, slug, function in (
+        ('relay','dobot-mg400-relay','arms_snapshot'),
+        ('calibration','auto-pickup-game','movement_calibration_snapshot'),
+        ('camera','photon-board','camera_markers_snapshot'),
+    ):
+        owner = _module(slug)
+        reader = getattr(owner, function, None)
+        if not callable(reader):
+            raise ValueError(f'{slug} movement evidence unavailable')
+        outputs[key] = reader()
+    return outputs
+
+
 def hub_init(ctx):
     global _hub_ctx, _journey, _presets, _saved_game_switch_error
     _saved_game_switch_error = None
@@ -1456,6 +1590,10 @@ def hub_init(ctx):
         }
     _progress.start()
     _sync_level()
+    register = getattr(ctx, 'register_player_management', None)
+    if register:
+        register({'contract': 'photon.player-management', 'version': 1,
+                  'snapshot': player_connections, 'clean_reset': clean_reset_players})
     if _level_projection:
         _presets.ensure_map(_level_projection.get('name','photon-level'),_settings.snapshot())
     with trace.locked(_lock, 'game.state_lock'):
@@ -1463,6 +1601,7 @@ def hub_init(ctx):
     if engine is not None:
         engine.set_wake(_engine_changed)
         engine.set_physical_source(_physical_observation)
+        engine.set_movement_source(_movement_observation)
         engine.start_background()
 
 
@@ -1592,6 +1731,7 @@ def _orc_events():
                 terminal = {'run_id':run_id,'phase':engine.phase,'contract_control_tier':engine.contract_control_tier,
                             'kills':engine.kills,'sim_time':engine.sim_time,'match_score':engine.rewards.snapshot(),
                             'kill_heatmap':engine.rewards.heatmap.snapshot(),
+                            'robot_movement':engine.robot_movement.snapshot(engine.sim_time),
                             'result_save':post_match.save_state(progress,run_id,engine.phase)}
             return {'contract':'photon.game.preview','version':1,'status':'ready','ok': True,
                     'virtual_test_control':engine.virtual_test_control,'journey':_journey.snapshot() if _journey else None,

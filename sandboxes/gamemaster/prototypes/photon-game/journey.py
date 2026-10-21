@@ -113,6 +113,8 @@ class Journey:
             if sides is not None and (not isinstance(sides,list) or any(s not in ('green','purple') for s in sides)):
                 raise ValueError('valid reset stop sides required')
             pending=[] if error is None else sorted(set(sides)) if sides is not None else state.get('reset_stop_sides')
+            if pending == []:
+                error = None  # An explicitly empty scope cannot be waiting for Stop.
             if state.get('reset_stop_error')!=error or state.get('reset_stop_sides')!=pending:
                 state['reset_stop_error']=error
                 state['reset_stop_sides']=pending

@@ -1,5 +1,29 @@
 # Photon Game
 
+## Clean reset and player presence
+
+Game registers `photon.player-management` v1 with the Hub at `hub_init`.
+`player_connections()` combines Hub browser identities with the selected profile
+names from `photon.progress` v2 and `hhh.relay.player-sessions` v1 ownership.
+`clean_reset_players({operation_id})` coordinates admission/revocation through
+Hub, durable stop obligations through Journey, relay lease revocation, and the
+existing event Reset/Progress contracts. It clears current selection/readiness
+while preserving saved progress and calibration. With no event selected it
+returns to an empty lobby; it never creates an event.
+
+The Hub recovery record blocks player login and Game motion until reset and
+required stops complete and fresh QR codes can be rendered. Duplicate completed
+operations are no-ops; failed operations retry with the same ID. Player request
+draining happens before taking Game's command lock to avoid nested HTTP
+deadlocks. No individual kick operation is registered. Creating/selecting events
+does not implicitly change browser identities or invitations.
+
+An explicit empty `reset_stop_sides` list means no stop is needed; it never
+expands to both teams. Only legacy records with an unknown scope (`null` or
+missing) use the conservative fallback. Journey clears the stop error whenever
+the known pending list is empty. Idle, disconnected arms therefore do not block
+Clean reset, including a QR-generation retry after the game was already reset.
+
 
 ## Operator turret and Atom controls
 
@@ -92,9 +116,37 @@ Smoke test: `PYTHONPATH=tests .venv/bin/python -m unittest test_wave_timeline`.
 Game Master `/api/event` creates/selects an event through Progress v2 under the
 same command/journey locks as Start, after confirming connected arms stopped.
 Start requires that event, both linked players, physical Board input, and one
-starting Atom per side. Board's stable target placement determines the Atom;
-Game Master can explicitly select its configured ArUco as a camera fallback.
+starting Atom per side. Maps with authored homes default to the first configured
+team Atom (100/102). Game Master can choose the alternate Atom before binding;
+the selection updates the home and starter preview and also applies when the
+phone countdown starts the match. Explicit automatic detection still uses Board's
+stable target evidence. Legacy maps without homes retain camera-based selection.
 Starting Atoms are immutable in a save through L3; L4 enables both team Atoms.
+
+## One-use home defenses
+
+Authored `atom_homes` produce separate `home_platforms` and `starter_turrets`
+snapshot arrays. Setup previews show the selected saved game's level and each
+weapon's earned upgrades, without participating in combat or accepting aim.
+Start deploys one live starter per team in L1–L3. L4 reveals the second home and
+deploys a second starter of that team's other weapon type, with its own upgrades.
+Green uses machine gun/flamethrower and Purple uses mortar/Tesla under the default
+piece codes; configured IDs and a saved alternate first Atom are respected.
+
+Starters are active immediately and use ordinary weapon targeting, damage,
+projectiles, enemy contact/ranged attacks, kill rewards and owner-validated aim.
+They have their own stable aim instance and 72 px pod footprint. They never enter
+construction socket occupancy, activation order, links, row barriers or the core
+ring, receive no Atom occupancy buff, and never spawn an L4 companion.
+
+Destroyed starters remain destroyed for that match, including after browser
+reload, mode changes or upgrade refresh. Placement, operator activation and
+replenishment/replacement cannot rebuild them. Moving the Atom onto a regular
+socket still builds there normally. Only a new match creates fresh starters.
+The saved run metadata records this starter policy. Physical Atom movement stays
+on the existing robot path; homes add no physical marker or robot command.
+
+Smoke test: `PYTHONPATH=tests .venv/bin/python -m unittest test_starter_defenses`.
 
 `end_match`, `unlock_next_level` and `next_match` carry `event_id` and `run_id`.
 End match confirms arm stops before ending running/paused play. Progress atomically
@@ -852,6 +904,21 @@ the next attempt automatically through the existing `next_match` and `start`
 commands, including the five-second countdown. Mobile Ready includes `event_id`
 and the finished `run_id`; stale receipts cannot acknowledge a newer result.
 Readiness itself grants no motion or calibration permission.
+
+Saved `interrupted` and `aborted` attempts also accept both players' Ready
+acknowledgements after a hub restart. Retry starts the current saved level with
+the same pair, banked credits and equipment; it does not award completion or
+advance the level. The player receipt labels this action `Retry level · Ready`.
+A running/unsaved attempt remains blocked, and a result for another pair or
+event is rejected separately from a pending save.
+
+End screens display both players' selections and explicitly show disagreement.
+Either player can change their choice while waiting; only matching choices
+continue automatically. Successful selections clear previous command errors.
+Buttons retain the displayed result's run ID, and older command replies or SSE
+snapshots cannot restore an end screen after the next run starts. The isolated
+`tests/result_agreement_browser.cjs` covers disagreement, refresh, stale errors,
+delayed replies and old buttons on both phones and the statistics page.
 
 Game serializes player continuation with operator commands. A pending
 `journey.auto_start` records the agreed event, saved pair, result, next level and

@@ -37,3 +37,7 @@ sandboxes/gamemaster/prototypes/mobile-ltz-api/data/connection-events.jsonl*
 
 # Bounded opt-in timing captures (local diagnostic data)
 sandboxes/gamemaster/prototypes/mobile-ltz-api/data/delay-analysis/
+
+# Private scoreboard emails, upload credentials and outbox
+sandboxes/gamemaster/prototypes/photon-progress/data/
+deploy/score/config.local.php

@@ -1,6 +1,7 @@
 """Level-owned static content; no game state or sibling dependencies."""
 
 import hashlib
+import copy
 from shared import delay_trace as trace
 import json
 import threading
@@ -9,6 +10,24 @@ from urllib.parse import quote
 
 _lock = threading.RLock()
 _hashes = {}
+
+
+def replay_floor(runtime, presentation):
+    """Freeze the authored static field and its versioned artwork references."""
+    scene = runtime.get('visual_scene') or {}
+    if (scene.get('contract') != 'photon.visual-scene' or scene.get('version') != 1
+            or presentation.get('status') != 'ready'):
+        return None
+    layers = [{'opacity': layer.get('opacity', 1),
+               'items': [copy.deepcopy(item) for item in layer.get('items', []) if item.get('kind') == 'sprite']}
+              for layer in scene.get('layers', [])]
+    layers = [layer for layer in layers if layer['items']]
+    used = {item['asset_id'] for layer in layers for item in layer['items']}
+    published = presentation.get('assets', {})
+    if not used or any('map/' + key not in published for key in used):
+        return None
+    return {'version': 1, 'revision': runtime['layout_revision'], 'layers': layers,
+            'assets': {key: published['map/' + key] for key in sorted(used)}}
 
 
 def runtime_asset_paths():

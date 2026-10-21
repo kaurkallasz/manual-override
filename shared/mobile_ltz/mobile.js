@@ -2,7 +2,10 @@
 const $=id=>document.getElementById(id), local=location.pathname.startsWith('/s/'), base='/s/gamemaster/p/mobile-ltz-api/api/';
 const team=document.documentElement.dataset.mobileTeam==='purple'?'purple':'green',teamLabel=team[0].toUpperCase()+team.slice(1);
 const api=path=>{const [name,search]=path.split('?',2),query=new URLSearchParams(search);if(local){if(team==='purple')query.set('side',team);return base+name+(query.size?'?'+query:'');}return 'api.php?team='+team+'&path='+encodeURIComponent(name)+(query.size?'&'+query:'');};
-const mcam1Feed=new MobileMcam1($('mcam1Video'),()=>api('assets/mcam1.jpg'));
+// Camera assignment: Green receives MCAM1; Purple will receive MCAM2.
+// TODO(MCAM2): connect Purple only after its own API projection and JPEG route exist.
+// Keep Purple's inset hidden with no camera requests until then; never fall back to MCAM1.
+const mcam1Feed=team==='green'?new MobileMcam1($('mcam1Video'),()=>api('assets/mcam1.jpg')):null;
 $('teamName').textContent=teamLabel;$('returnLink').href='/s/'+team+'/';
 const preferencePrefix=team==='green'?'mobile-ltz:':'mobile-ltz:purple:';
 let publishedAssets={};
@@ -23,6 +26,15 @@ const preference={get(key){try{return localStorage.getItem(preferencePrefix+key)
 let clientIdentity=preference.get('client');
 if(!/^[a-f0-9]{32}$/.test(clientIdentity||'')){clientIdentity=newIdentity();preference.set('client',clientIdentity);}
 let joinWanted=preference.get('stopped')!=='yes',joining=false,joinRequest=null,joinRetryAt=0,joinFailures=0,controllerId=null,commandStateAt=0;
+let authEnded=false;
+function endPlayerSession(){
+ if(authEnded)return;authEnded=true;
+ joinWanted=false;generation++;session=null;controllerId=null;joinRequest=null;feedReady=false;clearInput();
+ liveFeed.stop();mcam1Feed?.stop();turretOverlay.stopVideo();physicalArm.activate(false);$('physicalRobotFrame').removeAttribute('src');
+ if(local){window.top.location.replace(`/s/${team}/login?ended=1&next=${encodeURIComponent(`/s/${team}/p/mobile-ltz/`)}`);return;}
+ $('loginError').textContent='Session ended. Sign in again after the Game Master finishes the reset.';
+ if(!$('login').open)$('login').showModal();renderControls();
+}
 function transitionAllowsControls(){const p=state?.mobile_motion_policy;return p?.contract==='photon.game.motion'&&p.version===1&&p.status==='ready'&&p.blocked===false&&['player','tutorial'].includes(p.scope);}
 function transitionControlError(){return state?.mobile_motion_policy?.error||'Waiting for current game control permissions.';}
 function canJoin(){return feedReady&&MobileGameState.hasLevel(state?.level)&&state?.virtual_play&&!state.paused&&transitionAllowsControls()&&(['setup','running'].includes(state.phase)||state.journey?.active_side===team);}
@@ -34,7 +46,7 @@ const request=async(path,data)=>{
     let response;
     try{response=await fetch(api(path),{method:data?'POST':'GET',credentials:'same-origin',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined,cache:'no-store',signal:controller.signal});}
     catch{throw Error(controller.signal.aborted?'Gamemaster timed out. Check the local relay.':'Cannot reach Gamemaster. Check the phone connection and local relay.');}
-    if(response.status===401||response.redirected){if(!local&&!$('login').open)$('login').showModal();throw Error(path==='login'?'Wrong '+teamLabel+' password.':'Sign in to '+teamLabel+' to join.');}
+    if(response.status===401||response.redirected){if(path!=='login')endPlayerSession();throw Error(path==='login'?'Wrong '+teamLabel+' password.':'Session ended. Sign in to '+teamLabel+' again.');}
     return await MobileNetwork.readJson(response);
   }finally{clearTimeout(timeout);}
 };
@@ -1106,7 +1118,7 @@ function syncSceneNotice(){
  }
  sceneNotice=notice;
 }
-function applyState(value){if(state&&session&&state.mobile_progress?.saved_games?.active_id!==value.mobile_progress?.saved_games?.active_id)suspend('Game changed. Press Connect to use the linked player controls.');mcam1Feed.update(value.mobile_mcam1);if(state&&state.virtual_play!==value.virtual_play&&session)suspend('Play mode changed. Press Connect to resume.');if(!value.virtual_play)value={...value,mobile_arm:physicalArm.arm()};if(value.virtual_play&&state?.mobile_arm&&value.server_time<commandStateAt)value={...value,mobile_arm:state.mobile_arm};state=value;window.MobileCountdown?.update(value);syncRenderer();syncControlAssignment();document.body.classList.toggle('calibrating',value.journey?.phase==='calibration');window.MobileJourney?.update(value,request,async (target,preview=false)=>{if(!target)throw Error('Guided target unavailable');xyzTarget={x:target.camera[0]*viewport.w,y:target.camera[1]*viewport.h,z:target.pose[2]};targetPreview=preview;updateXYZ();if(preview)return;targetPreview=false;await request('command',{action:'xyz',session,sequence:++sequence,control_revision:state.mobile_arm?.control_revision,xyz:{...xyzTarget}});});lastFeed=performance.now();feedReady=value.status==='ready';view?.setFeedConnected(feedReady);viewport.configure(value);syncViewport();view?.applyState(value);syncSceneNotice();$('wave').textContent=value.wave||'—';$('core').textContent=value.core_max_hp?Math.round(value.core_hp/value.core_max_hp*100)+'%':'—';scoreFeedback.update(value);const objective=$('coreObjective'),coreStage=value.core_sequence?.stage;objective.hidden=value.phase!=='running'||!['locked','ring_ready','first_tag'].includes(coreStage);objective.textContent=coreStage==='first_tag'?`Stack the ${value.core_sequence.first_team==='green'?'Purple':'Green'} Atom on the first Atom`:coreStage==='ring_ready'?'Ring complete · place either team’s active Atom on the center':'Complete the ring to unlock the center';$('mode').textContent=value.virtual_play?(value.phase==='setup'?'Ready · waiting for Start':'Development simulation'):'Physical mode';if(value.paused)$('mode').textContent='Paused';if(value.phase==='won')$('mode').textContent='Victory';if(value.phase==='overrun')$('mode').textContent='Core lost';const arm=value.mobile_arm;syncArmControls(arm,value.server_time);if(session&&(value.paused||(!['setup','running'].includes(value.phase)&&value.journey?.active_side!==team&&!value.mobile_calibration_connect)||(value.server_time>=commandStateAt&&(!arm?.connected||arm.controller_id!==controllerId))))suspend(value.virtual_play?'Rejoining virtual controls…':physicalConnectionNotice());if(arm){if(!controlPointers.size&&!pendingJoints&&!inflight){joints=arm.targets.map((v,i)=>i?jointControls.commanded(i,v):(baseGoal??v));updateJoints();}$('height').textContent=arm.tip.z<=80?'At pickup height':'Lower to pick / place';if(!pendingPump&&value.server_time>=pumpStateAt){confirmedPump=pumpModes.includes(arm.pump)?arm.pump:'off';showPump(confirmedPump);}if(session&&!pendingPump)feedback(xyzError||(!transitionAllowsControls()?transitionControlError():arm.message));}drawArm(arm);physicalArm.activate(!value.virtual_play);if(!value.virtual_play)refreshPhysicalArm();turretOverlay.sync();profile(value.mobile_progress);if(!session&&feedReady&&joinWanted)feedback(value.paused?'Game paused. Controls will resume automatically.':canJoin()?'Joining the virtual game automatically…':value.virtual_play?'Waiting for the next virtual game.':physicalConnectionNotice());renderControls();}
+function applyState(value){if(state&&session&&state.mobile_progress?.saved_games?.active_id!==value.mobile_progress?.saved_games?.active_id)suspend('Game changed. Press Connect to use the linked player controls.');mcam1Feed?.update(value.mobile_mcam1);if(state&&state.virtual_play!==value.virtual_play&&session)suspend('Play mode changed. Press Connect to resume.');if(!value.virtual_play)value={...value,mobile_arm:physicalArm.arm()};if(value.virtual_play&&state?.mobile_arm&&value.server_time<commandStateAt)value={...value,mobile_arm:state.mobile_arm};state=value;window.MobileCountdown?.update(value);syncRenderer();syncControlAssignment();document.body.classList.toggle('calibrating',value.journey?.phase==='calibration');window.MobileJourney?.update(value,request,async (target,preview=false)=>{if(!target)throw Error('Guided target unavailable');xyzTarget={x:target.camera[0]*viewport.w,y:target.camera[1]*viewport.h,z:target.pose[2]};targetPreview=preview;updateXYZ();if(preview)return;targetPreview=false;await request('command',{action:'xyz',session,sequence:++sequence,control_revision:state.mobile_arm?.control_revision,xyz:{...xyzTarget}});});lastFeed=performance.now();feedReady=value.status==='ready';view?.setFeedConnected(feedReady);viewport.configure(value);syncViewport();view?.applyState(value);syncSceneNotice();$('wave').textContent=value.wave||'—';$('core').textContent=value.core_max_hp?Math.round(value.core_hp/value.core_max_hp*100)+'%':'—';scoreFeedback.update(value);const objective=$('coreObjective'),coreStage=value.core_sequence?.stage;objective.hidden=value.phase!=='running'||!['locked','ring_ready','first_tag'].includes(coreStage);objective.textContent=coreStage==='first_tag'?`Stack the ${value.core_sequence.first_team==='green'?'Purple':'Green'} Atom on the first Atom`:coreStage==='ring_ready'?'Ring complete · place either team’s active Atom on the center':'Complete the ring to unlock the center';$('mode').textContent=value.virtual_play?(value.phase==='setup'?'Ready · waiting for Start':'Development simulation'):'Physical mode';if(value.paused)$('mode').textContent='Paused';if(value.phase==='won')$('mode').textContent='Victory';if(value.phase==='overrun')$('mode').textContent='Core lost';const arm=value.mobile_arm;syncArmControls(arm,value.server_time);if(session&&(value.paused||(!['setup','running'].includes(value.phase)&&value.journey?.active_side!==team&&!value.mobile_calibration_connect)||(value.server_time>=commandStateAt&&(!arm?.connected||arm.controller_id!==controllerId))))suspend(value.virtual_play?'Rejoining virtual controls…':physicalConnectionNotice());if(arm){if(!controlPointers.size&&!pendingJoints&&!inflight){joints=arm.targets.map((v,i)=>i?jointControls.commanded(i,v):(baseGoal??v));updateJoints();}$('height').textContent=arm.tip.z<=80?'At pickup height':'Lower to pick / place';if(!pendingPump&&value.server_time>=pumpStateAt){confirmedPump=pumpModes.includes(arm.pump)?arm.pump:'off';showPump(confirmedPump);}if(session&&!pendingPump)feedback(xyzError||(!transitionAllowsControls()?transitionControlError():arm.message));}drawArm(arm);physicalArm.activate(!value.virtual_play);if(!value.virtual_play)refreshPhysicalArm();turretOverlay.sync();profile(value.mobile_progress);if(!session&&feedReady&&joinWanted)feedback(value.paused?'Game paused. Controls will resume automatically.':canJoin()?'Joining the virtual game automatically…':value.virtual_play?'Waiting for the next virtual game.':physicalConnectionNotice());renderControls();}
 function showDiagnostics(value){
   window.mobilePerformance=Object.freeze({...value});
 }
@@ -1128,6 +1140,7 @@ function syncRenderer(){
 async function ensureRenderer(){if(!rendererLoading)rendererLoading=new Promise((resolve,reject)=>{const script=document.createElement('script');const url=api('renderer.js');script.src=url+(url.includes('?')?'&':'?')+'v='+encodeURIComponent(document.documentElement.dataset.mobileBuild||'current');script.onload=resolve;script.onerror=()=>{script.remove();rendererLoading=null;reject(Error('Could not load game renderer.'));};document.head.append(script);});await rendererLoading;syncRenderer();}
 let pageActive=true,pendingPresentation=null,presentationFrame=0,presentationTiming=null;
 function queuePresentation(value){
+  if(authEnded)return;
   delayTrace.configure(value.delay_analysis);
   pendingPresentation=value;presentationTiming=delayTrace.begin();
   if(!presentationFrame)presentationFrame=requestAnimationFrame(()=>{presentationFrame=0;const latest=pendingPresentation;pendingPresentation=null;delayTrace.end('browser.presentation_wait',presentationTiming);const timing=delayTrace.begin();try{applyState(latest);}finally{delayTrace.end('browser.apply',timing);}});
@@ -1135,7 +1148,7 @@ function queuePresentation(value){
 const gameState=new MobileGameState({apply:queuePresentation,load:async()=>{const value=await request('state');if(!local)liveFeed.offer(value.live_stream);return value;},error:error=>{connectionLog.record('player','game_state_error',error.message);feedback(error.message,true);}});
 let booting=false;
 const liveFeed=new MobileNetwork.LiveFeed({url:api('events'),receive:(value,partial)=>gameState.receive(value,partial),recover:()=>gameState.recover(),onError:text=>{scoreFeedback.reconnect();connectionLog.record('player','game_stream_error',text);feedback(text,true);}});
-function openEvents(){liveFeed.start();}
+function openEvents(){if(!authEnded)liveFeed.start();}
 async function boot(){
   if(booting)return;booting=true;
   try{
@@ -1153,27 +1166,27 @@ async function boot(){
   catch(e){feedback(e.message,true);setTimeout(()=>{if(!$('login').open&&!document.hidden)boot();},4000);}
   finally{booting=false;}
 }
-$('loginForm').onsubmit=async e=>{e.preventDefault();try{await request('login',{password:$('password').value});$('password').value='';$('loginError').textContent='';$('login').close();await boot();}catch(error){$('loginError').textContent=error.message;}};
+$('loginForm').onsubmit=async e=>{e.preventDefault();try{await request('login',{password:$('password').value});$('password').value='';$('loginError').textContent='';$('login').close();authEnded=false;joinWanted=true;joinRetryAt=0;await boot();}catch(error){$('loginError').textContent=error.message;}};
 $('levelsOpen').onclick=()=>{if(available())chooseControl(controlMode);else feedback('Connect to select controls.');$('levels').showModal();};$('levelsClose').onclick=()=>$('levels').close();
 $('openPlayers').onclick=()=>{$('levels').close();window.MobileJourney.open();};
 $('expand').onclick=async()=>{if(session)suspend('Restoring controls after the view change…');if(document.fullscreenElement){await document.exitFullscreen();return;}if(window.parent!==window){window.parent.postMessage({type:'mobile-ltz:expand',expanded:!$('app').classList.contains('expanded')},location.origin);$('app').classList.toggle('expanded');$('expand').innerHTML=$('app').classList.contains('expanded')?'⤡ <span>Return</span>':'⤢ <span>Expand</span>';}else if($('app').requestFullscreen){try{await $('app').requestFullscreen();}catch{$('app').classList.toggle('expanded');}}else{$('app').classList.toggle('expanded');$('expand').innerHTML=$('app').classList.contains('expanded')?'⤡ <span>Return</span>':'⤢ <span>Expand</span>';}syncViewport();};
 function resized(){cueTap=null;perspectiveDrag=null;if(controlPointers.size||targetDrag)suspend('Restoring controls after resizing…');syncViewport();}new ResizeObserver(resized).observe(battlefield);window.visualViewport?.addEventListener('resize',resized);document.addEventListener('fullscreenchange',()=>{syncViewport();$('expand').innerHTML=document.fullscreenElement?'⤡ <span>Return</span>':'⤢ <span>Expand</span>';});
 document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){mcam1Feed.expires=0;mcam1Feed.stop();}
+  if(document.hidden&&mcam1Feed){mcam1Feed.expires=0;mcam1Feed.stop();}
   if(document.hidden){liveFeed.stop();feedReady=false;turretOverlay.stopVideo();showFps(null);if(session)suspend('Paused while away. Controls will resume automatically.');}
   else if(state&&!$('login').open){gameState.recover();openEvents();}
 });
 window.addEventListener('blur',()=>{cueTap=null;perspectiveDrag=null;if((controlPointers.size||targetDrag||jointControls.moving)&&session)suspend('Controls paused after focus changed.');});
 window.addEventListener('pagehide',()=>{
   pageActive=false;
-  mcam1Feed.expires=0;mcam1Feed.stop();
+  if(mcam1Feed){mcam1Feed.expires=0;mcam1Feed.stop();}
   connectionLog.record('player','page_hidden','Page closed, navigated away or entered the back/forward cache.');
   if(session){const token=session;generation++;session=null;clearInput();if(token.startsWith('physical:'))physicalArm.stop();else navigator.sendBeacon(api('command'),new Blob([JSON.stringify({action:'suspend',session:token})],{type:'application/json'}));}
   liveFeed.stop();turretOverlay.stopVideo();view?.destroy();view=null;showFps(null);
   connectionLog.persist();connectionLog.flush();
 });
 setInterval(async()=>{
- mcam1Feed.tick();
+ mcam1Feed?.tick();
  if(gameState.needsLevel())gameState.recover();
  if(feedReady&&performance.now()-lastFeed>2500){feedReady=false;view?.setFeedConnected(false);if(session)suspend('Reconnecting to the live game automatically…');renderControls();}
  if(state&&!document.hidden&&!$('login').open)liveFeed.tick(!feedReady);

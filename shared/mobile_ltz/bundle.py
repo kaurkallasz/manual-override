@@ -7,6 +7,6 @@ HELPERS=('delay-trace.js','connection-log.js','operation-id.js','journey.js','mi
 
 def assemble(root=ROOT):
     files={name:(root/name).read_text() for name in CLIENT_FILES}
-    files['mobile.js']='\n'.join([(UI/'shop.js').read_text(),(UI/'score-feedback.js').read_text(),(UI/'marker-presence.js').read_text(),*((root/name).read_text() for name in HELPERS),files['mobile.js']])
+    files['mobile.js']='\n'.join([(UI/'movement.js').read_text(),(UI/'shop.js').read_text(),(UI/'score-feedback.js').read_text(),(UI/'marker-presence.js').read_text(),*((root/name).read_text() for name in HELPERS),files['mobile.js']])
     files['mobile.css']+='\n'+(UI/'shop.css').read_text()
     return files

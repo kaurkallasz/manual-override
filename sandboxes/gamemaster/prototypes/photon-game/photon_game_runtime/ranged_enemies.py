@@ -91,7 +91,8 @@ class RangedCombat:
     def geometry(self):
         e = self.e
         self.targets = {}
-        for sid, tower in e.placements.items():
+        for tower in e.combat_towers():
+            sid = tower["socket_id"]
             if (tower.get('destroyed') or tower.get('deactivated')) or tower.get('hp', 0) <= 0:
                 continue
             for pod, body in [('primary', tower), ('companion', tower.get('companion'))]:
@@ -255,7 +256,7 @@ class RangedCombat:
                 self.stats['core_damage'] += actual
                 self.stats['core_destructions'] += int(was_alive and e.core_hp <= 0)
             else:
-                tower = e.placements.get(target['socket_id'])
+                tower = e.combat_tower(target['socket_id'])
                 body = self.targets.get(target['key'])
                 if not tower or (tower.get('destroyed') or tower.get('deactivated')) or not body or body['instance'] != target['instance']:
                     self.stats['misses'] += 1

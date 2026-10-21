@@ -24,17 +24,31 @@ class MobileMcam1Tests(unittest.TestCase):
     def get(self, path='assets/mcam1.jpg', side='green', role=None):
         return self.client.get('/api/'+path+'?side='+side, environ_overrides={'hhh.roles':{role or side}})
 
-    def test_both_players_receive_read_only_uncached_frames(self):
-        for side in ('green', 'purple'):
-            response = self.get(side=side)
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.data, self.frame['image'])
-            self.assertEqual(response.mimetype, 'image/jpeg')
-            self.assertIn('no-store', response.headers['Cache-Control'])
+    def test_green_receives_read_only_uncached_frames(self):
+        response = self.get(side='green')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, self.frame['image'])
+        self.assertEqual(response.mimetype, 'image/jpeg')
+        self.assertIn('no-store', response.headers['Cache-Control'])
         self.assertEqual(self.get(side='purple', role='green').status_code, 403)
         self.assertEqual(self.client.get('/api/assets/mcam1.jpg').status_code, 403)
         self.assertEqual(self.client.post('/api/assets/mcam1.jpg').status_code, 405)
-        self.assertEqual(self.camera.still_snapshot.call_count, 2)
+        self.assertEqual(self.camera.still_snapshot.call_count, 1)
+
+    def test_purple_waits_for_mcam2_without_reading_mcam1(self):
+        self.context.get_prototype = Mock(side_effect=AssertionError('Purple must not read MCAM1'))
+        for role in ('purple', 'gamemaster'):
+            response = self.get(side='purple', role=role)
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json['status'], 'unavailable')
+            self.assertIn('MCAM2', response.json['error'])
+        with patch.object(self.facade, '_game', return_value=(None, dict(status='ready', virtual_play=True))):
+            response = self.get('state', 'purple')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json['status'], 'ready')
+            self.assertEqual(response.json['mobile_mcam1']['status'], 'unavailable')
+        self.context.get_prototype.assert_not_called()
+        self.camera.still_snapshot.assert_not_called()
 
     def test_enabled_check_precedes_discovery_and_does_not_block_game(self):
         self.context.is_prototype_enabled = lambda slug:False
@@ -50,7 +64,7 @@ class MobileMcam1Tests(unittest.TestCase):
         self.context.get_prototype.assert_not_called()
 
     def test_ready_projection_contains_metadata_without_image_bytes(self):
-        value, image = self.facade.mcam1_view.snapshot(self.facade._module)
+        value, image = self.facade.mcam1_view.snapshot(self.facade._module, 'green')
         self.assertEqual((value['contract'], value['version'], value['status']), ('mobile.mcam1', 1, 'ready'))
         self.assertEqual((value['width'], value['height']), (480, 320))
         self.assertNotIn('image', value)

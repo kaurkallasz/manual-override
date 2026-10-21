@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from level_layout import layout_revision
+from atom_home_layout import parse as parse_atom_homes
 from companion_layout import descriptor as companion_descriptor, validate_clearance
 
 RING_MIN_TURRETS = 8
@@ -572,6 +573,7 @@ def parse_tiled_level(map_path: str | Path) -> dict[str, Any]:
             if node.get("node_kind") in {"junction", "arrival", "turnaround"}
         ],
         "sockets": sockets,
+        "atom_homes": parse_atom_homes(data, width, height, sockets),
         "core_visual": {
             "x": core_x, "y": core_y,
             "marker_x": core_marker_x, "marker_y": core_marker_y,
@@ -615,6 +617,7 @@ def simple_level(runtime: dict[str, Any]) -> dict[str, Any]:
             }
             for socket in sorted(runtime["sockets"].values(), key=lambda item: item["aruco_id"])
         ],
+        "atom_homes": runtime.get("atom_homes", []),
         "core": dict(runtime["core_visual"]),
         "scene": json.loads(json.dumps(runtime["visual_scene"])),
     }

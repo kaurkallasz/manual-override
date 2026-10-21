@@ -1,0 +1,30 @@
+const assert=require('node:assert/strict');
+const {timedSegment,projection,html,heatmapAt,recentKills}=require('../shared/ltz_ui/movement.js');
+const points=[[0,0,0,0],[10,100,200,50],[20,200,100,0]];
+assert.deepEqual(timedSegment(points,5),[[0,0,0,0],[5,50,100,25]]);
+assert.deepEqual(timedSegment(points,-1),[]);
+assert.deepEqual(timedSegment(points,25),points);
+assert.deepEqual(timedSegment([[40,1,2,3],[60,2,3,4]],30),[]);
+assert.match(html(null,'older'),/Movement was not recorded/);
+const p=projection([100,0,0],{yaw:Math.PI/2,pitch:Math.PI/2},[0,0,0]);
+assert(Math.abs(p[0])<1e-8);assert(Math.abs(p[1]-100)<1e-8);
+console.log('PASS: timed interpolation, gaps, legacy results, and 3D rotation');
+
+const heat={columns:2,rows:1,width:100,height:50,core:[50,25],counts:[3,1],unlocated:2,timeline:{version:1,bin_seconds:1,events:[[10,0,1],[20,1,1],[30,0,2],[30,-1,2]]}};
+assert.deepEqual(heatmapAt(heat,0),{counts:[0,0],unlocated:0});
+assert.deepEqual(heatmapAt(heat,20),{counts:[1,1],unlocated:0});
+assert.deepEqual(heatmapAt(heat,30),{counts:[3,1],unlocated:2});
+assert.deepEqual(heatmapAt(heat,15),{counts:[1,0],unlocated:0});
+const legacy={...heat};delete legacy.timeline;
+assert.deepEqual(heatmapAt(legacy,0),{counts:[3,1],unlocated:2});
+assert.match(html(null,'heat-only',heat,600),/<canvas/);
+assert.match(html(null,'legacy',legacy,600),/Kill timing was not recorded/);
+for(const speed of [20,50,100])assert.match(html(null,'heat-only',heat,600),new RegExp('value="'+speed+'"'));
+console.log('PASS: heatmap timing, rewind, unlocated kills, legacy floor and speed choices');
+
+assert.deepEqual([...recentKills(heat,20,7)],[[1,1]]);
+assert.deepEqual([...recentKills(heat,25,7)],[[1,1-5/7]]);
+assert.deepEqual([...recentKills(heat,28,7)],[]);
+assert.deepEqual([...recentKills(heat,30,7)],[[0,1]]);
+assert.deepEqual([...recentKills(legacy,30,7)],[]);
+console.log('PASS: synchronized kill flashes, fade, seek and legacy timing');

@@ -100,7 +100,14 @@ spikes/cursors, 15-second expiry, missing intervals and module restarts.
 ## Optional MCAM1 presentation
 
 Player state/SSE includes `mobile_mcam1` (`mobile.mcam1`, integer version 1).
-The facade discovers enabled MCAM1 through hub context and validates its
+Camera assignment is **Green → MCAM1; Purple → MCAM2**. Only Green can receive
+MCAM1 metadata and frames. Purple's `mobile_mcam1` is explicitly unavailable and
+its `GET /api/assets/mcam1.jpg?side=purple` returns 503 without reading MCAM1.
+MCAM2 is reserved for Purple and is not implemented yet. When it is available,
+add its own validated still projection and team-authenticated JPEG route, then
+wire Purple's inset to them; never substitute MCAM1 footage.
+
+For Green, the facade discovers enabled MCAM1 through hub context and validates its
 published `hhh.camera.still` v1 output, JPEG bytes, dimensions and 1.5-second
 freshness limit. Only metadata enters game state. `GET /api/assets/mcam1.jpg`
 revalidates the frame and returns uncached JPEG bytes under the existing player

@@ -181,7 +181,7 @@ _arb_lock = threading.Lock()
 _token_counter = 0             # bumps on every acquire → opaque per-side tokens
 # Per side: who (if anyone) holds it, the mode they acquired with, and their lease.
 _sides = {
-    s: {"present": False, "last_seen": 0.0, "token": None, "mode": "joint", "motion_epoch": None}
+    s: {"present": False, "last_seen": 0.0, "token": None, "mode": "joint", "motion_epoch": None, "player_session": None}
     for s in SIDES
 }
 
@@ -199,10 +199,28 @@ def _serialize_arm_control(fn):
             return fn(*args, **kwargs)
         with _arm_locks[side]:
             try:
+                denied = _player_access_guard()
+                if denied is not None: return denied
                 return fn(*args, **kwargs)
             except DobotError as exc:
                 return _fail(str(exc), code='motion_resync_required')
     return wrapped
+
+
+@bp.before_request
+def _player_access_guard():
+    access = getattr(_hub_ctx, 'player_sessions', None)
+    if access is None: return None
+    sid = request.environ.get('hhh.player_session')
+    if sid and not access.active(sid):
+        return _fail('Player session ended. Scan a current QR code.'), 401
+    action = request.path.rsplit('/', 1)[-1]
+    safe = action in ('stop', 'hold', 'release', 'kick', 'disconnect', 'heartbeat')
+    safe = safe or action == 'connect' and _is_operator_request()
+    safe = safe or action == 'pump' and (request.get_json(silent=True) or {}).get('mode') == 'off'
+    if access.blocked and request.method == 'POST' and not safe:
+        return _fail('Clean reset pending. Player controls are blocked.'), 409
+    return None
 
 
 def _redact_payload(value):
@@ -689,6 +707,24 @@ def arms_snapshot():
         "observed_at": time.time(),
         "arms": {side: _arm_dict(side) for side in SIDES},
     }
+
+
+def player_control_sessions():
+    """Read-only ownership for Hub presence; never expose relay lease tokens."""
+    with _arb_lock:
+        return {'contract': 'hhh.relay.player-sessions', 'version': 1, 'status': 'ready',
+                'sessions': {side: state['player_session'] for side, state in _sides.items()
+                             if state['token'] is not None and state.get('player_session')},
+                'leased_sides': [side for side, state in _sides.items() if state['token'] is not None]}
+
+
+def revoke_player_controls():
+    """Invalidate both leases after queued arm commands finish; Game owns Stop."""
+    for side in SIDES:
+        with _arm_locks[side], _arb_lock:
+            _sides[side].update(token=None, present=False, player_session=None)
+    _live.bump()
+    return {'contract': 'hhh.relay.player-sessions', 'version': 1, 'status': 'ready', 'released': True}
 
 
 def stop_side(side):
@@ -1227,6 +1263,10 @@ def _check_token(data):
     with _arb_lock:
         if _sides[side]["token"] is None or token != _sides[side]["token"]:
             return None, "stale token"
+        access = getattr(_hub_ctx, 'player_sessions', None)
+        sid = _sides[side].get('player_session')
+        if sid and access and not access.active(sid):
+            return None, 'Player session ended'
         _touch_locked(side)
     return side, None
 
@@ -1258,6 +1298,7 @@ def acquire():
         _sides[side]["token"] = token
         _sides[side]["mode"] = mode
         _sides[side]["motion_epoch"] = motion_epoch
+        _sides[side]['player_session'] = request.environ.get('hhh.player_session')
         _touch_locked(side)
     # A lease grants no movement. Only a fully validated move starts a follower.
     _live.bump()
@@ -1438,6 +1479,7 @@ def move():
 
 
 @bp.route("/api/pump", methods=["POST"])
+@_serialize_arm_control
 def pump():
     """Set this side's air pump (suck|blow|off). Requires a valid (side, token)."""
     data = request.json or {}

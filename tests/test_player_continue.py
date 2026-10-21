@@ -99,6 +99,101 @@ class PlayerContinueTests(unittest.TestCase):
         self.assertEqual(self.g._engine.phase, 'won')
         self.assertEqual(self.g._journey.snapshot()['ready'], {})
 
+    def restart_after_interruption(self, outcome=None):
+        run = self.start()
+        engine = self.g._engine
+        with engine.lock:
+            for _ in range(13):
+                engine.rewards.killed({'enemy_type':'grunt','hp':0,'x':400,'y':250,'kill_owner':'green'})
+                engine.kills += 1
+                engine.next_enemy_id += 1
+        # A crash keeps the last checkpoint; a clean shutdown saves a terminal
+        # receipt. Neither path grants a win or advances the saved level.
+        self.g._progress.last_checkpoint = 0
+        self.g._progress.flush(outcome=outcome)
+        before = copy.deepcopy(self.g._progress.roster())
+        old = self.g._progress
+        old.stop()
+        self.g._progress = self.g.ProgressLink(old.module_reader, old.engine_reader,
+            old.wake, old.path, old.result_listener, old.tick)
+        journey = self.g._journey
+        self.g._journey = self.g.Journey(journey.path, journey.module_reader, journey.wake)
+        engine.reset(); self.g._run_id = None
+        self.g._progress.roster()
+        self.g._journey_tick()
+        return run, before
+
+    def assert_recovered_retry(self, outcome=None):
+        run, before = self.restart_after_interruption(outcome)
+        owner = self.g._module('photon-progress')
+        self.assertEqual(owner.attempt_snapshot(run)['attempt']['outcome'], outcome or 'interrupted')
+        for side in ('green', 'purple'):
+            # Refresh reads only state; it must not acknowledge or start a run.
+            state = self.c.get('/s/gamemaster/p/mobile-ltz-api/api/state?side='+side).get_json()
+            self.assertEqual(state['journey']['phase'], 'results')
+            self.assertTrue(state['mobile_progress']['latest_result']['saved'])
+            self.assertEqual(state['journey']['ready'], {})
+        self.ready('green', run)
+        self.assertEqual(self.g._engine.phase, 'setup')
+        self.ready('purple', run)
+        new_run = self.g._run_id
+        self.assertNotEqual(new_run, run)
+        self.assertEqual(self.g._engine.phase, 'running')
+        after = self.g._progress.roster()
+        self.assertEqual(after['saved_games']['active_id'], before['saved_games']['active_id'])
+        self.assertEqual(after['saved_games']['active']['level'], 1)
+        self.assertEqual(len(after['active_attempts']), 1)
+        for side in ('green', 'purple'):
+            self.assertEqual(after['roster'][side]['credits'], 13)
+            for key in ('credits', 'wins', 'levels'):
+                self.assertEqual(after['roster'][side][key], before['roster'][side][key])
+        self.ready('purple', run)
+        self.assertEqual(self.g._run_id, new_run)
+
+    def test_saved_interruption_can_retry_same_level_after_restart_and_refresh(self):
+        self.assert_recovered_retry('interrupted')
+
+    def test_crash_checkpoint_can_retry_same_level_after_restart_and_refresh(self):
+        self.assert_recovered_retry()
+
+    def test_saved_abort_can_retry_same_level_after_restart_and_refresh(self):
+        self.assert_recovered_retry('aborted')
+
+    def test_recovered_result_for_other_pair_or_event_cannot_mark_ready(self):
+        run, _ = self.restart_after_interruption('interrupted')
+        owner = self.g._module('photon-progress')
+        original = owner.attempt_snapshot(run)
+        for key in ('event_id', 'game_id'):
+            receipt = copy.deepcopy(original); receipt['attempt'][key] = 'other'
+            with self.subTest(key=key), patch.object(owner, 'attempt_snapshot', return_value=receipt):
+                with self.assertRaisesRegex(ValueError, 'another saved pair or event'):
+                    self.ready('green', run)
+            self.assertEqual(self.g._journey.snapshot()['ready'], {})
+            self.assertEqual(self.g._engine.phase, 'setup')
+
+    def test_disagreement_keeps_choices_until_both_choose_the_same_action(self):
+        run, _ = self.restart_after_interruption('interrupted')
+        selections = {}
+        for side, choice in (('green','continue'), ('purple','replay_level'),
+                             ('green','new'), ('purple','continue')):
+            selections[side] = choice
+            self.g.mobile_journey_command(side, {'action':'ready','choice':choice,
+                                                'event_id':self.event,'run_id':run})
+            for viewer in ('green','purple'):
+                state = self.c.get('/s/gamemaster/p/mobile-ltz-api/api/state?side='+viewer).get_json()
+                self.assertEqual({s:a['choice'] for s,a in state['journey']['ready'].items()}, selections)
+                self.assertFalse(state['journey']['readiness']['all_ready'])
+                self.assertEqual(state['journey']['phase'], 'results')
+                self.assertIsNone(state['journey']['auto_start'])
+            self.assertEqual(self.g._engine.phase, 'setup')
+            self.assertEqual(self.g._progress.roster()['active_attempts'], [])
+        self.ready('green', run)
+        self.assertEqual(self.g._engine.phase, 'running')
+        new_run = self.g._run_id
+        self.ready('purple', run)
+        self.assertEqual(self.g._run_id, new_run)
+        self.assertEqual(len(self.g._progress.roster()['active_attempts']), 1)
+
     def prepare_l3(self):
         self.start()
         run = self.finish(); self.ready('green', run); self.ready('purple', run)

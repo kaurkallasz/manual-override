@@ -15,7 +15,9 @@ class RangedBreakerTests(unittest.TestCase):
         cls.bundle = load('photon-level').runtime_bundle()
 
     def engine(self, **settings):
-        e = self.game.DefenseEngine(self.bundle['runtime'], self.bundle['waves'])
+        # Synthetic archer/target layouts deliberately have no home defenses.
+        # Production home targeting is covered by test_starter_defenses.
+        e = self.game.DefenseEngine({**self.bundle['runtime'], 'atom_homes': []}, self.bundle['waves'])
         e.set_virtual_play(True)
         e.start({'breaker_attack_mode': 'ranged', 'first_wave_delay_s': 1500,
                  'enemy_tower_damage_multiplier': 1, 'enemy_core_damage_multiplier': 1, **settings})

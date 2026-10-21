@@ -20,9 +20,10 @@ async function api(path,value){const r=await fetch(base+path,value?{method:'POST
    await p.locator('.ltzLevelResult h2').filter({hasText:'You Win! Game Over'}).waitFor();
    assert.equal(await p.locator('[data-result-choice="continue"]').count(),0);
    assert.equal(await p.locator('[data-result-choice]').count(),3);
-   const map=p.locator('.ltzLevelResult .ltzHeatmap');await map.evaluate(e=>e.scrollIntoView({block:'center'}));
+   const map=p.locator('.ltzLevelResult .ltzMovement');await map.evaluate(e=>e.scrollIntoView({block:'center'}));
    assert.match(await map.textContent(),/30 in one area/);assert.match(await map.textContent(),/35 orcs mapped/);
-   assert.equal(await map.locator('rect').count(),3);
+   assert.equal(await map.locator('canvas').count(),1);assert.equal(await p.locator('.ltzLevelResult .ltzHeatmap').count(),0);
+   await map.locator('input').fill('140');assert.equal(await map.locator('canvas').getAttribute('data-heat-kills'),'35');
    assert(await map.evaluate(e=>e.scrollWidth<=e.clientWidth+2));
   }
   await purple.screenshot({path:output+'/victory-heatmap-portrait.png'});
@@ -42,7 +43,7 @@ async function api(path,value){const r=await fetch(base+path,value?{method:'POST
      try{await p.locator('.ltzPendingResult h2').filter({hasText:'You Win! Game Over'}).waitFor();}
      catch(error){console.error('Pending result failure',p.url(),await p.locator('#journeyContent,#tracks').textContent(),errors);throw error;}
      assert.equal(await p.locator('[data-result-choice]:enabled').count(),0);
-     assert.match(await p.locator('.ltzPendingResult .ltzHeatmap').textContent(),/35 orcs mapped/);
+     assert.match(await p.locator('.ltzPendingResult .ltzMovement').textContent(),/35 orcs mapped/);
     }
     await purple.reload();await purple.locator('.ltzPendingResult h2').filter({hasText:'You Win! Game Over'}).waitFor();
     await purple.screenshot({path:output+'/victory-save-pending.png'});
@@ -69,7 +70,7 @@ async function api(path,value){const r=await fetch(base+path,value?{method:'POST
   await api('/__test/ring/repair',{});await green.locator('.ltzRingNotice').filter({hasText:'Ring activated!'}).waitFor();
   await api('/__test/finish',{});
   for(const p of [green,purple])await p.locator('.ltzLevelResult h2').filter({hasText:'Level 1 complete'}).waitFor();
-  assert.match(await green.locator('.ltzLevelResult .ltzHeatmap').textContent(),/No orcs were killed/);
+  assert.match(await green.locator('.ltzLevelResult .ltzMovement').textContent(),/No orcs were killed/);
   for(const p of [green,purple])await p.locator('[data-result-choice="new"]').click();
   for(const p of [green,purple])await p.locator('#journeyNewName').waitFor();
   assert.equal(Object.keys((await api('/s/gamemaster/p/photon-progress/api/state?side=green')).roster).length,0);

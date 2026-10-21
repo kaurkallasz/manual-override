@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
 <title>__LABEL__ — Login</title>
 <style>
   :root {
@@ -46,9 +47,46 @@
   <span class="sub">enter this sandbox's password</span>
   <input type="password" name="password" placeholder="password" autofocus
          autocomplete="current-password" />
-  <div class="err">__ERROR__</div>
+  <div class="err" role="status" aria-live="polite">__ERROR__</div>
   <button type="submit">Enter</button>
   <a class="home" href="/">← all sandboxes</a>
 </form>
+<script>
+// Invitations arrive in the fragment, which is removed before making requests.
+(async () => {
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  if (!fragment.has('join')) return;
+  const token = fragment.get('join');
+  history.replaceState(null, '', location.pathname + location.search);
+  const match = location.pathname.match(/^\/s\/(green|purple)\/login$/);
+  if (!match) return;
+  const next = `/s/${match[1]}/p/mobile-ltz/`;
+  const form = document.querySelector('form');
+  const status = document.querySelector('[role="status"]');
+  const fields = [...form.querySelectorAll('input,button')];
+  // Manual login remains useful if a link expires or JavaScript networking fails.
+  form.action = location.pathname + '?next=' + encodeURIComponent(next);
+  status.textContent = `Signing in to ${match[1] === 'green' ? 'Green' : 'Purple'}…`;
+  fields.forEach(field => { field.disabled = true; });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(location.pathname + '/join', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token}), signal: controller.signal,
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw Error(data.error || 'Could not sign in. Scan again or enter your team password.');
+    if (data.next !== next) throw Error('Unexpected join destination. Enter your team password.');
+    location.replace(next);
+  } catch (error) {
+    status.textContent = controller.signal.aborted
+      ? 'Sign-in timed out. Scan again or enter your team password.'
+      : error.message;
+    fields.forEach(field => { field.disabled = false; });
+    form.querySelector('input').focus();
+  } finally { clearTimeout(timeout); }
+})();
+</script>
 </body>
 </html>

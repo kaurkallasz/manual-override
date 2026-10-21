@@ -51,7 +51,7 @@ class MatchRewards:
         self.e.telemetry['horde']=self.horde
 
     def killed(self,enemy):
-        self.heatmap.killed(enemy)
+        self.heatmap.killed(enemy, self.e.sim_time)
         kind=enemy['enemy_type'];self.counts[kind]+=1
         (self.purge if enemy.get('death_cause')=='core_purge' else self.combat)[kind]+=1
         self.credits+=(self.rule['values'] if self.rule else {k:DEFAULTS['reward_'+k] for k in TYPES})[kind]

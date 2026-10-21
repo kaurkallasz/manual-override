@@ -136,14 +136,41 @@ def _camera_preview():
         return dict(result, error=str(exc))
 
 
-def _with_markers(response, *, preview=False):
+def _scoreboard_link():
+    """Read only the Progress owner's public, credential-free link contract."""
+    unavailable = {'contract': 'photon.scoreboard-link', 'version': 1, 'status': 'unavailable'}
+    try:
+        owner = _module('photon-progress')
+        if owner is None or not callable(getattr(owner, 'scoreboard_link_snapshot', None)):
+            return unavailable
+        value = owner.scoreboard_link_snapshot()
+        if (not isinstance(value, dict) or value.get('contract') != 'photon.scoreboard-link'
+                or type(value.get('version')) is not int or value['version'] != 1
+                or value.get('status') != 'ready'
+                or value.get('state') not in ('linked', 'unlinked', 'submitting', 'pending',
+                    'cancelling', 'cancelled', 'rejected', 'expired', 'revoked')
+                or type(value.get('upload_delayed')) is not bool):
+            return unavailable
+        return {key: value[key] for key in ('contract', 'version', 'status', 'state', 'upload_delayed')}
+    except Exception:
+        return unavailable
+
+
+def _with_markers(response, *, preview=False, scoreboard=False):
     """Multiplex display diagnostics/pixels onto the existing Game SSE connection."""
     def stream():
         next_sample, previous = 0, None
+        next_score, previous_score, score_sent = 0, None, 0
         try:
             for chunk in response.iter_encoded():
                 yield chunk
                 now = time.monotonic()
+                if scoreboard and now >= next_score:
+                    next_score = now + 2
+                    payload = json.dumps(_scoreboard_link(), allow_nan=False, separators=(",", ":"))
+                    if payload != previous_score or now - score_sent >= 10:
+                        previous_score, score_sent = payload, now
+                        yield ("event: scoreboard\ndata: " + payload + "\n\n").encode()
                 if now < next_sample:
                     continue
                 next_sample = now + 0.2
@@ -211,6 +238,9 @@ def renderer_response():
     return _renderer_bundle()
 
 
+@bp.route("/scoreboard-notice.js")
+@bp.route("/player-join.js")
+@bp.route("/player-join.css")
 @bp.route("/calibration-display.js")
 @bp.route("/calibration-display.css")
 @bp.route("/calibration-history.js")
@@ -258,6 +288,11 @@ def state_api():
 
 @bp.route("/api/events")
 def events_api():
+    scoreboard = request.args.get('scoreboard') == '1'
+    if scoreboard:
+        denied = _operator_only()
+        if denied:
+            return denied
     game, error = _game()
     if game is None or not callable(getattr(game, "game_events", None)):
         return Response(
@@ -265,7 +300,7 @@ def events_api():
             status=503, mimetype="text/event-stream",
         )
     response = game.game_events(incremental=True)
-    return _with_markers(response, preview=request.args.get("preview") == "1") if request.args.get("markers") == "1" else response
+    return _with_markers(response, preview=request.args.get("preview") == "1", scoreboard=scoreboard) if request.args.get("markers") == "1" or scoreboard else response
 
 
 @bp.route("/api/command", methods=["POST"])

@@ -241,7 +241,7 @@ def mobile_snapshot(side='green'):
     value['mobile_arm'] = arms.get(side, value.get('mobile_arm') if side == 'green' else None)
     value['mobile_team'] = side
     value['mobile_motion_policy'] = _motion_policy(game, side)
-    value['mobile_mcam1'] = trace.call('mobile.mcam1', mcam1_view.snapshot, _module)[0]
+    value['mobile_mcam1'] = trace.call('mobile.mcam1', mcam1_view.snapshot, _module, side)[0]
     if value.get('presentation'):
         value['presentation']={**value['presentation'],'assets':{**value['presentation'].get('assets',{}),**trace.call('mobile.shop_assets', shop_assets)}}
     value['mobile_camera'] = camera_view(value) if not value.get('virtual_play') else {'status':'unused'}
@@ -597,9 +597,9 @@ def mobile_renderer_api():
 
 @bp.route('/api/assets/<path:filename>')
 def mobile_asset_api(filename):
-    _mobile_guard()
+    side = _mobile_guard()
     if filename == 'mcam1.jpg':
-        descriptor, image = mcam1_view.snapshot(_module)
+        descriptor, image = mcam1_view.snapshot(_module, side)
         if image is None:
             return jsonify(descriptor), 503
         return Response(image, mimetype='image/jpeg', headers={'Cache-Control':'no-store'})

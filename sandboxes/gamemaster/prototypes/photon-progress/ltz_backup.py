@@ -5,6 +5,7 @@ from ltz_records import encoded, integer, identifier, finite
 from ltz_economy import TRACKS, catalog, state
 from ltz_rewards import validate as validate_reward
 from linked_games import validate as validate_game
+from movement_results import validate_movement
 from level_results import validate_statistics, validate_heatmap
 
 SCHEMA=5
@@ -107,7 +108,8 @@ class BackupStore:
             if a['result']['outcome']!=a['outcome'] or a['result']['kills']!=a['kills']:raise ValueError('Invalid saved result')
             credits,bonus,reward=validate_reward(a,a['result'],True)
             validate_statistics(a)
-            validate_heatmap(a['result'].get('kill_heatmap'),a['kills'])
+            validate_heatmap(a['result'].get('kill_heatmap'),a['kills'],a['result']['active_seconds'])
+            validate_movement(a['result'].get('robot_movement'))
             if (credits,bonus,reward)!=(a.get('kill_credits'),a.get('bonus_credits',0),a.get('reward')):raise ValueError('Invalid reward evidence')
             costs=catalog(db,a['catalog_revision'])['prices']
             for member in a['participants']:

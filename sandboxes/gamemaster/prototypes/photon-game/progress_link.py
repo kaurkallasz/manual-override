@@ -104,6 +104,7 @@ class ProgressLink:
                 reward=engine.rewards.checkpoint(final=phase in ('won','overrun','operator_ended') or outcome is not None,outcome=outcome) if hasattr(engine,'rewards') else None
                 telemetry=json.loads(json.dumps(getattr(engine,'telemetry',{})))
                 heatmap=engine.rewards.heatmap.snapshot() if hasattr(getattr(engine,'rewards',None),'heatmap') else None
+                movement=engine.robot_movement.snapshot(engine.sim_time) if (phase in ('won','overrun','operator_ended') or outcome is not None) and hasattr(engine,'robot_movement') else None
             final = phase in ('won', 'overrun', 'operator_ended') or outcome is not None
             if not self.pending:
                 if not final and time.monotonic() - self.last_checkpoint < 30:
@@ -116,6 +117,7 @@ class ProgressLink:
                     value.update(outcome=phase if phase in ('won', 'overrun', 'operator_ended') else outcome,
                                  active_seconds=seconds, finished_at=time.time(), released_orcs=released,telemetry=telemetry)
                     if heatmap is not None:value['kill_heatmap']=heatmap
+                    if movement is not None:value['robot_movement']=movement
                     self.pending = value
             else:
                 value = self.pending
