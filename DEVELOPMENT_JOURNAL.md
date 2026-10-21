@@ -4190,3 +4190,88 @@ creating Green/Purple stop obligations even though neither robot was connected.
   admission blocked until restarting and retrying the same reset through the
   normal authenticated endpoint. The reset completed, the lobby remained in
   setup, admission reopened, and both fresh QR codes became available.
+
+
+## 2026-10-21 — Fix false stale arm feedback on Green's phone
+
+Human reported “Fresh, settled arm feedback required” when Green connected.
+Codex traced the message to the shared mobile bridge's comparison of a hub
+feedback timestamp with the phone's `Date.now()`.
+
+- The Green connection diagnostic received at 16:07:35 Tallinn time reported
+  connected/enabled idle mode, `feedback_ok=true` and `motion_ready=true`, yet
+  the phone calculated 2,278 ms of feedback age. Its event timestamp was
+  2,146 ms ahead of the server's later receipt. This demonstrated a clock offset,
+  rather than the relay failing to supply settled feedback. Read-only live relay
+  status also showed fresh measurements and no controller alarms.
+- The bridge now compares feedback with Game's server clock and advances age
+  using monotonic browser elapsed time. Repeated copies retain accumulated age;
+  missing/expired clock evidence and stale or invalid feedback still fail closed.
+  Relay enable/synchronization, motion epochs, leases and movement checks were
+  unchanged. The fix applies to Green and Purple.
+- Reproduced the exact connection failure in a simulated bridge with a phone
+  clock 2.2 seconds ahead before fixing it. All 44 focused JavaScript tests now
+  pass, including eight clock regressions. Both complete Green/Purple bridge
+  smoke runs pass. Updated that older fixture to give Game and robot readings
+  the same simulated server clock.
+- All 28 relay reconnect/feedback/mobile calibration safety Python tests pass.
+  A broader 43-test run also included `test_mobile_teams`: 41 passed, while two
+  unchanged simulation cases failed (removed virtual-game command endpoint and
+  Purple simulated pickup geometry). These were not altered for this fix.
+- No physical arm commands, live connects, hub restarts or calibration changes
+  were performed. The bridge is served from disk with `Cache-Control: no-store`,
+  so a player-page reload loads the fix. The main hub on port 8000 stopped during
+  the work: final read-only HTTP verification returned connection refused and
+  no matching hub process remained. Live player retry awaits that hub running
+  again and the Green page being reloaded; successful physical reconnection is
+  not claimed. No commit or push was requested for this fix.
+
+## 2026-10-21 — Decouple robot freshness from delayed Game snapshots
+
+Human asked Codex to apply the proposed fix after reviewing Green's repeated
+disconnects and Delay Analysis capture `d0764fdae3a74335ba692a5920d04c56`.
+
+- The earlier Game-clock workaround still rejected fresh robot measurements
+  when the Game projection timestamp lagged by more than its 250 ms allowance.
+  Each player controller now stamps its own prepared status with
+  `feedback_observed_at`. The shared bridge calculates age using that paired
+  host timestamp, request duration and monotonic browser time. The 1.5-second
+  feedback cutoff, independent Game watchdog, relay leases and motion guards
+  remain enforced. Cached copies cannot renew an unchanged measurement.
+- Progress now caches detached presentations per side until a successful write
+  commits. It detects external database changes/removal and leaves command and
+  motion-policy validation uncached. Game progress readers use an atomically
+  published detached value instead of waiting behind result persistence. This
+  addresses the repeated projection work and outbox lock waits seen during
+  the 2.7-second delivery stall. SQLite connection/begin/commit, snapshot build,
+  and store-lock timings are included in subsequent Delay Analysis captures.
+- Logs retain the signed Game/feedback delta, status age and request duration.
+  An unavailable age clears a previous parent value; disconnected measurements
+  no longer accumulate into the feedback-age gauge.
+- 135 relevant Python checks passed across event progression, cache concurrency
+  and rollback, reconnect/feedback, calibration safety, delay capture, result
+  saving/replay and player continuation. A broader run also hit eight unchanged
+  legacy linked-game fixture errors: seven omit required event setup and one
+  invokes removed practice gameplay. They were not part of this fix.
+- 26 JavaScript checks and both Green/Purple bridge smoke runs passed, as did
+  the physical-controller smoke. Added paired-status endpoint coverage for both
+  players and regression cases for delayed Game projections, stale/replayed
+  feedback, slow status delivery and missing timing metadata. Browser fake-arm
+  responses now include the new paired timestamp.
+- The focused real-browser run also passed for both teams on an isolated
+  fake-arm server: `MOBILE_CLOCK_TEST_ONLY=1 node tests/mobile_relock_browser.cjs`.
+  An 800 ms Game timestamp lag preserved the session, physical unlock revoked
+  it, and reconnect synchronized the moved pose without issuing movement. The
+  full older browser scenario still assumes the removed parent test-tier
+  override during its calibration-to-cue transition; that unrelated transition
+  is not claimed as passing.
+- A temporary two-player database benchmark measured median snapshot reads of
+  0.580 ms uncached versus 0.060 ms cached over 100 samples. This is a local
+  fixture measurement, not a claim about live worst-case latency.
+- A read-only live check found an active running match and the old controller
+  backend (no paired status timestamp). Loading Python changes requires a hub
+  restart, which would interrupt that match. No live restart, physical arm
+  commands, calibration changes, commit or push were performed. Restart the hub
+  before refreshing the player pages. The separate L1 dial plan remains pending.
+  The final live check showed the match had reached `overrun` / `results`;
+  activation still requires a hub restart and players rejoining afterward.

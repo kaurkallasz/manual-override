@@ -236,7 +236,8 @@ def create_app(folder, *, virtual_controls=False):
             if action=='connect':calibration_feedback['connected']=True;arm_enabled[side]=True
             if action=='enable':arm_enabled[side]=True
             if action=='joint-move':robot_targets[side]=[data[k] for k in ('j1','j2','j3','j4')]
-        return jsonify(ok=True,connected=True,enabled=arm_enabled[side],feedback_ok=True,last_feedback=time.time(),
+        observed_at = time.time()
+        return jsonify(ok=True,connected=True,enabled=arm_enabled[side],feedback_ok=True,last_feedback=observed_at,feedback_observed_at=observed_at,
                        joints=[0.,20.,30.,9.],target=robot_targets[side],control_mode='joint',pose=[300.,100.,60.,9.],pump_mode='off')
     @app.get('/__test/robot-commands')
     def commands():return jsonify(robot_commands)

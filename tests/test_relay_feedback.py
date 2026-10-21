@@ -23,6 +23,28 @@ def packet(mode=5):
 
 
 class FeedbackAtomicityTests(unittest.TestCase):
+    def test_player_status_pairs_feedback_with_clock_after_status_preparation(self):
+        from test_mobile_teams import player_module
+        for side in ('green', 'purple'):
+            with self.subTest(side=side):
+                module = player_module(side, 'cartesian-xyz-test')
+                now = [100.0]
+                robot = Mock()
+                robot.get_state.return_value = dict(connected=True, enabled=True,
+                    feedback_ok=True, last_feedback=99.98)
+                def target():
+                    now[0] += .4  # Model delayed response preparation.
+                    return None
+                robot.get_target.side_effect = target
+                with patch.object(module, '_current', return_value=robot), \
+                     patch.object(module.time, 'time', side_effect=lambda: now[0]):
+                    app = Flask('status-clock-' + side)
+                    app.register_blueprint(module.bp)
+                    value = app.test_client().get('/api/status').get_json()
+                self.assertEqual(value['last_feedback'], 99.98)
+                self.assertAlmostEqual(value['feedback_observed_at'], 100.4)
+                self.assertTrue(value['feedback_ok'])
+
     def test_a_reader_cannot_validate_its_old_copy_after_continuous_feedback_advances(self):
         load('dobot-mg400-relay')
         driver = __import__('relay_arm')

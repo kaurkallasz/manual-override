@@ -22,7 +22,8 @@ def clean(value):
             out[key] = safe_text(value[key])
     for key in ('epoch', 'frame_at', 'observed_at', 'area', 'max_ratio', 'minimum_px', 'maximum_px',
                 'pid', 'exitcode', 'heartbeat_age_ms', 'tag_id', 'queue_index', 'motion_epoch',
-                'feedback_age_ms', 'source_gap_ms', 'build_ms', 'delivery_sequence',
+                'feedback_age_ms', 'feedback_status_age_ms', 'feedback_game_delta_ms', 'status_request_ms',
+                'source_gap_ms', 'build_ms', 'delivery_sequence',
                 'frame_age_ms', 'sampler_age_ms', 'poll_age_ms'):
         n = value.get(key)
         if type(n) in (int, float) and math.isfinite(n) and abs(n) < 1e12:

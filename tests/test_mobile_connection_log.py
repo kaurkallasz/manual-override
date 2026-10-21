@@ -67,6 +67,16 @@ class ConnectionLogTests(unittest.TestCase):
             row = json.loads(self.log.export().splitlines()[-1])
             self.assertEqual(row['context'], context)
 
+    def test_clock_diagnostics_preserve_signed_delta_without_inventing_age(self):
+        from shared.delay_evidence import clean
+        context = dict(feedback_age_ms=None, feedback_status_age_ms=20.0,
+                       feedback_game_delta_ms=-812.5, status_request_ms=34.0)
+        self.assertEqual(self.post(self.event(context=context)).status_code, 200)
+        persisted = json.loads(self.log.export().splitlines()[-1])['context']
+        expected = {key: value for key, value in context.items() if value is not None}
+        self.assertEqual(persisted, expected)
+        self.assertEqual(clean(context), expected)
+
     def test_active_delay_capture_links_exact_board_and_driver_failure_evidence(self):
         from shared import delay_trace as trace
         with tempfile.TemporaryDirectory() as folder:

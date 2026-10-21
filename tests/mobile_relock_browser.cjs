@@ -12,10 +12,10 @@ if(!/^http:\/\/127\.0\.0\.1:(?!8000(?:\/|$))\d+$/.test(root))throw Error('Use an
    await page.request.post(root+'/__test/saved-calibrations');
    await page.request.post(root+'/__test/camera',{data:{enabled:true,width:3840,height:2160}});
    const initial=await (await page.request.get(root+'/s/gamemaster/p/mobile-ltz-api/api/state?side='+side)).json();
-   let calibration=true,connections=0;
+   let calibration=true,connections=0,gameLagMs=0;
    const robot={connected:false,enabled:true,robot_mode:5,motion_epoch:0,motion_ready:true,
     control_session:null,pose:[310,0,60,0],joints:[0,20,30,0],target:null,control_mode:'cartesian'};
-   const snapshot=()=>({...initial,server_time:Date.now()/1000,status:'ready',phase:'setup',paused:false,
+   const snapshot=()=>({...initial,server_time:(Date.now()-gameLagMs)/1000,status:'ready',phase:'setup',paused:false,
     virtual_play:false,virtual_test_control:4,mobile_safety:{status:'ready'},
     journey:{phase:calibration?'calibration':'playing',calibration_side:calibration?side:null,active_side:calibration?side:null,session_id:'fixture-lesson'},
     mobile_calibration:calibration?{stage:'points',captures:{},draft:{points:{},parallax_points:{}},arrivals:[]}:null,mobile_calibration_connect:calibration,mobile_calibration_ready:calibration});
@@ -52,7 +52,8 @@ if(!/^http:\/\/127\.0\.0\.1:(?!8000(?:\/|$))\d+$/.test(root))throw Error('Use an
      if(action==='joint-move'){robot.joints=['j1','j2','j3','j4'].map(k=>data[k]);robot.target=[...robot.joints];}
      if(action==='stop')robot.target=null;
     }
-    return route.fulfill({json:{ok:true,...robot,feedback_ok:robot.connected,last_feedback:Date.now()/1000,pump_mode:'off'}});
+    const observedAt=Date.now()/1000;
+    return route.fulfill({json:{ok:true,...robot,feedback_ok:robot.connected,last_feedback:observedAt,feedback_observed_at:observedAt,pump_mode:'off'}});
    });
    try{
     await page.goto(root+`/s/${side}/p/mobile-ltz/`);
@@ -63,11 +64,27 @@ if(!/^http:\/\/127\.0\.0\.1:(?!8000(?:\/|$))\d+$/.test(root))throw Error('Use an
     await page.waitForFunction(()=>session&&available()&&controlMode==='xyz');
     const before=commands.filter(c=>['move','joint-move'].includes(c.action)).length;
     const priorSession=await page.evaluate(()=>session);
+    gameLagMs=800;
+    await page.waitForFunction(()=>physicalArm.value?.diagnostics?.feedback_game_delta_ms < -700);
+    const priorFeedback=await page.evaluate(()=>physicalArm.value.arm.position_at);
+    await page.waitForFunction(stamp=>physicalArm.value?.arm?.position_at>stamp+.6,priorFeedback);
+    assert.equal(await page.evaluate(()=>session),priorSession,'Delayed game projection cannot invalidate fresh robot feedback');
+    gameLagMs=0;
     // A physical unlock invalidates all old gestures before the arm is moved.
     robot.robot_mode=6;robot.motion_ready=false;robot.motion_epoch++;
     await page.waitForFunction(()=>!session&&!available());
     assert.equal(await page.locator('#xyzZIncrease').isDisabled(),true);
     robot.pose=[320,10,65,0];robot.joints=[-10,25,35,0];robot.robot_mode=5;robot.motion_ready=true;
+    // Run the clock/unlock regression without the legacy cue-transition fixture.
+    if(process.env.MOBILE_CLOCK_TEST_ONLY==='1'){
+     await page.locator('#connect').click();
+     await page.waitForFunction(()=>session&&available()&&controlMode==='xyz',null,{timeout:12000});
+     assert.notEqual(await page.evaluate(()=>session),priorSession);
+     assert.equal(commands.filter(c=>['move','joint-move'].includes(c.action)).length,before,'Reconnect cannot replay an old movement');
+     assert.deepEqual(errors,[]);
+     console.log('PASS '+side+': 800 ms Game delay preserves the session; unlock revokes it; reconnect synchronizes without motion');
+     continue;
+    }
     calibration=false;
     await page.waitForFunction(()=>state.journey.phase==='playing'&&controlMode==='cue');
     await page.locator('#connect').click();

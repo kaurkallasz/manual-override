@@ -396,6 +396,8 @@ def _status_dict():
             _loc_lock.release()
     else:
         st["slots"] = []
+    # Same host clock as last_feedback, captured after preparing this status.
+    st["feedback_observed_at"] = time.time()
     return st
 
 

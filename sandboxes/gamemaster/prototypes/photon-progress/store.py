@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import copy
 import hashlib
 import json
 import math
@@ -11,6 +12,7 @@ import statistics
 import threading
 import time
 import uuid
+from shared import delay_trace as trace
 
 from score_upload import ScoreContacts, initialize as initialize_score, normalize_emails
 from ltz_economy import EconomyStore, initialize as initialize_economy, quote
@@ -33,17 +35,22 @@ class ProgressStore(ScoreContacts, LevelResults, LinkedGames, EventStore, Econom
     def __init__(self, path):
         self.path = Path(path)
         self.lock = threading.RLock()
+        self._snapshot_cache = {}
 
     @contextmanager
     def transaction(self, *, write=False):
-        with self.lock:
-            db = sqlite3.connect(self.path, timeout=5)
+        with trace.locked(self.lock, 'progress.store_lock'):
+            db = trace.call('progress.sqlite_connect', sqlite3.connect, self.path, timeout=5)
             db.row_factory = sqlite3.Row
             try:
                 db.execute('PRAGMA foreign_keys=ON')
-                db.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
+                trace.call('progress.sqlite_begin', db.execute, 'BEGIN IMMEDIATE' if write else 'BEGIN')
                 yield db
-                db.commit()
+                trace.call('progress.sqlite_commit', db.commit)
+                if write:
+                    # Every committed write, including metadata/contact changes,
+                    # invalidates the published read revision before returning.
+                    self._snapshot_cache = {}
             except Exception:
                 db.rollback()
                 raise
@@ -202,22 +209,53 @@ class ProgressStore(ScoreContacts, LevelResults, LinkedGames, EventStore, Econom
     def mutate_player(self, side, data):
         raise ValueError('Upgrades are purchased automatically; controls follow the saved game level')
 
+    def _snapshot_signature(self):
+        # Also detect a restored/replaced database or another owner instance.
+        # A missing database is unavailable, never an excuse to serve old data.
+        stat = self.path.stat()
+        signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        try:
+            wal = self.path.with_name(self.path.name + '-wal').stat()
+            return signature + (wal.st_ino, wal.st_size, wal.st_mtime_ns)
+        except FileNotFoundError:
+            return signature + (None,)
+
+    @trace.traced('progress.snapshot')
     def snapshot(self, side=None):
+        if side not in (None, 'green', 'purple'):
+            raise ValueError('invalid side')
+        signature = self._snapshot_signature()
+        cached = self._snapshot_cache.get(side)
+        if cached is not None and cached[0] == signature:
+            trace.measure('progress.snapshot_cache_hit', 0, side=side)
+            return copy.deepcopy(cached[1])
+        # Hits use only the last committed immutable publication. A cache miss
+        # still reads a consistent transaction; command validation is uncached.
         with self.transaction() as db:
-            events=self.events_snapshot(db)
-            players = [json.loads(row[0]) for row in db.execute("SELECT data FROM players WHERE json_extract(data,'$.event_id')=? ORDER BY id",(events['active_id'],))]
-            roster = {row['side']: row['player_id'] for row in db.execute('SELECT * FROM sessions')}
-            by_id = {player['id']: player for player in players}
-            active = [json.loads(row[0]) for row in db.execute("SELECT data FROM attempts WHERE json_extract(data,'$.outcome')='running'")]
-            return {'revision': db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0],
-                    'events':events, 'saved_games': self.games_snapshot(db),
-                    'players': [{'id': p['id'], 'name': p['name'], 'is_test': p['is_test']} for p in sorted(players, key=lambda p: (not p['is_test'], p['name'].casefold(), p['id']))],
-                    'roster': {team: by_id[pid] for team, pid in roster.items()},
-                    'player': by_id.get(roster.get(side)),
-                    'scoreboard': self.score_contact_status(db, roster.get(side)),
-                    'shop':quote(db,by_id.get(roster.get(side))),
-                    'latest_result':self.latest_result(db,roster.get(side)),
-                    'active_attempts': [{'run_id': a['run_id'], 'reward_enabled': a['reward_enabled'], 'participants': a['participants'], 'banked_kills': a['kills']} for a in active]}
+            signature = self._snapshot_signature()
+            cached = self._snapshot_cache.get(side)
+            if cached is not None and cached[0] == signature:
+                return copy.deepcopy(cached[1])
+            with trace.span('progress.snapshot_build', side=side):
+                value = self._build_snapshot(db, side)
+            self._snapshot_cache = {**self._snapshot_cache, side: (signature, copy.deepcopy(value))}
+            return value
+
+    def _build_snapshot(self, db, side):
+        events=self.events_snapshot(db)
+        players = [json.loads(row[0]) for row in db.execute("SELECT data FROM players WHERE json_extract(data,'$.event_id')=? ORDER BY id",(events['active_id'],))]
+        roster = {row['side']: row['player_id'] for row in db.execute('SELECT * FROM sessions')}
+        by_id = {player['id']: player for player in players}
+        active = [json.loads(row[0]) for row in db.execute("SELECT data FROM attempts WHERE json_extract(data,'$.outcome')='running'")]
+        return {'revision': db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0],
+                'events':events, 'saved_games': self.games_snapshot(db),
+                'players': [{'id': p['id'], 'name': p['name'], 'is_test': p['is_test']} for p in sorted(players, key=lambda p: (not p['is_test'], p['name'].casefold(), p['id']))],
+                'roster': {team: by_id[pid] for team, pid in roster.items()},
+                'player': by_id.get(roster.get(side)),
+                'scoreboard': self.score_contact_status(db, roster.get(side)),
+                'shop':quote(db,by_id.get(roster.get(side))),
+                'latest_result':self.latest_result(db,roster.get(side)),
+                'active_attempts': [{'run_id': a['run_id'], 'reward_enabled': a['reward_enabled'], 'participants': a['participants'], 'banked_kills': a['kills']} for a in active]}
 
     def control_policy(self, side):
         if side not in ('green', 'purple'):

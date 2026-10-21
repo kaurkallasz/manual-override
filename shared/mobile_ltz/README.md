@@ -345,6 +345,23 @@ endpoint, including a mid-route stop: two distinct fresh idle feedback poses
 60–350 ms apart must agree within 0.05 mm on each XYZ axis, in the same relay
 session and motion epoch. Idle mode alone is insufficient. The virtual owner
 marks actual joint arrival. No display movement continues after that stop signal.
+Physical feedback freshness compares the relay timestamp with
+`feedback_observed_at` from that same controller status response. It adds the
+full request duration as a conservative transport bound and advances age with
+`performance.now()` since receipt. It never compares a hub timestamp with the
+phone's wall clock or an independently delayed Game snapshot. Missing/invalid
+status timing, future feedback, or a 1.5-second-old measurement blocks control.
+The independent Game-delivery watchdog and the relay's own freshness,
+enabled-state and motion-epoch checks still apply.
+Repeated copies retain their accumulated age, including the sample's age on
+first receipt. A phone clock change cannot renew stale feedback or disconnect a
+healthy arm. `node --test tests/mobile_arm_clock.test.js` covers both teams with
+clock offsets, delayed Game projections, slow status responses, frozen messages,
+expired clock evidence and physical unlocks. Deploy the controller Python change
+before reloading player pages: old running backends lack the paired timestamp
+and the new bridge will fail closed. Connection logs include the signed
+Game/feedback delta, status sample age and status request duration; disconnected
+measurements do not keep accumulating in the feedback-age delay gauge.
 Playback never predicts beyond received positions, holds on a buffer underrun
 and resumes without a catch-up jump. Missing timestamps use the raw position.
 Raw feedback remains unchanged for commands, checks and pickup logic. Session,
@@ -361,6 +378,14 @@ the route. This telemetry cannot issue movement or change the planner. The
 virtual owner publishes its actual bounded joint-travel curve in board units.
 The player view removes the passed portion monotonically as the smoothed red
 marker traverses it; completed portions do not regrow from telemetry jitter.
+
+Progress presentations cache detached snapshots for each side and Game Master
+until a committed database write invalidates them. Commands and motion policy
+remain uncached. Database replacement or removal invalidates cached reads too.
+Game's progress publication can be read without waiting for its result outbox
+writer. Delay Analysis records progress snapshot builds and SQLite/lock timings.
+`tests/test_progress_snapshot_cache.py` covers commit/rollback, concurrent reads,
+external updates, detached values and the outbox publication.
 
 `node --test tests/mobile_arm_trajectory.test.js` checks constant playback speed
 through sparse/jittered/repeated samples, measured stops/reversals, underruns,

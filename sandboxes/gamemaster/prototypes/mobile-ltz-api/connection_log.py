@@ -19,6 +19,7 @@ _rates = {'green': deque(), 'purple': deque()}
 _names = re.compile(r'^[a-z][a-z0-9_.-]{0,63}$')
 _ids = re.compile(r'^[a-zA-Z0-9_-]{1,80}$')
 _numbers = {'game_age_ms', 'controller_game_age_ms', 'controller_age_ms', 'feedback_age_ms', 'parent_age_ms',
+            'feedback_status_age_ms', 'feedback_game_delta_ms', 'status_request_ms',
             'robot_age_ms', 'motion_epoch', 'previous_motion_epoch', 'robot_mode',
             'source_gap_ms', 'receive_gap_ms', 'build_ms', 'delivery_sequence', 'pending_commands',
             'tag_id', 'queue_index', 'detection_age_ms', 'calibration_revision',

@@ -15,7 +15,7 @@ class MobilePhysicalArm {
   if(!['state','reply'].includes(d.type))return;
   if(window.mobileDelay?.active){
    if(Number.isFinite(d.delay_sent_at))window.mobileDelay.record('browser.iframe_delivery',d.delay_sent_at,performance.now()-d.delay_sent_at);
-   const age=d.diagnostics?.feedback_age_ms;if(Number.isFinite(age))window.mobileDelay.record('browser.feedback_age',performance.now(),age);
+   const age=d.diagnostics?.feedback_age_ms;if(d.diagnostics?.had_session===true&&Number.isFinite(age))window.mobileDelay.record('browser.feedback_age',performance.now(),age);
   }
   this.value=d;this.at=performance.now();this.error=d.error||'Calibrated arm position unavailable.';
   const progress=d.active_command,waiting=this.pending.get(progress?.id),arm=this.arm();

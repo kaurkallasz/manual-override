@@ -26,7 +26,8 @@ const arm={points:Object.fromEntries(points.map(([u,v,x,y],i)=>['p'+(i+1),{camer
      commands.push({action,data});
      if(action==='move'){robot.pose=['x','y','z','r'].map(k=>data[k]);robot.target=[...robot.pose];robot.control_mode='cartesian';}
     }
-    return route.fulfill({json:{ok:true,connected:true,enabled:true,feedback_ok:true,last_feedback:Date.now()/1000,pump_mode:'off',...robot}});
+    const observedAt=Date.now()/1000;
+    return route.fulfill({json:{ok:true,connected:true,enabled:true,feedback_ok:true,last_feedback:observedAt,feedback_observed_at:observedAt,pump_mode:'off',...robot}});
    });
    await page.goto(origin+`/s/${team}/p/mobile-ltz/`);
    await page.waitForFunction(()=>physicalArm.arm()&&feedReady);

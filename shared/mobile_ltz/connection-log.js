@@ -25,7 +25,8 @@ class MobileConnectionLog {
    if(now-(this.last.get(key)||0)<3000)return;
    this.last.set(key,now);if(this.last.size>100)this.last.delete(this.last.keys().next().value);
    const clean=value=>String(value).replace(/https?:\/\/\S+/g,'[url]').replace(/\b(?:password|token|authorization|cookie|session)\s*[:=]\s*\S+/gi,'[credential]').replace(/\b[a-f0-9]{32,}\b/gi,'[id]').slice(0,240);
-   const details={...this.context(),...Object.fromEntries(Object.entries(context||{}).filter(([,v])=>v!=null)),page_id:this.pageId,hidden:document.hidden,focused:document.hasFocus(),online:navigator.onLine};
+   // An explicitly unavailable measurement must replace the parent's old value.
+   const details={...this.context(),...context,page_id:this.pageId,hidden:document.hidden,focused:document.hasFocus(),online:navigator.onLine};
    for(const key of ['game_error','robot_error','servo_error'])if(details[key]!=null)details[key]=clean(details[key]);
    this.queue.push({version:1,id:this.identity(),source,event,reason:clean(reason),client_at:now/1000,
     context:details});

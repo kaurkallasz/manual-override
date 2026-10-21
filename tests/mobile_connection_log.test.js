@@ -26,6 +26,10 @@ function browser(team='green'){
  assert.equal(JSON.parse(requests.at(-1).options.body).id,first.id,'Retries keep a deduplicatable event id');
  assert.equal(requests.at(-1).options.keepalive,true);
  assert.equal(browser().log.queue.length,0,'Acknowledged events do not replay after refresh');
+ replacement.context=()=>({feedback_age_ms:475,had_session:true});
+ replacement.record('bridge','feedback_stale','Invalid timestamp',{feedback_age_ms:null,feedback_game_delta_ms:-350});
+ assert.equal(replacement.queue.at(-1).context.feedback_age_ms,null,'Unavailable age must not inherit an old valid measurement');
+ assert.equal(replacement.queue.at(-1).context.feedback_game_delta_ms,-350);
  replacement.record('bridge','status_read_failed','token='+'a'.repeat(32)+' https://test/?auth=secret',{robot_error:'cookie=private'});
  replacement.persist();const saved=JSON.stringify(store);assert(!saved.includes('auth=secret'));assert(!saved.includes('cookie=private'));assert(!saved.includes('a'.repeat(32)));
  for(let i=0;i<100;i++){at+=4000;replacement.record('bridge','game_not_ready','sample '+i);}

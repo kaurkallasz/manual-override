@@ -24,7 +24,9 @@ class ProgressLink:
         self.state = {'status': 'unavailable', 'error': 'not initialized', 'result': None}
 
     def _set(self, **values):
-        state = {**self.state, **values}
+        # Publish a detached value atomically. Readers must not queue behind
+        # this writer's result persistence or a progress database transaction.
+        state = json.loads(json.dumps({**self.state, **values}))
         if state != self.state:
             self.state = state
             self.wake()
@@ -184,8 +186,7 @@ class ProgressLink:
         self.pending = None
 
     def snapshot(self):
-        with self.lock:
-            return json.loads(json.dumps(self.state))
+        return json.loads(json.dumps(self.state))
 
     def clear_finished(self):
         with self.lock:

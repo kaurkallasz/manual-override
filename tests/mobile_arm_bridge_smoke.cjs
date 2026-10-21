@@ -2,7 +2,10 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const TEAM=process.env.MOBILE_TEST_TEAM==='purple'?'purple':'green';
 let jointFailure=null,holdFailure=null,moveFailure=null,holdWait=null,jointWait=null,moveWait=null,clickedTags=[];
-let now=100,calls=[],posted=[],listener,intervals=[],robot={connected:true,enabled:true,feedback_ok:true,last_feedback:Date.now()/1000,robot_mode:5,motion_ready:true,motion_epoch:0,control_session:'initial',pose:[300,100,50,9],joints:[0,20,30,9],pump_mode:'off'};
+// Game and robot measurements share one simulated hub clock. Phone wall time
+// remains independent, as it is on the real Green/Purple devices.
+let now=100;const serverNow=()=>10000+now/1000;
+let calls=[],posted=[],listener,intervals=[],robot={connected:true,enabled:true,feedback_ok:true,last_feedback:serverNow(),robot_mode:5,motion_ready:true,motion_epoch:0,control_session:'initial',pose:[300,100,50,9],joints:[0,20,30,9],pump_mode:'off'};
 const parent={postMessage:d=>posted.push(d)},nodes=new Map();
 const gid=id=>{if(!nodes.has(id))nodes.set(id,{checked:false,value:'http://relay.test',textContent:'Ready',removeAttribute(){}});return nodes.get(id);};
 // Purple's stored calibration view is rotated. Its bridge must still send raw
@@ -13,12 +16,12 @@ const ctx={TEAM,MOBILE_LTZ:true,URLSearchParams,location:{search:'?ltz=1&mobile=
  gameArmCal2:()=>({points:6}),gameCalibration2:{},gameRadiusMin:150,gameRadiusMax:440,ws:{z:[-150,230]},jointLimits:{j1:[-160,160],j2:[-25,85],j3:[-25,105]},
  cal2CalibrationSamples:()=>Array(6).fill({}),cal2JointSafetyGuard:()=>({format:'auto-pp-calibration-2-v1',radius_min:220,polygon:[[1,2],[3,4],[5,6]]}),cal2ReachBoundary:()=>[[.1,.1],[.9,.1],[.9,.9],[.1,.9]].map(([u,v])=>displayPoint(u,v)),
  cal2PoseEvaluator:()=>()=>({x:300,y:0}),pointInsideConvexCalibration:()=>true,pointInsideRobotPolygon:()=>true,compensateCal2Parallax:(u,v)=>({u,v}),cal2CameraTargetPose:p=>p,autoPpxPlanningRadiusMin:()=>220,cal2CameraForRobotPose:(_,p)=>displayPoint(p.x/1000,p.y/1000),gameDisplayPoint:displayPoint,clickToPose:(u,v,id)=>{clickedTags.push(id);const p=displayPoint(u,v);return {x:p.u*1000,y:p.v*1000,z:50,r:9};},assertAutoPpxPoseSafe(){},
- mobileGameAt:now,mobileGame:{server_time:10000,mobile_camera:{status:'ready',frame_at:10000,width:1280,height:720,matrix:[1,0,0,0,1,0,0,0]},virtual_test_control:4,mobile_arm:{tags:[{id:101}]},mobile_safety:{status:'ready'}},latestVisibleArucoTags:[],autoPpxCueRunning:false,autoPpxRunning:false,autoPpxPaused:false,autoPpxAbort:false,activeOperation:null,cal2BoundaryStop:null,
+ mobileGameAt:now,mobileGame:{server_time:serverNow(),mobile_camera:{status:'ready',frame_at:serverNow(),width:1280,height:720,matrix:[1,0,0,0,1,0,0,0]},virtual_test_control:4,mobile_arm:{tags:[{id:101}]},mobile_safety:{status:'ready'}},latestVisibleArucoTags:[],autoPpxCueRunning:false,autoPpxRunning:false,autoPpxPaused:false,autoPpxAbort:false,activeOperation:null,cal2BoundaryStop:null,
  autoPpxVisionWait:null,autoPpxCueOutcome:'idle',autoPpxCueError:null,autoPpxClickOverride:null,
  autoPpxTransportZ:()=>80,autoPpxCueMapReady:()=>true,autoPpxCueEndpointIssue:()=>'',autoPpxCueDisplayTags:()=>ctx.latestVisibleArucoTags,autoPpxCueCandidates:()=>({sources:[{id:101}],destinations:[{id:42,cached:true}]}),refreshAutoPpxTags:async()=>[],
  readAutoPpxCueTargets:async force=>{assert.equal(force,true);return ctx.latestVisibleArucoTags;},
  ltzTier:4,mobileControlChoice:1,mobileRobotReady:()=>true,pauseUserMoves(){},cancelAutoPpxClickOverride(){},applyStatus(){},
- api:async(path,data)=>{calls.push({path,data});if(path==='/api/stop'&&holdWait)await holdWait;if(path==='/api/joint-move'&&jointWait)await jointWait;if(path==='/api/connect'){robot={...robot,control_session:'relay:'+calls.length,motion_epoch:robot.motion_epoch+1,last_feedback:Date.now()/1000};return {ok:true,control_session:robot.control_session};}return path==='/api/status'?{...robot}:path==='/api/joint-move'&&jointFailure?{ok:false,error:jointFailure}:path==='/api/stop'&&holdFailure?{ok:false,error:holdFailure}:{ok:true};},moveToPose:async(p,label,wait,options)=>{if(moveFailure)throw typeof moveFailure==='string'?Error(moveFailure):moveFailure;calls.push({path:'planned',p,label,options});if(moveWait)await moveWait;},
+ api:async(path,data)=>{calls.push({path,data});if(path==='/api/stop'&&holdWait)await holdWait;if(path==='/api/joint-move'&&jointWait)await jointWait;if(path==='/api/connect'){ctx.mobileGame.server_time=serverNow();ctx.mobileGameAt=now;if(ctx.mobileGame.mobile_camera)ctx.mobileGame.mobile_camera.frame_at=serverNow();robot={...robot,control_session:'relay:'+calls.length,motion_epoch:robot.motion_epoch+1,last_feedback:serverNow()};return {ok:true,control_session:robot.control_session};}return path==='/api/status'?{...robot,feedback_observed_at:serverNow()}:path==='/api/joint-move'&&jointFailure?{ok:false,error:jointFailure}:path==='/api/stop'&&holdFailure?{ok:false,error:holdFailure}:{ok:true};},moveToPose:async(p,label,wait,options)=>{if(moveFailure)throw typeof moveFailure==='string'?Error(moveFailure):moveFailure;calls.push({path:'planned',p,label,options});if(moveWait)await moveWait;},
 };vm.createContext(ctx);
 const controller=fs.readFileSync('shared/robot_controls/controller.html','utf8');
 vm.runInContext(controller.slice(controller.indexOf('function mobileCalibrationKeepsSuction('),controller.indexOf('function haltMobileRobot(')),ctx);
@@ -41,13 +44,13 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  ctx.autoPpxCueEvidence=()=>{throw Error('unavailable evidence');};
  ctx.window.mobileArmDiagnostic('cue_motion_held','still reported',{tag_id:49});
  assert.equal(posted.pop().reason,'still reported');
- delete parent.mobileDelay;ctx.applyStatus(robot);
+ delete parent.mobileDelay;ctx.applyStatus(await ctx.api('/api/status'));
  const publishedAt=posted.at(-1).arm.position_at;
  listener({source:parent,origin:'http://test',data:{contract:TEAM+'.mobile-arm',version:1,type:'ping'}});await flush();
  assert.equal(posted.at(-1).arm.position_at,publishedAt,'Republishing cannot retimestamp a measurement');
  assert.equal(posted.at(-1).arm.position_settled,false,'Repeated copies of one measurement cannot confirm a stop');
  const original=robot;
- const feedback=async fields=>{await new Promise(resolve=>setTimeout(resolve,100));robot={...robot,...fields,last_feedback:Date.now()/1000};ctx.applyStatus(robot);};
+ const feedback=async fields=>{now+=100;robot={...robot,...fields,last_feedback:serverNow()};ctx.applyStatus(await ctx.api('/api/status'));};
  await feedback({});
  assert.equal(posted.at(-1).arm.position_settled,true,'Two distinct fresh stationary idle poses confirm a display stop');
  assert.equal(posted.at(-1).arm.position_at,robot.last_feedback,'Status is published immediately without waiting for the bridge timer');
@@ -95,7 +98,7 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  // Reconnect follows the arm after manual relocation; never replay old goals.
  const originalRobot={...robot};
  await command({action:'stop'});
- robot={...robot,joints:[-30,40,55,9],pose:[350,90,70,9]};ctx.applyStatus(robot);
+ robot={...robot,joints:[-30,40,55,9],pose:[350,90,70,9]};ctx.applyStatus(await ctx.api('/api/status'));
  const beforeReconnectMoves=calls.filter(c=>c.path==='/api/joint-move'||c.path==='planned').length;
  reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
  assert.deepEqual(Array.from(reply.arm.targets),[-30,40,55]);
@@ -104,12 +107,12 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  ctx.applyStatus(originalRobot);
  reply=await command({action:'heartbeat'});assert.deepEqual(Array.from(reply.arm.joints),[-30,40,55]);
  // A brief physical unlock invalidates the session even if relocked immediately.
- robot={...robot,robot_mode:6,motion_ready:false,motion_epoch:robot.motion_epoch+1};ctx.applyStatus(robot);
+ robot={...robot,robot_mode:6,motion_ready:false,motion_epoch:robot.motion_epoch+1};ctx.applyStatus(await ctx.api('/api/status'));
  const unlockLog=posted.findLast(p=>p.type==='diagnostic'&&p.event==='motion_epoch_changed');
  assert(unlockLog,'Physical unlock records its exact disconnect cause');
  assert.equal(unlockLog.context.robot_mode,6);assert.equal(unlockLog.context.motion_ready,false);
  assert(!('session' in unlockLog.context));assert(!('token' in unlockLog.context));
- robot={...robot,robot_mode:5,motion_ready:true,joints:[-35,42,53,9]};ctx.applyStatus(robot);
+ robot={...robot,robot_mode:5,motion_ready:true,joints:[-35,42,53,9]};ctx.applyStatus(await ctx.api('/api/status'));
  reply=await command({action:'heartbeat'});assert.equal(reply.arm.session,null);
  assert.deepEqual(Array.from(reply.arm.targets),[-35,42,53]);
  reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
@@ -121,7 +124,7 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  assert.equal(posted.find(p=>p.id===pendingMoveId).ok,false);
  reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
  assert.deepEqual(Array.from(reply.arm.targets),[-35,42,53]);
- robot={...originalRobot,control_session:robot.control_session,motion_epoch:robot.motion_epoch,last_feedback:Date.now()/1000};ctx.applyStatus(robot);
+ robot={...originalRobot,control_session:robot.control_session,motion_epoch:robot.motion_epoch,last_feedback:serverNow()};ctx.applyStatus(await ctx.api('/api/status'));
  reply=await command({action:'joints',joints:[1,22,33]});assert(reply.ok);
  const tokenBefore=session;
  jointFailure='Auto PP Cal 2 blocked joint path at 100%: joint target TCP radius 211.5 mm is outside the Auto PP Cal 2 limit 220.0-450.0 mm';
@@ -140,11 +143,11 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60},control_revision:revision});assert(reply.ok);assert(Math.abs(calls.find(c=>c.path==='planned').p.x-300)<1e-9);assert(Math.abs(calls.find(c=>c.path==='planned').p.y-400)<1e-9);assert.equal(calls.find(c=>c.path==='planned').p.z,60);
  // XYZ goals also reset to measured feedback after reconnection.
  const beforeXYZReconnect={...robot};
- await command({action:'stop'});robot={...robot,pose:[370,80,90,9]};ctx.applyStatus(robot);
+ await command({action:'stop'});robot={...robot,pose:[370,80,90,9]};ctx.applyStatus(await ctx.api('/api/status'));
  reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
  assert.deepEqual({...reply.arm.xyz_target},{...reply.arm.tip});
  assert(Math.abs(reply.arm.xyz_target.x-.37)<1e-9);assert.equal(reply.arm.xyz_target.z,90);
- robot={...beforeXYZReconnect,control_session:robot.control_session,motion_epoch:robot.motion_epoch,last_feedback:Date.now()/1000};ctx.applyStatus(robot);
+ robot={...beforeXYZReconnect,control_session:robot.control_session,motion_epoch:robot.motion_epoch,last_feedback:serverNow()};ctx.applyStatus(await ctx.api('/api/status'));
  const own=TEAM==='green'?100:102,tagPoint=displayPoint(.3,.4);
  assert.equal(calls.find(c=>c.path==='planned').options.allowDetour,true,'Targeting can route around an excluded area');
  ctx.mobileGame.movable_piece_codes={[TEAM]:[own]};ctx.latestVisibleArucoTags=[{id:own,nx:tagPoint.u,ny:tagPoint.v,lastSeenAt:Date.now(),missing:0}];
@@ -190,7 +193,7 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  holdFailure=null;reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
  reply=await command({action:'xyz',xyz:{x:.3,y:.4,z:60},control_revision:-1});assert(!reply.ok);assert.equal(reply.code,'control_changed');assert.equal(reply.arm.session,session);
  robot.feedback_ok=false;
- ctx.applyStatus(robot);const count=calls.filter(c=>c.path==='/api/joint-move').length;
+ ctx.applyStatus(await ctx.api('/api/status'));const count=calls.filter(c=>c.path==='/api/joint-move').length;
  reply=await command({action:'joints',joints:[1,22,33]});assert(!reply.ok);assert.equal(calls.filter(c=>c.path==='/api/joint-move').length,count);
  reply=await command({action:'pump',mode:'off'});assert(reply.ok,'Pump off survives stale feedback');
  reply=await command({action:'stop'});assert(reply.ok);assert.equal(reply.arm.session,null);assert(calls.some(c=>c.path==='/api/stop'));
@@ -208,8 +211,8 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  for(const [index,expected] of ['joint','xyz','targeting','cue'].entries()){
   const beforeSession=session;
   ctx.mobileControlChoice=index+1;ctx.ltzTier=index+1;ctx.mobileGame.virtual_test_control=index+1;
+  now+=100;ctx.applyStatus(await ctx.api('/api/status'));
   const beforeSamples=calls.filter(c=>c.path==='/api/status').length;
-  now+=100;ctx.applyStatus(robot);
   listener({source:parent,origin:'http://test',data:{contract:TEAM+'.mobile-arm',version:1,type:'ping'}});await flush();
   assert.equal(calls.filter(c=>c.path==='/api/status').length,beforeSamples,'Continuous feedback does not force a new sample');
   const next=posted.at(-1);assert.equal(next.arm.control_mode,expected,TEAM+' feedback-only switch '+expected);
@@ -250,13 +253,14 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  assert.equal(calls.filter(c=>c.path==='/api/pump').length,pumpCalls);
  const plannedCount=calls.filter(c=>c.path==='planned').length;
  const camera={...ctx.mobileGame.mobile_camera};
- for(const change of [{status:'unavailable'},{frame_at:9998},{frame_at:10001},{frame_at:NaN},{width:0},{matrix:[1,2]}]){
+ for(const change of [{status:'unavailable'},{frame_at:camera.frame_at-2},{frame_at:camera.frame_at+1},{frame_at:NaN},{width:0},{matrix:[1,2]}]){
   ctx.mobileGame.mobile_camera={...camera,...change};
   reply=await command({action:'cue_waypoint',x:.32,y:.42});assert(!reply.ok);assert.match(reply.error,/camera image/i);
  }
  ctx.mobileGame.mobile_camera=camera;ctx.mobileGameAt=now-1600;
  reply=await command({action:'cue_waypoint',x:.32,y:.42});assert(!reply.ok,'An old game receipt cannot keep a camera frame fresh');
  ctx.mobileGameAt=now;
+ reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
  ctx.autoPpxCueMapReady=()=>true;
  for(const point of [{x:-.1,y:.5},{x:.5,y:NaN},{x:.5,y:1.1}]){
   reply=await command({action:'cue_waypoint',...point});assert(!reply.ok);
@@ -461,11 +465,11 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
  ctx.mobileGame.mobile_safety={status:'ready'};
  for(const stage of ['points','perspective','tutorial'])for(const action of ['stop','disconnect','suspend','unlock','watchdog']){
   ctx.mobileGame.mobile_calibration.stage=stage;
-  robot={...robot,enabled:true,motion_ready:true,pump_mode:'suck',last_feedback:Date.now()/1000};
-  ctx.applyStatus(robot);reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
+  robot={...robot,enabled:true,motion_ready:true,pump_mode:'suck',last_feedback:serverNow()};
+  ctx.applyStatus(await ctx.api('/api/status'));reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
   const before=calls.length;
   if(action==='unlock'){
-   robot={...robot,enabled:false,motion_ready:false,motion_epoch:robot.motion_epoch+1};ctx.applyStatus(robot);await flush();
+   robot={...robot,enabled:false,motion_ready:false,motion_epoch:robot.motion_epoch+1};ctx.applyStatus(await ctx.api('/api/status'));await flush();
   }else if(action==='watchdog'){
    now+=1600;intervals.forEach(fn=>fn());await flush();
   }else await command({action});
@@ -477,12 +481,12 @@ async function command(data,origin='http://test',contract=TEAM+'.mobile-arm'){co
   assert.match(posted.at(-1).arm.message,/Suction kept on/);
  }
  for(const pump of ['off','blow']){
-  robot={...robot,enabled:true,motion_ready:true,pump_mode:pump,last_feedback:Date.now()/1000};ctx.applyStatus(robot);
+  robot={...robot,enabled:true,motion_ready:true,pump_mode:pump,last_feedback:serverNow()};ctx.applyStatus(await ctx.api('/api/status'));
   reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
   const before=calls.length;await command({action:'disconnect'});
   assert(calls.slice(before).some(c=>c.path==='/api/pump'&&c.data.mode==='off'),'Only suction is retained during calibration');
  }
- robot={...robot,pump_mode:'suck',last_feedback:Date.now()/1000};ctx.applyStatus(robot);
+ robot={...robot,pump_mode:'suck',last_feedback:serverNow()};ctx.applyStatus(await ctx.api('/api/status'));
  reply=await command({action:'connect'});assert(reply.ok);session=reply.arm.session;
  const explicitOff=calls.length;await command({action:'pump',mode:'off'});
  assert(calls.slice(explicitOff).some(c=>c.path==='/api/pump'&&c.data.mode==='off'),'Explicit pump-off is never suppressed');

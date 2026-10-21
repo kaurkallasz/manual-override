@@ -8,6 +8,7 @@ let target=null,jointTarget=null,message='Connect '+TEAM+' to use the physical a
 let geometry=null,geometryKey='',geometryError='',sequence=-1,epoch=0,sampling=null,modeChange=null;
 let cuePoseAt=null;
 let connectionSession=null,synchronizing=false,stopPending=Promise.resolve();
+let feedbackSeen=null;
 let activeCommand=null;
 let motionPath=null,motionPathId=0;
 const limitError=message=>Object.assign(Error(message),{code:'motion_limit'});
@@ -27,12 +28,41 @@ const rawCalibration=()=>mobileGame?.journey?.phase==='calibration'&&mobileGame.
 const connectionReady=()=>typeof mobileConnectionReady==='function'?mobileConnectionReady():mobileRobotReady();
 const send=value=>parent.postMessage({contract:bridgeContract,version:1,...value,delay_sent_at:parent.mobileDelay?.active?parent.performance.now():undefined},location.origin);
 const assertOK=value=>{if(!value?.ok)throw Object.assign(Error(value?.error||'Robot command failed'),{code:value?.code});return value;};
-const feedbackFresh=value=>value?.feedback_ok===true&&Number.isFinite(value.last_feedback)&&Date.now()/1000-value.last_feedback>=0&&Date.now()/1000-value.last_feedback<1.5;
+// Pair each status response with its own server clock and local transport time.
+// A delayed Game projection is not a clock for newer robot measurements.
+const statusReceipts=new WeakMap(),controllerApi=api;
+api=async function(path,...args){
+ const started=performance.now(),value=await controllerApi(path,...args);
+ if(path==='/api/status'&&value&&typeof value==='object'){
+  const at=performance.now();statusReceipts.set(value,{at,requestMs:at-started});
+ }
+ return value;
+};
+const sameFeedback=value=>feedbackSeen&&value?.last_feedback===feedbackSeen.stamp&&value?.control_session===feedbackSeen.session&&value?.motion_epoch===feedbackSeen.epoch;
+function feedbackAge(value){
+ const now=performance.now(),receipt=statusReceipts.get(value),elapsed=now-receipt?.at;
+ if(!Number.isFinite(value?.last_feedback)||value.last_feedback<=0||!Number.isFinite(value?.feedback_observed_at)
+   ||!Number.isFinite(elapsed)||elapsed<0||!Number.isFinite(receipt?.requestMs)||receipt.requestMs<0)return null;
+ const measuredAge=(value.feedback_observed_at-value.last_feedback)*1000;
+ if(!Number.isFinite(measuredAge)||measuredAge<0)return null;
+ // The full request duration is a conservative upper bound on time in transit.
+ // Slow responses and repeated copies cannot give old feedback a new lifetime.
+ const age=measuredAge+receipt.requestMs+elapsed;
+ const observedAge=sameFeedback(value)?feedbackSeen.age+now-feedbackSeen.at:0;
+ if(!Number.isFinite(observedAge)||observedAge<0)return null;
+ // Repeated copies of one measurement cannot reset its expiry, even if a
+ // cached status response is republished with a new browser receipt time.
+ return Math.max(0,age,observedAge);
+}
+const feedbackFresh=value=>{const age=feedbackAge(value);return value?.feedback_ok===true&&age!==null&&age<1500;};
 function diagnostics(){return {
  run_id:mobileGame?.run_id,phase:mobileGame?.phase,journey_phase:mobileGame?.journey?.phase,
  controller_game_age_ms:typeof mobileGameAt==='number'?performance.now()-mobileGameAt:null,
  parent_age_ms:performance.now()-parentAt,robot_age_ms:robotAt?performance.now()-robotAt:null,
- feedback_age_ms:Number.isFinite(robot?.last_feedback)?Date.now()-robot.last_feedback*1000:null,
+ feedback_age_ms:feedbackAge(robot),
+ feedback_status_age_ms:Number.isFinite(robot?.feedback_observed_at)&&Number.isFinite(robot?.last_feedback)?(robot.feedback_observed_at-robot.last_feedback)*1000:null,
+ feedback_game_delta_ms:Number.isFinite(mobileGame?.server_time)&&Number.isFinite(robot?.last_feedback)?(mobileGame.server_time-robot.last_feedback)*1000:null,
+ status_request_ms:statusReceipts.get(robot)?.requestMs??null,
  connected:!!robot?.connected,enabled:!!robot?.enabled,feedback_ok:!!robot?.feedback_ok,motion_ready:!!robot?.motion_ready,
  motion_epoch:robot?.motion_epoch,motion_invalidation:robot?.motion_invalidation,robot_mode:robot?.robot_mode,had_session:!!token,control_mode:mode,
  connection_ready:connectionReady(),paused:mobileGame?.paused,safety_status:mobileGame?.mobile_safety?.status,
@@ -66,6 +96,8 @@ function acceptStatus(value){
    &&Array.isArray(value.pose)&&Array.isArray(robot.pose)&&value.pose.length>=3&&robot.pose.length>=3
    &&value.pose.slice(0,3).every((v,i)=>Number.isFinite(v)&&Number.isFinite(robot.pose[i])&&Math.abs(v-robot.pose[i])<=.05));
  }
+ const age=feedbackAge(value);
+ if(!sameFeedback(value)||age!==null)feedbackSeen={stamp:value?.last_feedback,session:value?.control_session,epoch:value?.motion_epoch,age:age??0,at:performance.now()};
  robot=value;robotAt=performance.now();
  if(token&&!synchronizing&&(changed||!value?.connected||!value?.enabled||!feedbackFresh(value)||value?.motion_ready!==true))
   halt('Arm position or feedback changed. Relock the arm and press Connect to synchronize.',changed?'motion_epoch_changed':!value?.connected?'robot_disconnected':!value?.enabled?'robot_disabled':!feedbackFresh(value)?'feedback_stale':'motion_not_ready',{previous_motion_epoch:previousEpoch});
